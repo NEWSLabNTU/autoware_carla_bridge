@@ -15,3 +15,12 @@ target/
 
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
+
+# Colcon build artifacts
+build/
+install/
+log/
+.cargo/
+
+# Generated interface symlinks
+src/interface/

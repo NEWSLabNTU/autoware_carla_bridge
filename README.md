@@ -1,45 +1,157 @@
 # Autoware CARLA Bridge
 
-A ROS 2 bridge for the CARLA autonomous driving simulator that publishes vehicle sensor data and state information as ROS topics for Autoware.
+ROS 2 bridge between Autoware and CARLA simulator, written in Rust.
 
 ## Overview
 
-This project provides a bridge between CARLA simulator and ROS 2, allowing CARLA vehicle data to be consumed by ROS-based autonomous driving stacks like Autoware. It is inspired by and builds upon the [zenoh_carla_bridge](https://github.com/evshary/zenoh_carla_bridge) project, but publishes data directly as ROS topics instead of Zenoh topics.
+This project provides a bridge between CARLA simulator and ROS 2, allowing CARLA vehicle data to be consumed by ROS-based autonomous driving stacks like Autoware. It is built as a native ROS 2 node using `rclrs`, the Rust client library for ROS 2.
 
-**Current Status**: This project is under active development. The autoware_carla_bridge is being developed as a translation of the zenoh_carla_bridge reference implementation. Currently, the zenoh_carla_bridge (included as a submodule) is used for initial testing and validation.
+**Current Status**: Under active development. The bridge is being migrated from zenoh-based communication to native ROS 2 using rclrs. The [zenoh_carla_bridge](https://github.com/evshary/zenoh_carla_bridge) reference implementation is included for comparison.
 
 ### Key Features
 
+- Native ROS 2 node (composable, discoverable)
 - Exposes CARLA vehicle data as ROS 2 topics
-- Compatible with CARLA 0.9.15 (migration to 0.9.16 planned)
+- Compatible with CARLA 0.9.15
 - Works with ROS 2 Humble on Ubuntu 22.04
 - Designed to integrate with Autoware 2025.22
+- Built with Rust for performance and safety
 
 ## Prerequisites
 
 - **Operating System**: Ubuntu 22.04 LTS
 - **ROS Version**: ROS 2 Humble
-- **CARLA Version**: 0.9.15 (0.9.16 support coming soon)
-- **Programming Languages**: Rust, Python 3.8+
-- **Build Tools**: LLVM/Clang 12 (required for Rust CARLA bindings)
+- **CARLA Version**: 0.9.15
+- **Autoware**: Built Autoware 2025.22 workspace
+- **Rust**: Stable toolchain
+- **Python**: 3.8+ with uv package manager
 
-## Environment Setup
+## Initial Setup
 
-### 1. Install ROS 2 Humble
+### 1. Set up Autoware symlink
+
+Create a symlink to your Autoware workspace:
+
+```bash
+# Adjust the path to point to your Autoware workspace
+ln -s /path/to/your/autoware/workspace src/external/autoware
+```
+
+Verify the symlink points to a built Autoware workspace with an `install/` directory.
+
+### 2. Initialize git submodules
+
+```bash
+git submodule update --init --recursive
+```
+
+This will clone:
+- `src/ros2_rust/rosidl_rust` - Rust message generator for ROS 2
+- `src/ros2_rust/rosidl_runtime_rs` - Runtime support for Rust messages
+- `src/external/zenoh_carla_bridge` - Reference implementation (not built)
+
+### 3. Install dependencies
+
+```bash
+make install-deps
+```
+
+This installs:
+- `colcon-cargo` and `colcon-ros-cargo` - Colcon plugins for Rust
+- `cargo-ament-build` - Cargo plugin for ROS 2 integration
+- `libclang-dev` - Required for FFI bindings generation
+- `python3-vcstool` - Version control tool
+
+### 4. Set up interface symlinks
+
+```bash
+make setup-interfaces
+```
+
+This creates symlinks in `src/interface/` to all Autoware message packages from the Autoware installation.
+
+## Building
+
+Build the workspace using colcon:
+
+```bash
+make build          # Debug build
+# OR
+make build-release  # Release build
+```
+
+This will:
+1. Generate Rust bindings for all ROS 2 messages (standard + Autoware)
+2. Create `.cargo/config.toml` with paths to generated crates
+3. Build `autoware_carla_bridge` as a ROS 2 node
+4. Install to `install/` directory
+
+## Running
+
+### Using ros2 launch (recommended)
+
+```bash
+make launch
+
+# Or with custom parameters:
+. install/setup.sh
+ros2 launch autoware_carla_bridge autoware_carla_bridge.launch.xml \
+  carla_host:=localhost \
+  carla_port:=2000
+```
+
+### Using ros2 run
+
+```bash
+make run
+
+# Or directly:
+. install/setup.sh
+ros2 run autoware_carla_bridge autoware_carla_bridge
+```
+
+## Development
+
+### Format code
+```bash
+make format
+```
+
+### Run linter
+```bash
+make lint
+```
+
+### Clean build artifacts
+```bash
+make clean
+```
+
+## Troubleshooting
+
+### "autoware symlink not found"
+Create the symlink: `ln -s /path/to/autoware src/external/autoware`
+
+### "colcon-cargo not found"
+Run: `make install-deps`
+
+### "failed to resolve patches"
+Clean and rebuild: `make clean && make build`
+
+### Message types not found
+1. Ensure Autoware is built: `ls src/external/autoware/install/`
+2. Re-run: `make setup-interfaces`
+3. Rebuild: `make clean && make build`
+
+## Additional Setup (Optional)
+
+The following sections describe additional setup needed for running CARLA and spawning test vehicles.
+
+### Install ROS 2 Humble
 
 Follow the official ROS 2 Humble installation guide [here](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html).
 
-### 2. Install Zenoh
-
-Follow the official installation guide to install Zenoh [here](https://zenoh.io/docs/getting-started/installation/).
-
-### 3. Install `rmw_zenoh_cpp`
-
-```bash
-sudo apt install ros-humble-rmw-zenoh-cpp
-```
-
-### 4. Install Rust Development Environment
+### Install Rust Development Environment
 
 ```bash
 # Install rustup
@@ -53,7 +165,7 @@ rustc --version
 cargo --version
 ```
 
-### 4.5. Install Uv (Python Package Manager)
+### Install Uv (Python Package Manager)
 
 ```bash
 # Install uv
@@ -66,7 +178,7 @@ source "$HOME/.cargo/env"
 uv --version
 ```
 
-### 5. Download and Install CARLA 0.9.15
+### Download and Install CARLA 0.9.15
 
 ```bash
 # Create CARLA directory
@@ -85,7 +197,7 @@ tar -xzf AdditionalMaps_0.9.15.tar.gz
 pip3 install carla==0.9.15
 ```
 
-### 5.5. Configure LLVM/Clang for Rust CARLA Bindings
+### Configure LLVM/Clang for Rust CARLA Bindings
 
 The Rust CARLA bindings (used by `carla-rust`) require LLVM/Clang to build. Without this configuration, the build process will hang on the CARLA dependency.
 
@@ -102,7 +214,7 @@ export LIBCLANG_STATIC_PATH=/usr/lib/llvm-12/lib
 export CLANG_PATH=/usr/bin/clang-12
 ```
 
-### 6. Setup carla_agent (Vehicle Spawning Tool)
+### Setup carla_agent (Vehicle Spawning Tool)
 
 ```bash
 # Navigate to carla_agent directory
@@ -115,36 +227,7 @@ uv sync
 uv run python simple_spawn.py --help
 ```
 
-### 7. Clone and Build zenoh_carla_bridge
-
-```bash
-# Navigate back to project root
-cd ~/repos/autoware_carla_bridge
-
-# Download submodules
-git submodule update --init --recursive
-
-# Build zenoh_carla_bridge (reference implementation)
-cd external/zenoh_carla_bridge
-cargo build --release
-cd ../..
-```
-
-### 8. Build autoware_carla_bridge (Work in Progress)
-
-```bash
-# Navigate to project root
-cd ~/repos/autoware_carla_bridge
-
-# Using Makefile (recommended)
-make build      # Build with release-with-debug profile
-make help       # Show all available targets
-
-# Or using cargo directly
-cargo build --profile release-with-debug
-```
-
-## Execution
+## Testing with CARLA
 
 ### Testing with zenoh_carla_bridge (Current)
 
@@ -227,9 +310,9 @@ export RMW_IMPLEMENTATION=rmw_zenoh_cpp
 
 ---
 
-### Testing with `autoware_carla_bridge` (Future)
+### Testing with `autoware_carla_bridge` (ROS 2 Native)
 
-This section will be applicable once autoware_carla_bridge implementation is complete.
+This is the main implementation using native ROS 2 communication via rclrs.
 
 #### Step 1: Start CARLA Simulator
 
@@ -294,17 +377,32 @@ ros2 topic echo /autoware_v1/sensing/gnss/ublox/nav_sat_fix
 ## Project Structure
 
 ```
-autoware_carla_bridge/
-├── carla_agent/               # Python tool for spawning vehicles in CARLA
-│   ├── main.py               # Interactive manual control
-│   ├── simple_spawn.py       # Automatic vehicle spawning
-│   ├── simulation/           # Simulation utilities and sensor definitions
-│   └── pyproject.toml        # Python dependencies (managed by uv)
-├── external/
-│   └── zenoh_carla_bridge/   # Reference implementation (submodule)
-├── src/                       # ROS bridge source code (to be implemented)
-├── Cargo.toml                 # Rust dependencies
-└── README.md                  # This file
+.
+├── src/
+│   ├── autoware_carla_bridge/     # Main bridge package
+│   │   ├── Cargo.toml             # Rust dependencies
+│   │   ├── package.xml            # ROS 2 package manifest
+│   │   ├── launch/                # Launch files
+│   │   │   └── autoware_carla_bridge.launch.xml
+│   │   └── src/                   # Rust source code
+│   ├── interface/                 # Symlinked message packages (generated)
+│   ├── ros2_rust/                 # Rust code generators (git submodules)
+│   │   ├── rosidl_rust/
+│   │   └── rosidl_runtime_rs/
+│   └── external/
+│       ├── autoware@              # Symlink to Autoware workspace
+│       └── zenoh_carla_bridge/    # Reference implementation
+├── scripts/
+│   ├── install_deps.sh            # Install colcon plugins
+│   └── setup_interfaces.sh        # Setup message symlinks
+├── carla_agent/                   # Python tool for spawning vehicles
+│   ├── simple_spawn.py
+│   └── pyproject.toml
+├── build/                         # Colcon build artifacts
+├── install/                       # Colcon install directory
+├── log/                           # Colcon build logs
+├── Makefile
+└── README.md
 ```
 
 ## Roadmap
