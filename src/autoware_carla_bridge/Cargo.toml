@@ -27,9 +27,11 @@ zenoh = "1.5.1"
 zenoh-ros-type = "0.3.7"
 ctrlc = { version = "3", features = ["termination"] }
 
-# Profile for release builds with debug symbols
-# Useful for profiling with flamegraph, perf, or debugging release builds
-# Usage: cargo build --profile release-with-debug
+[dev-dependencies]
+rclrs = "0.4"
+
+[features]
+
 [profile.release-with-debug]
 inherits = "release"
 debug = true
