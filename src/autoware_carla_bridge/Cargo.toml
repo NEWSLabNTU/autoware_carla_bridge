@@ -1,36 +1,36 @@
 [package]
-description = "Zenoh Bridge between Autoware and Carla"
+name = "autoware_carla_bridge"
+version = "0.12.0"
 edition = "2021"
 license = "Apache-2.0"
-name = "autoware_carla_bridge"
+description = "ROS 2 bridge between Autoware and CARLA simulator"
 repository = "https://github.com/NEWSLabNTU/ros_zenoh_bridge"
-version = "0.12.0"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+# ROS 2 dependencies
+rclrs = "*"
+std_msgs = "*"
+builtin_interfaces = "*"
+geometry_msgs = "*"
+sensor_msgs = "*"
+autoware_vehicle_msgs = "*"
+tier4_vehicle_msgs = "*"
+tier4_control_msgs = "*"
+
+# CARLA and utilities
+carla = "0.11.1"
 atomic_float = "1.1.0"
 arc-swap = "1.6.0"
-carla = "0.11.1"
-cdr = "0.2.4"
 clap = { version = "4.5.48", features = ["derive"] }
 interp = "2.1.1"
 log = "0.4.28"
 nalgebra = "0.32.3"
 ndarray = "0.16.1"
 pretty_env_logger = "0.5.0"
-serde = "1.0.226"
-serde_derive = "1.0.226"
+serde = { version = "1.0.226", features = ["derive"] }
 serde_json = "1.0.145"
 thiserror = "2.0.16"
-zenoh = "1.5.1"
-zenoh-ros-type = "0.3.7"
 ctrlc = { version = "3", features = ["termination"] }
-
-[dev-dependencies]
-rclrs = "0.4"
-
-[features]
 
 [profile.release-with-debug]
 inherits = "release"

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+  <!-- CARLA connection parameters -->
+  <arg name="carla_host" default="localhost" description="CARLA server hostname"/>
+  <arg name="carla_port" default="2000" description="CARLA server port"/>
+
+  <!-- Simulation parameters -->
+  <arg name="sync_mode" default="true" description="Enable synchronous mode"/>
+  <arg name="fixed_delta_seconds" default="0.05" description="Fixed delta time in seconds"/>
+
+  <!-- Launch the bridge node -->
+  <node pkg="autoware_carla_bridge" name="autoware_carla_bridge" exec="autoware_carla_bridge">
+    <param name="carla_host" value="$(var carla_host)"/>
+    <param name="carla_port" value="$(var carla_port)"/>
+    <param name="sync_mode" value="$(var sync_mode)"/>
+    <param name="fixed_delta_seconds" value="$(var fixed_delta_seconds)"/>
+  </node>
+</launch>
