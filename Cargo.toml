@@ -29,8 +29,9 @@ ctrlc = { version = "3", features = ["termination"] }
 
 # Profile for release builds with debug symbols
 # Useful for profiling with flamegraph, perf, or debugging release builds
-# Usage: cargo build --profile profiling
-[profile.profiling]
+# Usage: cargo build --profile release-with-debug
+[profile.release-with-debug]
 inherits = "release"
 debug = true
+debug-assertions = true
 strip = false
