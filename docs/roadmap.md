@@ -85,6 +85,7 @@ Before starting the migration, ensure:
 **Deliverables**:
 - [x] `docs/zenoh-to-rclrs-api-comparison.md`
 - [x] `docs/roadmap.md` (this document)
+- [x] `docs/message-type-migration.md`
 - [ ] Development branch created
 - [ ] Autoware environment configured
 - [ ] Test environment validated
@@ -103,6 +104,8 @@ Before starting the migration, ensure:
 
 ### 1.1 Understand ROS Message Type Provision
 
+**Reference**: See `docs/message-type-migration.md` for comprehensive guide on migrating from zenoh-ros-type to rclrs interface packages.
+
 - [ ] Study how rclrs provides ROS message types:
   - rclrs generates `.cargo/config.toml` to link ROS interface packages
   - Message types (sensor_msgs, std_msgs, etc.) are sourced from Autoware workspace
@@ -118,6 +121,16 @@ Before starting the migration, ensure:
   ros2 interface package sensor_msgs
   ros2 interface package autoware_vehicle_msgs
   ros2 interface package tier4_vehicle_msgs
+
+  # Check specific message definitions
+  ros2 interface show sensor_msgs/msg/Image
+  ros2 interface show autoware_vehicle_msgs/msg/VelocityReport
+  ```
+
+- [ ] Test rclrs message type access (before full migration):
+  ```bash
+  # Run example test program to verify message types
+  cargo run --example test_message_types
   ```
 
 - [ ] Examine generated `.cargo/config.toml` (after first rclrs build):
