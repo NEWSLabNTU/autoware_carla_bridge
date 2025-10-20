@@ -23,11 +23,27 @@ mkdir -p "$INTERFACE_DIR"
 
 # Symlink all Autoware and Tier4 message packages
 echo "Symlinking Autoware interface packages..."
-for pkg in autoware_*_msgs tier4_*_msgs; do
-    if [ -d "$AUTOWARE_INSTALL/$pkg" ]; then
-        ln -sf "../../external/autoware/install/$pkg/share/$pkg" "$INTERFACE_DIR/$pkg"
-        echo "  ✓ Linked $pkg"
+count=0
+
+# Find all *_msgs directories in the Autoware install
+for pkg_path in "$AUTOWARE_INSTALL"/*_msgs; do
+    if [ -d "$pkg_path" ]; then
+        pkg=$(basename "$pkg_path")
+        # Only link Autoware and Tier4 message packages
+        if [[ "$pkg" == autoware_*_msgs ]] || [[ "$pkg" == tier4_*_msgs ]]; then
+            # Remove existing symlink if present
+            rm -f "$INTERFACE_DIR/$pkg"
+            # Create symlink (relative path from src/interface/ to src/external/autoware/...)
+            ln -s "../external/autoware/install/$pkg/share/$pkg" "$INTERFACE_DIR/$pkg"
+            echo "  ✓ Linked $pkg"
+            count=$((count + 1))
+        fi
     fi
 done
 
-echo "Interface packages linked successfully!"
+if [ $count -eq 0 ]; then
+    echo "  ⚠ No Autoware/Tier4 message packages found in $AUTOWARE_INSTALL"
+    exit 1
+fi
+
+echo "Interface packages linked successfully! ($count packages)"
