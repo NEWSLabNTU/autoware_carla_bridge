@@ -2,7 +2,7 @@
 description = "Zenoh Bridge between Autoware and Carla"
 edition = "2021"
 license = "Apache-2.0"
-name = "ros_carla_bridge"
+name = "autoware_carla_bridge"
 repository = "https://github.com/NEWSLabNTU/ros_zenoh_bridge"
 version = "0.12.0"
 
@@ -26,3 +26,11 @@ thiserror = "2.0.16"
 zenoh = "1.5.1"
 zenoh-ros-type = "0.3.7"
 ctrlc = { version = "3", features = ["termination"] }
+
+# Profile for release builds with debug symbols
+# Useful for profiling with flamegraph, perf, or debugging release builds
+# Usage: cargo build --profile profiling
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false

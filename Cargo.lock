@@ -355,6 +355,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "autoware_carla_bridge"
+version = "0.12.0"
+dependencies = [
+ "arc-swap",
+ "atomic_float",
+ "carla",
+ "cdr",
+ "clap",
+ "ctrlc",
+ "interp",
+ "log",
+ "nalgebra",
+ "ndarray 0.16.1",
+ "pretty_env_logger",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "thiserror 2.0.16",
+ "zenoh",
+ "zenoh-ros-type",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.74"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2708,29 +2731,6 @@ dependencies = [
  "bitflags 2.6.0",
  "serde",
  "serde_derive",
-]
-
-[[package]]
-name = "ros_carla_bridge"
-version = "0.12.0"
-dependencies = [
- "arc-swap",
- "atomic_float",
- "carla",
- "cdr",
- "clap",
- "ctrlc",
- "interp",
- "log",
- "nalgebra",
- "ndarray 0.16.1",
- "pretty_env_logger",
- "serde",
- "serde_derive",
- "serde_json",
- "thiserror 2.0.16",
- "zenoh",
- "zenoh-ros-type",
 ]
 
 [[package]]

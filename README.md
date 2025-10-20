@@ -1,12 +1,12 @@
-# ROS CARLA Bridge
+# Autoware CARLA Bridge
 
-A ROS 2 bridge for the CARLA autonomous driving simulator that publishes vehicle sensor data and state information as ROS topics.
+A ROS 2 bridge for the CARLA autonomous driving simulator that publishes vehicle sensor data and state information as ROS topics for Autoware.
 
 ## Overview
 
 This project provides a bridge between CARLA simulator and ROS 2, allowing CARLA vehicle data to be consumed by ROS-based autonomous driving stacks like Autoware. It is inspired by and builds upon the [zenoh_carla_bridge](https://github.com/evshary/zenoh_carla_bridge) project, but publishes data directly as ROS topics instead of Zenoh topics.
 
-**Current Status**: This project is under active development. The ros_carla_bridge is being developed as a translation of the zenoh_carla_bridge reference implementation. Currently, the zenoh_carla_bridge (included as a submodule) is used for initial testing and validation.
+**Current Status**: This project is under active development. The autoware_carla_bridge is being developed as a translation of the zenoh_carla_bridge reference implementation. Currently, the zenoh_carla_bridge (included as a submodule) is used for initial testing and validation.
 
 ### Key Features
 
@@ -106,7 +106,7 @@ export CLANG_PATH=/usr/bin/clang-12
 
 ```bash
 # Navigate to carla_agent directory
-cd ~/repos/ros_carla_bridge/carla_agent
+cd ~/repos/autoware_carla_bridge/carla_agent
 
 # Install dependencies using uv
 uv sync
@@ -119,7 +119,7 @@ uv run python simple_spawn.py --help
 
 ```bash
 # Navigate back to project root
-cd ~/repos/ros_carla_bridge
+cd ~/repos/autoware_carla_bridge
 
 # Download submodules
 git submodule update --init --recursive
@@ -130,7 +130,7 @@ cargo build --release
 cd ../..
 ```
 
-### 8. Build ros_carla_bridge (Work in Progress)
+### 8. Build autoware_carla_bridge (Work in Progress)
 
 <!-- TODO -->
 
@@ -157,7 +157,7 @@ cd ~/carla/CARLA_0.9.15
 
 ```bash
 # In a new terminal
-cd ~/repos/ros_carla_bridge/carla_agent
+cd ~/repos/autoware_carla_bridge/carla_agent
 
 # Spawn vehicles with sensors using simple_spawn.py
 uv run python simple_spawn.py
@@ -182,7 +182,7 @@ zenohd
 
 ```bash
 # In a new terminal
-cd ~/repos/ros_carla_bridge/external/zenoh_carla_bridge
+cd ~/repos/autoware_carla_bridge/external/zenoh_carla_bridge
 
 # Run the bridge
 cargo run --release
@@ -217,9 +217,9 @@ export RMW_IMPLEMENTATION=rmw_zenoh_cpp
 
 ---
 
-### Testing with `ros_carla_bridge` (Future)
+### Testing with `autoware_carla_bridge` (Future)
 
-This section will be applicable once ros_carla_bridge implementation is complete.
+This section will be applicable once autoware_carla_bridge implementation is complete.
 
 #### Step 1: Start CARLA Simulator
 
@@ -235,17 +235,17 @@ cd ~/carla/CARLA_0.9.15
 
 ```bash
 # In a new terminal
-cd ~/repos/ros_carla_bridge/carla_agent
+cd ~/repos/autoware_carla_bridge/carla_agent
 
 # Spawn vehicles with sensors
 uv run python simple_spawn.py
 ```
 
-#### Step 3: Run ros_carla_bridge
+#### Step 3: Run autoware_carla_bridge
 
 ```bash
 # In a new terminal
-cd ~/repos/ros_carla_bridge
+cd ~/repos/autoware_carla_bridge
 
 # Source ROS environment
 source /opt/ros/humble/setup.bash
@@ -284,7 +284,7 @@ ros2 topic echo /autoware_v1/sensing/gnss/ublox/nav_sat_fix
 ## Project Structure
 
 ```
-ros_carla_bridge/
+autoware_carla_bridge/
 ├── carla_agent/               # Python tool for spawning vehicles in CARLA
 │   ├── main.py               # Interactive manual control
 │   ├── simple_spawn.py       # Automatic vehicle spawning
@@ -308,13 +308,13 @@ ros_carla_bridge/
 - [ ] Validate Zenoh topics and data flow
 
 ### Phase 2: ROS Bridge Implementation
-- [ ] Translate zenoh_carla_bridge to ros_carla_bridge
+- [ ] Translate zenoh_carla_bridge to autoware_carla_bridge
 - [ ] Implement basic CARLA connection
 - [ ] Publish vehicle state as ROS topics
 - [ ] Publish sensor data as ROS topics (camera, lidar, etc.)
 
 ### Phase 3: Integration and Migration
-- [ ] Test ros_carla_bridge with Autoware 2025.22
+- [ ] Test autoware_carla_bridge with Autoware 2025.22
 - [ ] Migrate to CARLA 0.9.16 support
 
 ## References
