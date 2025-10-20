@@ -21,6 +21,3 @@ build/
 install/
 log/
 .cargo/
-
-# Generated interface symlinks
-src/interface/

@@ -50,6 +50,11 @@ This will clone:
 - `src/ros2_rust/rosidl_runtime_rs` - Runtime support for Rust messages
 - `src/external/zenoh_carla_bridge` - Reference implementation (not built)
 
+The repository also includes symlinks to required Autoware message packages in `src/interface/`:
+- `autoware_vehicle_msgs` - Vehicle control and status messages
+- `tier4_vehicle_msgs` - Tier4-specific vehicle messages
+- `tier4_control_msgs` - Tier4 control messages
+
 ### 3. Install dependencies
 
 ```bash
@@ -62,13 +67,7 @@ This installs:
 - `libclang-dev` - Required for FFI bindings generation
 - `python3-vcstool` - Version control tool
 
-### 4. Set up interface symlinks
-
-```bash
-make setup-interfaces
-```
-
-This creates symlinks in `src/interface/` to all Autoware message packages from the Autoware installation.
+Note: The required Autoware message packages are already symlinked in `src/interface/` and tracked in git.
 
 ## Building
 
@@ -140,7 +139,7 @@ Clean and rebuild: `make clean && make build`
 
 ### Message types not found
 1. Ensure Autoware is built: `ls src/external/autoware/install/`
-2. Re-run: `make setup-interfaces`
+2. Verify symlinks: `ls -la src/interface/`
 3. Rebuild: `make clean && make build`
 
 ## Additional Setup (Optional)
@@ -393,8 +392,7 @@ ros2 topic echo /autoware_v1/sensing/gnss/ublox/nav_sat_fix
 │       ├── autoware@              # Symlink to Autoware workspace
 │       └── zenoh_carla_bridge/    # Reference implementation
 ├── scripts/
-│   ├── install_deps.sh            # Install colcon plugins
-│   └── setup_interfaces.sh        # Setup message symlinks
+│   └── install_deps.sh            # Install colcon plugins
 ├── carla_agent/                   # Python tool for spawning vehicles
 │   ├── simple_spawn.py
 │   └── pyproject.toml

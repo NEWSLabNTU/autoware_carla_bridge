@@ -9,10 +9,6 @@ help: ## Display available targets
 install-deps: ## Install colcon plugins and dependencies
 	bash scripts/install_deps.sh
 
-.PHONY: setup-interfaces
-setup-interfaces: ## Set up interface package symlinks
-	bash scripts/setup_interfaces.sh
-
 .PHONY: build
 build: ## Build with release profile
 	. src/external/autoware/install/setup.sh && \
