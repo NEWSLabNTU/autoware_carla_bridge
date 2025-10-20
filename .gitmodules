@@ -1,3 +1,6 @@
 [submodule "external/zenoh_carla_bridge"]
 	path = external/zenoh_carla_bridge
 	url = https://github.com/evshary/zenoh_carla_bridge.git
+[submodule "ros2_rust/rosidl_rust"]
+	path = ros2_rust/rosidl_rust
+	url = https://github.com/ros2-rust/rosidl_rust.git
