@@ -20,7 +20,8 @@ This project provides a bridge between CARLA simulator and ROS 2, allowing CARLA
 - **Operating System**: Ubuntu 22.04 LTS
 - **ROS Version**: ROS 2 Humble
 - **CARLA Version**: 0.9.15 (0.9.16 support coming soon)
-- **Programming Language**: Rust
+- **Programming Languages**: Rust, Python 3.8+
+- **Build Tools**: LLVM/Clang 12 (required for Rust CARLA bindings)
 
 ## Environment Setup
 
@@ -82,6 +83,23 @@ tar -xzf AdditionalMaps_0.9.15.tar.gz
 
 # Install Python dependencies
 pip3 install carla==0.9.15
+```
+
+### 5.5. Configure LLVM/Clang for Rust CARLA Bindings
+
+The Rust CARLA bindings (used by `carla-rust`) require LLVM/Clang to build. Without this configuration, the build process will hang on the CARLA dependency.
+
+Reference: [carla-rust](https://github.com/jerry73204/carla-rust)
+
+```bash
+# Install Clang 12 and development libraries
+sudo apt install clang-12 libclang-12-dev
+
+# Set environment variables for LLVM/Clang
+export LLVM_CONFIG_PATH=/usr/bin/llvm-config-12
+export LIBCLANG_PATH=/usr/lib/llvm-12/lib
+export LIBCLANG_STATIC_PATH=/usr/lib/llvm-12/lib
+export CLANG_PATH=/usr/bin/clang-12
 ```
 
 ### 6. Setup carla_agent (Vehicle Spawning Tool)
