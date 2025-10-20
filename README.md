@@ -132,7 +132,17 @@ cd ../..
 
 ### 8. Build autoware_carla_bridge (Work in Progress)
 
-<!-- TODO -->
+```bash
+# Navigate to project root
+cd ~/repos/autoware_carla_bridge
+
+# Using Makefile (recommended)
+make build      # Build with release-with-debug profile
+make help       # Show all available targets
+
+# Or using cargo directly
+cargo build --profile release-with-debug
+```
 
 ## Execution
 
@@ -251,7 +261,7 @@ cd ~/repos/autoware_carla_bridge
 source /opt/ros/humble/setup.bash
 
 # Run the bridge
-cargo run --release
+make run
 ```
 
 #### Step 4: Verify ROS Topics

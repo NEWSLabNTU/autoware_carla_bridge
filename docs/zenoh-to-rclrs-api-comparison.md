@@ -1,6 +1,6 @@
 # Zenoh to rclrs API Comparison
 
-This document provides a comprehensive comparison between Zenoh and rclrs APIs, based on the analysis of the `zenoh_carla_bridge` codebase and the goal of translating it to use rclrs for ROS 2 native publishing.
+This document provides a comprehensive comparison between Zenoh and rclrs APIs, based on the analysis of the `zenoh_carla_bridge` codebase and the goal of translating it to `autoware_carla_bridge` using rclrs for ROS 2 native publishing.
 
 ## Table of Contents
 
@@ -71,7 +71,7 @@ let z_session = Arc::new(zenoh::open(config).wait()?);
 let context = rclrs::Context::new(std::env::args())?;
 
 // Create node
-let node = rclrs::Node::new(context, "carla_bridge")?;
+let node = rclrs::Node::new(context, "autoware_carla_bridge")?;
 let node = Arc::new(node);
 ```
 

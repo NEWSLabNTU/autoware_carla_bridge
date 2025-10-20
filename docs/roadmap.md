@@ -1,0 +1,1012 @@
+# autoware_carla_bridge Migration Roadmap
+
+This document outlines the phased approach for migrating `zenoh_carla_bridge` to `autoware_carla_bridge` using rclrs (ROS 2 Rust client library).
+
+## Table of Contents
+
+- [Project Overview](#project-overview)
+- [Migration Goals](#migration-goals)
+- [Prerequisites](#prerequisites)
+- [Phase 0: Preparation](#phase-0-preparation)
+- [Phase 1: Core Infrastructure](#phase-1-core-infrastructure)
+- [Phase 2: Clock and Simple Publishers](#phase-2-clock-and-simple-publishers)
+- [Phase 3: Sensor Bridge Migration](#phase-3-sensor-bridge-migration)
+- [Phase 4: Vehicle Bridge Migration](#phase-4-vehicle-bridge-migration)
+- [Phase 5: Testing and Optimization](#phase-5-testing-and-optimization)
+- [Phase 6: Documentation and Release](#phase-6-documentation-and-release)
+- [Success Criteria](#success-criteria)
+- [Risk Management](#risk-management)
+
+## Project Overview
+
+**Current State**: `zenoh_carla_bridge` uses Zenoh to bridge CARLA simulator data to ROS 2 systems through multiple modes (DDS, ROS2, RmwZenoh).
+
+**Target State**: `autoware_carla_bridge` will use rclrs to publish CARLA data directly as native ROS 2 topics, eliminating the need for intermediate bridges.
+
+**Timeline**: Estimated 4-6 weeks for complete migration and testing.
+
+## Migration Goals
+
+- ✅ Replace Zenoh with native ROS 2 communication (rclrs)
+- ✅ Maintain compatibility with Autoware 2025.22
+- ✅ Simplify codebase by removing bridge-specific logic
+- ✅ Improve type safety with compile-time message type checking
+- ✅ Achieve comparable or better performance
+- ✅ Provide comprehensive testing and documentation
+
+## Prerequisites
+
+Before starting the migration, ensure:
+
+- [ ] CARLA 0.9.15 is installed and working
+- [ ] ROS 2 Humble is installed
+- [ ] Autoware 2025.22 is installed (for ROS message types)
+- [ ] Rust toolchain is configured (rustc, cargo)
+- [ ] LLVM/Clang 12 is installed for CARLA Rust bindings
+- [ ] `carla_agent` vehicle spawning tool is working
+- [ ] `external/autoware` symlink points to Autoware installation
+- [ ] Familiarity with both Zenoh and rclrs APIs (see `docs/zenoh-to-rclrs-api-comparison.md`)
+
+---
+
+## Phase 0: Preparation
+
+**Objective**: Set up the development environment and understand the current codebase.
+
+**Duration**: 3-5 days
+
+### Tasks
+
+- [x] ✅ Study Zenoh API usage in current codebase
+- [x] ✅ Study rclrs API and examples
+- [x] ✅ Document API differences and migration strategy
+- [ ] Set up development branch for migration work
+  ```bash
+  git checkout -b feature/rclrs-migration
+  ```
+- [ ] Set up Autoware environment
+  ```bash
+  # Create symlink to Autoware installation
+  ln -s /path/to/autoware external/autoware
+
+  # Verify Autoware setup works
+  source external/autoware/install/setup.bash
+  ros2 pkg list | grep autoware
+  ```
+- [ ] Review and understand all bridge types:
+  - [ ] `sensor_bridge.rs` (Camera, LiDAR, IMU, GNSS)
+  - [ ] `vehicle_bridge.rs` (Control, status, velocity)
+  - [ ] `trafficlight_bridge.rs`
+  - [ ] `trafficsign_bridge.rs`
+  - [ ] `other_bridge.rs`
+- [ ] Set up test environment with CARLA and ROS 2
+- [ ] Verify current Zenoh bridge works with test vehicles
+
+**Deliverables**:
+- [x] `docs/zenoh-to-rclrs-api-comparison.md`
+- [x] `docs/roadmap.md` (this document)
+- [ ] Development branch created
+- [ ] Autoware environment configured
+- [ ] Test environment validated
+
+**Success Criteria**:
+- All team members understand migration approach
+- Test environment can spawn vehicles and verify Zenoh topics
+
+---
+
+## Phase 1: Core Infrastructure
+
+**Objective**: Replace Zenoh session with rclrs context and node, update dependencies.
+
+**Duration**: 1 week
+
+### 1.1 Understand ROS Message Type Provision
+
+- [ ] Study how rclrs provides ROS message types:
+  - rclrs generates `.cargo/config.toml` to link ROS interface packages
+  - Message types (sensor_msgs, std_msgs, etc.) are sourced from Autoware workspace
+  - When sourcing `external/autoware/install/setup.bash`, the ROS environment is configured
+  - The Makefile sources this setup before running cargo commands
+
+- [ ] Verify ROS message availability:
+  ```bash
+  # Source Autoware environment
+  source external/autoware/install/setup.bash
+
+  # Check available message packages
+  ros2 interface package sensor_msgs
+  ros2 interface package autoware_vehicle_msgs
+  ros2 interface package tier4_vehicle_msgs
+  ```
+
+- [ ] Examine generated `.cargo/config.toml` (after first rclrs build):
+  ```bash
+  # This file will be generated in the project root
+  # It contains paths to ROS message type crates
+  cat .cargo/config.toml
+  ```
+
+### 1.2 Update Dependencies
+
+- [ ] Update `Cargo.toml`:
+  ```toml
+  [dependencies]
+  # Remove zenoh dependencies
+  # zenoh = "1.5.1"
+  # zenoh-ros-type = "0.3.7"
+
+  # Add rclrs dependencies
+  rclrs = "0.4"
+
+  # ROS 2 message types will be provided through .cargo/config.toml
+  # generated by rclrs from the Autoware workspace
+  # No need to explicitly add sensor_msgs, std_msgs, etc.
+
+  # Keep CARLA and utility crates
+  carla = "0.11.1"
+  # ... other existing dependencies
+  ```
+- [ ] Remove Zenoh-specific crates from dependencies
+- [ ] Remove `zenoh-ros-type` dependency
+- [ ] Build with Autoware environment:
+  ```bash
+  make build  # This sources external/autoware/install/setup.bash
+  ```
+- [ ] Verify `.cargo/config.toml` is generated with ROS message paths
+
+### 1.3 Update Main Entry Point
+
+File: `src/main.rs`
+
+- [ ] Remove Zenoh imports:
+  ```rust
+  // Remove:
+  // use zenoh::{Config, Wait};
+  ```
+- [ ] Add rclrs imports:
+  ```rust
+  use rclrs;
+  use std::sync::Arc;
+  ```
+- [ ] Remove `Mode` enum (DDS, ROS2, RmwZenoh) - no longer needed
+- [ ] Remove Zenoh config and listen endpoints from CLI arguments
+- [ ] Update `Opts` struct:
+  - Remove: `zenoh_listen`, `mode`, `zenoh_config`
+  - Keep: `carla_address`, `carla_port`, `tick`, `slowdown`
+  - Add (optional): `node_name`, `namespace`
+- [ ] Replace Zenoh session initialization with rclrs:
+  ```rust
+  // Old:
+  // let z_session = Arc::new(zenoh::open(config).wait()?);
+
+  // New:
+  let context = rclrs::Context::new(std::env::args())?;
+  let node = rclrs::create_node(&context, "carla_bridge")?;
+  let node = Arc::new(node);
+  ```
+- [ ] Update function signatures to pass `Arc<rclrs::Node>` instead of `Arc<Session>`
+- [ ] Add ROS 2 executor for spinning callbacks:
+  ```rust
+  let executor = Arc::new(rclrs::SingleThreadedExecutor::new());
+  ```
+
+### 1.4 Update Bridge Infrastructure
+
+Files: `src/bridge/actor_bridge.rs`, `src/bridge/mod.rs`
+
+- [ ] Update `create_bridge()` signature to accept `Arc<rclrs::Node>`
+- [ ] Update all bridge constructors to accept `Arc<rclrs::Node>`
+- [ ] Remove `mode` parameter from all bridge-related functions
+- [ ] Update `ActorBridge` trait if needed
+
+### 1.5 Remove Mode-Specific Logic
+
+Files: `src/autoware.rs`, `src/utils.rs`
+
+- [ ] Delete or comment out `Mode` enum
+- [ ] Remove `setup_topics()` function (liveliness token setup)
+- [ ] Remove `declare_node_liveliness()`
+- [ ] Remove `declare_topic_liveliness()`
+- [ ] Remove `undeclare_all_liveliness()`
+- [ ] Remove `format_topic_key()` - use simple topic names
+- [ ] Remove `generate_attachment()` function
+- [ ] Remove `put_with_attachment!` macro
+
+**Deliverables**:
+- [ ] Understanding of rclrs ROS message type provision mechanism
+- [ ] Updated `Cargo.toml` with rclrs dependencies
+- [ ] Updated `main.rs` with rclrs initialization
+- [ ] Cleaned up mode-specific logic
+- [ ] Generated `.cargo/config.toml` with ROS message paths
+- [ ] Code compiles (even if not functional yet)
+
+**Success Criteria**:
+- `make build` succeeds with Autoware environment sourced
+- No Zenoh dependencies remain
+- Basic rclrs node can be created
+- ROS message types are accessible from Autoware workspace
+
+---
+
+## Phase 2: Clock and Simple Publishers
+
+**Objective**: Migrate the simplest publisher (clock) as a proof of concept.
+
+**Duration**: 3-4 days
+
+### 2.1 Migrate Clock Publisher
+
+File: `src/clock.rs`
+
+- [ ] Review current Zenoh implementation:
+  ```rust
+  pub struct SimulatorClock<'a> {
+      publisher: Publisher<'a>,
+      mode: Mode,
+      attachment: Vec<u8>,
+  }
+  ```
+- [ ] Refactor to use rclrs:
+  ```rust
+  pub struct SimulatorClock {
+      publisher: Arc<rclrs::Publisher<rosgraph_msgs::msg::Clock>>,
+  }
+  ```
+- [ ] Update `new()` function:
+  ```rust
+  pub fn new(node: Arc<rclrs::Node>) -> Result<SimulatorClock> {
+      let publisher = node.create_publisher::<rosgraph_msgs::msg::Clock>(
+          "clock",
+          rclrs::QOS_PROFILE_CLOCK,
+      )?;
+      Ok(SimulatorClock {
+          publisher: Arc::new(publisher),
+      })
+  }
+  ```
+- [ ] Update `publish_clock()` function:
+  ```rust
+  pub fn publish_clock(&self, timestamp: Option<f64>) -> Result<()> {
+      let clock_msg = rosgraph_msgs::msg::Clock {
+          clock: create_ros_time(timestamp),
+      };
+      self.publisher.publish(&clock_msg)?;
+      Ok(())
+  }
+  ```
+- [ ] Remove CDR serialization
+- [ ] Remove attachment logic
+- [ ] Remove mode handling
+
+### 2.2 Update Utility Functions
+
+File: `src/utils.rs`
+
+- [ ] Keep `is_bigendian()` function
+- [ ] Update `create_ros_header()` to work with rclrs message types:
+  ```rust
+  pub fn create_ros_header(timestamp: Option<f64>) -> std_msgs::msg::Header {
+      let time = create_ros_time(timestamp);
+      std_msgs::msg::Header {
+          stamp: time,
+          frame_id: String::new(),
+      }
+  }
+
+  pub fn create_ros_time(timestamp: Option<f64>) -> builtin_interfaces::msg::Time {
+      if let Some(sec) = timestamp {
+          builtin_interfaces::msg::Time {
+              sec: sec.floor() as i32,
+              nanosec: (sec.fract() * 1_000_000_000_f64) as u32,
+          }
+      } else {
+          let now = SystemTime::now()
+              .duration_since(UNIX_EPOCH)
+              .expect("Unable to get current time");
+          builtin_interfaces::msg::Time {
+              sec: now.as_secs() as i32,
+              nanosec: now.subsec_nanos(),
+          }
+      }
+  }
+  ```
+
+### 2.3 Test Clock Publisher
+
+- [ ] Build the project: `make build`
+- [ ] Start CARLA simulator
+- [ ] Spawn test vehicle with `make agent-spawn`
+- [ ] Run the bridge: `make run`
+- [ ] In another terminal, verify clock topic:
+  ```bash
+  source /opt/ros/humble/setup.bash
+  ros2 topic list | grep clock
+  ros2 topic echo /clock
+  ros2 topic hz /clock
+  ```
+- [ ] Verify clock publishes at expected rate
+
+**Deliverables**:
+- [ ] Working clock publisher using rclrs
+- [ ] Updated utility functions
+- [ ] Verification test results
+
+**Success Criteria**:
+- Clock topic appears in `ros2 topic list`
+- Clock messages publish at correct rate
+- Timestamps are accurate
+
+---
+
+## Phase 3: Sensor Bridge Migration
+
+**Objective**: Migrate all sensor publishers (camera, LiDAR, IMU, GNSS).
+
+**Duration**: 1-2 weeks
+
+### 3.1 Define Message Type Mappings
+
+- [ ] Document message type mappings:
+  | Sensor Type | ROS Message Type | QoS Profile |
+  |-------------|------------------|-------------|
+  | Camera RGB | `sensor_msgs::msg::Image` | `QOS_PROFILE_SENSOR_DATA` |
+  | Camera Info | `sensor_msgs::msg::CameraInfo` | `QOS_PROFILE_SENSOR_DATA` |
+  | LiDAR | `sensor_msgs::msg::PointCloud2` | `QOS_PROFILE_SENSOR_DATA` |
+  | IMU | `sensor_msgs::msg::Imu` | `QOS_PROFILE_DEFAULT` |
+  | GNSS | `sensor_msgs::msg::NavSatFix` | `QOS_PROFILE_DEFAULT` |
+
+### 3.2 Refactor Sensor Bridge Structure
+
+File: `src/bridge/sensor_bridge.rs`
+
+- [ ] Update `SensorBridge` struct:
+  ```rust
+  pub struct SensorBridge {
+      _vehicle_name: String,
+      sensor_type: SensorType,
+      _actor: Sensor,
+      sensor_name: String,
+      // Remove: tx: Sender<(MessageType, Vec<u8>)>,
+      // Publishers will be stored per sensor type
+  }
+  ```
+- [ ] Remove channel-based threading (`tx`, `rx`, `MessageType` enum)
+- [ ] Publishers will be stored in individual sensor structs or as trait objects
+
+### 3.3 Migrate Camera RGB Sensor
+
+- [ ] Update `register_camera_rgb()` signature:
+  ```rust
+  fn register_camera_rgb(
+      node: Arc<rclrs::Node>,
+      actor: &Sensor,
+      topic_name: String,
+  ) -> Result<Arc<rclrs::Publisher<sensor_msgs::msg::Image>>>
+  ```
+- [ ] Create publisher:
+  ```rust
+  let image_publisher = node.create_publisher::<sensor_msgs::msg::Image>(
+      &format!("{}/image_raw", topic_name),
+      rclrs::QOS_PROFILE_SENSOR_DATA,
+  )?;
+  let info_publisher = node.create_publisher::<sensor_msgs::msg::CameraInfo>(
+      &format!("{}/camera_info", topic_name),
+      rclrs::QOS_PROFILE_SENSOR_DATA,
+  )?;
+  ```
+- [ ] Update `camera_callback()` to publish directly:
+  ```rust
+  fn camera_callback(
+      publisher: Arc<rclrs::Publisher<sensor_msgs::msg::Image>>,
+      header: std_msgs::msg::Header,
+      image: CarlaImage,
+  ) -> Result<()> {
+      let image_msg = sensor_msgs::msg::Image {
+          header,
+          height: image.height() as u32,
+          width: image.width() as u32,
+          encoding: "bgra8".to_string(),
+          is_bigendian: utils::is_bigendian() as u8,
+          step: (image.width() * 4) as u32,
+          data: image.as_slice()
+              .iter()
+              .flat_map(|&Color { b, g, r, a }| [b, g, r, a])
+              .collect(),
+      };
+      publisher.publish(&image_msg)?;
+      Ok(())
+  }
+  ```
+- [ ] Remove CDR serialization
+- [ ] Remove channel send
+- [ ] Update `camera_info_callback()` similarly
+- [ ] Test camera topic:
+  ```bash
+  ros2 topic list | grep camera
+  ros2 topic echo /autoware_v1/sensing/camera/traffic_light/image_raw --no-arr
+  ros2 topic hz /autoware_v1/sensing/camera/traffic_light/image_raw
+  ```
+
+### 3.4 Migrate LiDAR Sensors
+
+- [ ] Update `register_lidar_raycast()`:
+  ```rust
+  fn register_lidar_raycast(
+      node: Arc<rclrs::Node>,
+      actor: &Sensor,
+      topic_name: String,
+  ) -> Result<Arc<rclrs::Publisher<sensor_msgs::msg::PointCloud2>>>
+  ```
+- [ ] Create publisher with `QOS_PROFILE_SENSOR_DATA`
+- [ ] Update `lidar_callback()` to publish directly
+- [ ] Remove CDR serialization
+- [ ] Update `register_lidar_raycast_semantic()` similarly
+- [ ] Update `sematic_lidar_callback()` similarly
+- [ ] Test LiDAR topics:
+  ```bash
+  ros2 topic echo /autoware_v1/sensing/lidar/top/pointcloud --no-arr
+  ros2 topic hz /autoware_v1/sensing/lidar/top/pointcloud
+  ```
+
+### 3.5 Migrate IMU Sensor
+
+- [ ] Update `register_imu()`:
+  ```rust
+  fn register_imu(
+      node: Arc<rclrs::Node>,
+      actor: &Sensor,
+      topic_name: String,
+  ) -> Result<Arc<rclrs::Publisher<sensor_msgs::msg::Imu>>>
+  ```
+- [ ] Create publisher with `QOS_PROFILE_DEFAULT`
+- [ ] Update `imu_callback()` to publish directly
+- [ ] Remove CDR serialization
+- [ ] Test IMU topic:
+  ```bash
+  ros2 topic echo /autoware_v1/sensing/imu/tamagawa/imu_raw
+  ros2 topic hz /autoware_v1/sensing/imu/tamagawa/imu_raw
+  ```
+
+### 3.6 Migrate GNSS Sensor
+
+- [ ] Update `register_gnss()`:
+  ```rust
+  fn register_gnss(
+      node: Arc<rclrs::Node>,
+      actor: &Sensor,
+      topic_name: String,
+  ) -> Result<Arc<rclrs::Publisher<sensor_msgs::msg::NavSatFix>>>
+  ```
+- [ ] Create publisher with `QOS_PROFILE_DEFAULT`
+- [ ] Update `gnss_callback()` to publish directly
+- [ ] Remove CDR serialization
+- [ ] Test GNSS topic:
+  ```bash
+  ros2 topic echo /autoware_v1/sensing/gnss/ublox/nav_sat_fix
+  ros2 topic hz /autoware_v1/sensing/gnss/ublox/nav_sat_fix
+  ```
+
+### 3.7 Update SensorBridge::new()
+
+- [ ] Refactor to create appropriate publisher based on sensor type
+- [ ] Store publishers (may need to use trait objects or enum variants)
+- [ ] Remove attachment and mode parameters
+- [ ] Update error handling
+
+### 3.8 Clean up SensorBridge::Drop
+
+- [ ] Remove thread stopping logic
+- [ ] Publishers will be automatically cleaned up when dropped
+
+**Deliverables**:
+- [ ] All sensor publishers migrated to rclrs
+- [ ] No CDR serialization code remains
+- [ ] All sensor topics verified with ROS 2 tools
+
+**Success Criteria**:
+- All sensor types publish correctly
+- Topics appear in `ros2 topic list`
+- Message data is correct (verify with `ros2 topic echo`)
+- Topic rates match expected values
+
+---
+
+## Phase 4: Vehicle Bridge Migration
+
+**Objective**: Migrate vehicle control subscribers and status publishers.
+
+**Duration**: 1-2 weeks
+
+### 4.1 Verify Autoware Message Types
+
+- [ ] Verify Autoware message types are accessible through rclrs:
+  ```bash
+  # Source Autoware environment
+  source external/autoware/install/setup.bash
+
+  # Check Autoware message packages
+  ros2 interface package autoware_vehicle_msgs
+  ros2 interface package tier4_vehicle_msgs
+  ros2 interface package tier4_control_msgs
+
+  # List specific message types
+  ros2 interface show autoware_vehicle_msgs/msg/VelocityReport
+  ros2 interface show tier4_vehicle_msgs/msg/ActuationCommandStamped
+  ```
+
+- [ ] Verify `.cargo/config.toml` includes Autoware message paths:
+  ```bash
+  # After running make build, check generated config
+  cat .cargo/config.toml | grep autoware
+  ```
+
+- [ ] Test Autoware message imports in Rust:
+  ```rust
+  use autoware_vehicle_msgs::msg::VelocityReport;
+  use tier4_vehicle_msgs::msg::ActuationCommandStamped;
+  use tier4_control_msgs::msg::GateMode;
+  ```
+
+**Note**: If message types are not available through Autoware workspace:
+  - Ensure Autoware 2025.22 is fully built with all message packages
+  - Check that `external/autoware` symlink points to correct installation
+  - Verify ROS 2 environment is properly sourced in Makefile
+
+### 4.2 Migrate Vehicle Status Publishers
+
+File: `src/bridge/vehicle_bridge.rs`
+
+- [ ] Update `VehicleBridge` struct:
+  ```rust
+  pub struct VehicleBridge {
+      vehicle_name: String,
+      actor: Vehicle,
+      // Subscribers
+      _subscription_actuation_cmd: Arc<rclrs::Subscription<ActuationCommandStamped>>,
+      _subscription_gear_cmd: Arc<rclrs::Subscription<GearCommand>>,
+      _subscription_gate_mode: Arc<rclrs::Subscription<GateMode>>,
+      // Publishers
+      publisher_actuation: Arc<rclrs::Publisher<ActuationStatusStamped>>,
+      publisher_velocity: Arc<rclrs::Publisher<VelocityReport>>,
+      publisher_steer: Arc<rclrs::Publisher<SteeringReport>>,
+      publisher_gear: Arc<rclrs::Publisher<GearReport>>,
+      publisher_control: Arc<rclrs::Publisher<ControlModeReport>>,
+      publisher_turnindicator: Arc<rclrs::Publisher<TurnIndicatorsReport>>,
+      publisher_hazardlight: Arc<rclrs::Publisher<HazardLightsReport>>,
+      // State
+      velocity: Arc<AtomicF32>,
+      current_actuation_cmd: Arc<ArcSwap<ActuationCommandStamped>>,
+      current_gear: Arc<ArcSwap<u8>>,
+      current_gate_mode: Arc<ArcSwap<GateMode>>,
+      // Remove: attachment, mode
+      // Control parameters
+      tau: f32,
+      prev_timestamp: Option<f64>,
+      prev_steer_output: f32,
+  }
+  ```
+
+- [ ] Update `VehicleBridge::new()` to create publishers:
+  ```rust
+  let publisher_actuation = node.create_publisher::<ActuationStatusStamped>(
+      &format!("/{}/vehicle/status/actuation_status", vehicle_name),
+      rclrs::QOS_PROFILE_DEFAULT,
+  )?;
+  // ... create other publishers
+  ```
+
+- [ ] Create subscribers:
+  ```rust
+  let cloned_cmd = current_actuation_cmd.clone();
+  let subscription_actuation_cmd = node.create_subscription::<ActuationCommandStamped, _>(
+      &format!("/{}/control/command/actuation_cmd", vehicle_name),
+      rclrs::QOS_PROFILE_DEFAULT,
+      move |msg: ActuationCommandStamped| {
+          cloned_cmd.store(Arc::new(msg));
+      }
+  )?;
+  // ... create other subscriptions
+  ```
+
+### 4.3 Update Status Publishing Functions
+
+- [ ] Update `pub_current_actuation()`:
+  ```rust
+  fn pub_current_actuation(&mut self, timestamp: f64) -> Result<()> {
+      let control = self.actor.control();
+      let mut header = utils::create_ros_header(Some(timestamp));
+      header.frame_id = String::from("base_link");
+      let actuation_msg = ActuationStatusStamped {
+          header,
+          status: ActuationStatus {
+              accel_status: control.throttle as f64,
+              brake_status: control.brake as f64,
+              steer_status: -control.steer as f64,
+          },
+      };
+      self.publisher_actuation.publish(&actuation_msg)?;
+      Ok(())
+  }
+  ```
+- [ ] Remove CDR serialization from all publishing functions:
+  - [ ] `pub_current_velocity()`
+  - [ ] `pub_current_steer()`
+  - [ ] `pub_current_gear()`
+  - [ ] `pub_current_control()`
+  - [ ] `pub_current_indicator()`
+  - [ ] `pub_hazard_light()`
+- [ ] Remove attachment publishing logic
+- [ ] Keep `update_carla_control()` logic unchanged (it reads from subscriptions)
+
+### 4.4 Test Vehicle Bridge
+
+- [ ] Start CARLA simulator
+- [ ] Spawn test vehicle
+- [ ] Run autoware_carla_bridge
+- [ ] Verify vehicle status topics:
+  ```bash
+  ros2 topic list | grep vehicle
+  ros2 topic echo /autoware_v1/vehicle/status/velocity_status
+  ros2 topic echo /autoware_v1/vehicle/status/steering_status
+  ```
+- [ ] Test vehicle control by publishing commands:
+  ```bash
+  # Terminal 1: Monitor velocity
+  ros2 topic echo /autoware_v1/vehicle/status/velocity_status
+
+  # Terminal 2: Send control command
+  ros2 topic pub /autoware_v1/control/command/actuation_cmd \
+    tier4_vehicle_msgs/msg/ActuationCommandStamped \
+    "{actuation: {accel_cmd: 0.3, brake_cmd: 0.0, steer_cmd: 0.0}}"
+  ```
+- [ ] Verify vehicle moves in CARLA
+
+**Deliverables**:
+- [ ] Vehicle publishers migrated to rclrs
+- [ ] Vehicle subscribers migrated to rclrs
+- [ ] Control loop functional
+- [ ] All vehicle topics verified
+
+**Success Criteria**:
+- Vehicle status topics publish correctly
+- Vehicle responds to control commands
+- No crashes or errors during operation
+
+---
+
+## Phase 5: Testing and Optimization
+
+**Objective**: Comprehensive testing and performance optimization.
+
+**Duration**: 1-2 weeks
+
+### 5.1 Integration Testing
+
+- [ ] Create test scenarios:
+  - [ ] Single vehicle spawn and control
+  - [ ] Multiple vehicles (v1, v2)
+  - [ ] All sensor types enabled
+  - [ ] Long-running stability test (30+ minutes)
+  - [ ] Rapid vehicle spawn/despawn
+- [ ] Document test procedures in `docs/testing.md`
+- [ ] Create test scripts in `tests/` directory
+
+### 5.2 ROS 2 Executor Integration
+
+File: `src/main.rs`
+
+- [ ] Add executor spin to main loop:
+  ```rust
+  let executor = rclrs::SingleThreadedExecutor::new();
+
+  while running.load(Ordering::SeqCst) {
+      // Bridge management logic
+      {
+          // Actor spawn/despawn
+      }
+
+      // Update bridges
+      let sec = world.snapshot().timestamp().elapsed_seconds;
+      bridge_list.values_mut().try_for_each(|bridge| bridge.step(sec))?;
+
+      // Spin ROS callbacks
+      executor.spin_once(Some(std::time::Duration::from_millis(10)))?;
+
+      world.wait_for_tick();
+  }
+  ```
+- [ ] Test that callbacks are processed
+- [ ] Adjust spin timeout if needed
+- [ ] Consider `MultiThreadedExecutor` if performance requires it
+
+### 5.3 Performance Testing
+
+- [ ] Measure topic publication rates:
+  ```bash
+  ros2 topic hz /autoware_v1/sensing/lidar/top/pointcloud
+  ros2 topic hz /autoware_v1/sensing/camera/traffic_light/image_raw
+  ros2 topic hz /autoware_v1/vehicle/status/velocity_status
+  ```
+- [ ] Compare with Zenoh version benchmarks
+- [ ] Monitor CPU and memory usage:
+  ```bash
+  top -p $(pgrep autoware_carla_bridge)
+  ```
+- [ ] Profile with `flamegraph` or `perf`:
+  ```bash
+  # Build the project
+  make build
+
+  # Profile with flamegraph
+  cargo flamegraph --profile release-with-debug --bin autoware_carla_bridge
+
+  # Or use perf directly
+  perf record -g ./target/release-with-debug/autoware_carla_bridge
+  perf report
+  ```
+- [ ] Optimize hot paths if needed
+
+### 5.4 Error Handling and Robustness
+
+- [ ] Test error scenarios:
+  - [ ] CARLA disconnection during operation
+  - [ ] Invalid sensor data
+  - [ ] Rapid topic subscription/unsubscription
+  - [ ] ROS 2 node termination
+- [ ] Improve error messages
+- [ ] Add graceful degradation where possible
+- [ ] Ensure proper cleanup on Ctrl-C
+
+### 5.5 Code Quality
+
+- [ ] Format and lint code:
+  ```bash
+  make format  # Format code
+  make lint    # Check formatting and run clippy
+  ```
+- [ ] Add documentation comments to public APIs
+- [ ] Remove dead code and unused imports
+- [ ] Update code comments referencing Zenoh
+
+### 5.6 Autoware Integration Test
+
+- [ ] Launch Autoware 2025.22
+- [ ] Run autoware_carla_bridge with spawned vehicles
+- [ ] Verify Autoware receives all expected topics:
+  ```bash
+  ros2 node info /autoware_node
+  ros2 topic list
+  ```
+- [ ] Test basic Autoware functionality:
+  - [ ] Localization with GNSS
+  - [ ] Perception with LiDAR/Camera
+  - [ ] Planning with vehicle control
+- [ ] Document any Autoware-specific configuration needed
+
+**Deliverables**:
+- [ ] Test suite and documentation
+- [ ] Performance benchmarks
+- [ ] Autoware integration validated
+- [ ] Code quality improvements
+
+**Success Criteria**:
+- All tests pass consistently
+- Performance meets or exceeds Zenoh version
+- No memory leaks or resource issues
+- Autoware integration works correctly
+
+---
+
+## Phase 6: Documentation and Release
+
+**Objective**: Complete documentation and prepare for release.
+
+**Duration**: 3-5 days
+
+### 6.1 Update README.md
+
+- [ ] Update project description to reflect rclrs usage
+- [ ] Remove references to Zenoh bridges
+- [ ] Update execution instructions:
+  - [ ] Remove zenoh router step
+  - [ ] Simplify to just CARLA + autoware_carla_bridge
+- [ ] Update topic verification examples
+- [ ] Update prerequisites (remove Zenoh installation)
+- [ ] Update roadmap status
+
+### 6.2 Write Migration Guide
+
+File: `docs/migration-from-zenoh.md`
+
+- [ ] Document breaking changes
+- [ ] Provide topic name mapping (if changed)
+- [ ] Explain QoS profile changes
+- [ ] Document command-line argument changes
+- [ ] Provide troubleshooting section
+
+### 6.3 API Documentation
+
+- [ ] Add rustdoc comments to all public items:
+  ```rust
+  /// A bridge for CARLA sensor data to ROS 2 topics.
+  ///
+  /// This bridge handles camera, LiDAR, IMU, and GNSS sensors,
+  /// publishing their data to appropriate ROS 2 topics.
+  pub struct SensorBridge {
+      // ...
+  }
+  ```
+- [ ] Generate documentation:
+  ```bash
+  cargo doc --no-deps --open
+  ```
+- [ ] Review generated docs for completeness
+
+### 6.4 Examples and Tutorials
+
+- [ ] Create example launch files (if using launch system)
+- [ ] Write tutorial: "Getting Started with autoware_carla_bridge"
+- [ ] Write tutorial: "Integrating with Autoware"
+- [ ] Create example ROS 2 bag recording script
+
+### 6.5 Final Testing
+
+- [ ] Fresh installation test on clean Ubuntu 22.04
+- [ ] Follow README instructions exactly
+- [ ] Verify all examples work
+- [ ] Test with different ROS 2 distributions (if supported)
+
+### 6.6 Release Preparation
+
+- [ ] Update `Cargo.toml` version to `0.13.0`
+- [ ] Create CHANGELOG.md:
+  ```markdown
+  # Changelog
+
+  ## [0.13.0] - 2025-XX-XX
+
+  ### Changed
+  - Migrated from Zenoh to native ROS 2 (rclrs)
+  - Removed bridge mode selection (DDS, ROS2, RmwZenoh)
+  - Simplified codebase and improved type safety
+
+  ### Removed
+  - Zenoh dependencies
+  - Liveliness token management
+  - Attachment metadata handling
+  - Mode-specific logic
+
+  ### Fixed
+  - [List any bugs fixed during migration]
+  ```
+- [ ] Create git tag:
+  ```bash
+  git tag -a v0.13.0 -m "Release v0.13.0: rclrs migration"
+  ```
+- [ ] Merge feature branch to main:
+  ```bash
+  git checkout main
+  git merge feature/rclrs-migration
+  ```
+- [ ] Push to repository:
+  ```bash
+  git push origin main --tags
+  ```
+
+**Deliverables**:
+- [ ] Updated README.md
+- [ ] Migration guide
+- [ ] API documentation
+- [ ] Examples and tutorials
+- [ ] CHANGELOG.md
+- [ ] Git release tag
+
+**Success Criteria**:
+- Documentation is clear and comprehensive
+- New users can get started without external help
+- All examples work correctly
+
+---
+
+## Success Criteria
+
+The migration is considered successful when:
+
+### Functional Requirements
+- ✅ All sensor types publish to ROS 2 topics (Camera, LiDAR, IMU, GNSS)
+- ✅ Vehicle control works bidirectionally (status out, commands in)
+- ✅ Multiple vehicles can be bridged simultaneously
+- ✅ Clock synchronization works correctly
+- ✅ Integration with Autoware 2025.22 is functional
+
+### Technical Requirements
+- ✅ Zero Zenoh dependencies remain
+- ✅ All ROS 2 topics use correct message types
+- ✅ QoS profiles are appropriate for each topic type
+- ✅ No CDR serialization code remains
+- ✅ Code passes `make lint` with no warnings
+- ✅ Code is formatted with `make format`
+
+### Performance Requirements
+- ✅ Topic publication rates match or exceed Zenoh version
+- ✅ CPU usage is comparable or better
+- ✅ Memory usage is stable (no leaks)
+- ✅ Latency is acceptable for real-time control
+
+### Documentation Requirements
+- ✅ README.md accurately describes the project
+- ✅ API documentation is complete
+- ✅ Migration guide helps Zenoh users transition
+- ✅ Examples and tutorials are working
+
+### Testing Requirements
+- ✅ All integration tests pass
+- ✅ Autoware integration is verified
+- ✅ Long-running stability test completes
+- ✅ Error handling is robust
+
+---
+
+## Risk Management
+
+### Identified Risks
+
+| Risk | Impact | Probability | Mitigation |
+|------|--------|-------------|------------|
+| Autoware message types unavailable in Rust | High | Medium | Generate from `.msg` files or use CDR temporarily |
+| Performance regression vs. Zenoh | Medium | Low | Profile and optimize hot paths |
+| rclrs API limitations | Medium | Low | Engage with ros2-rust community |
+| Breaking changes during development | Medium | Medium | Use feature branch, frequent testing |
+| CARLA API incompatibilities | Low | Low | Keep CARLA version pinned |
+
+### Contingency Plans
+
+- **If Autoware messages unavailable**:
+  - Option 1: Generate Rust bindings using rosidl
+  - Option 2: Define structs manually and use CDR
+  - Option 3: Contribute message generation to ros2-rust project
+
+- **If performance issues**:
+  - Profile with flamegraph
+  - Consider `MultiThreadedExecutor`
+  - Optimize message copying
+  - Use `Arc` more aggressively
+
+- **If rclrs bugs found**:
+  - Report to ros2-rust GitHub
+  - Fork and patch if critical
+  - Consider temporary workarounds
+
+---
+
+## Progress Tracking
+
+Track progress by marking tasks complete in this document:
+
+- `[ ]` = Not started
+- `[~]` = In progress
+- `[x]` = Complete
+- `[!]` = Blocked
+
+### Current Phase: Phase 0 (Preparation)
+
+**Last Updated**: 2025-10-20
+
+### Completed Items
+- [x] Study Zenoh API usage
+- [x] Study rclrs API
+- [x] Create API comparison document
+- [x] Create roadmap document
+
+### Next Steps
+1. Set up development branch
+2. Tag current working version
+3. Set up test environment
+4. Begin Phase 1: Core Infrastructure
+
+---
+
+**Document Version**: 1.0
+**Last Updated**: 2025-10-20
+**Maintained By**: Autoware CARLA Bridge Team
