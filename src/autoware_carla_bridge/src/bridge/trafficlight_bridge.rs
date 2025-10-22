@@ -1,7 +1,4 @@
-use std::sync::Arc;
-
 use carla::client::TrafficLight;
-use zenoh::Session;
 
 use super::actor_bridge::ActorBridge;
 use crate::error::Result;
@@ -11,7 +8,7 @@ pub struct TrafficLightBridge {
 }
 
 impl TrafficLightBridge {
-    pub fn new(_z_session: Arc<Session>, _actor: TrafficLight) -> Result<TrafficLightBridge> {
+    pub fn new(_node: rclrs::Node, _actor: TrafficLight) -> Result<TrafficLightBridge> {
         Ok(TrafficLightBridge { _actor })
     }
 }

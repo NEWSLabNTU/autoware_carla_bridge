@@ -20,27 +20,15 @@ use carla::{
     client::{ActorBase, Client},
     rpc::ActorId,
 };
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use clock::SimulatorClock;
 use error::{BridgeError, Result};
-use serde_json::json;
-use zenoh::{Config, Wait};
+use rclrs::CreateBasicExecutor;
 
 // The default interval between ticks
 const DEFAULT_CARLA_TICK_INTERVAL_MS: &str = "50";
 
-#[allow(clippy::upper_case_acronyms)]
-#[derive(Debug, Clone, PartialEq, ValueEnum)]
-enum Mode {
-    /// Using zenoh-bridge-dds
-    DDS,
-    /// Using zenoh-bridge-ros2dds
-    ROS2,
-    /// Using rmw_zenoh
-    RmwZenoh,
-}
-
-/// Zenoh Carla bridge for Autoware
+/// ROS 2 Carla bridge for Autoware
 #[derive(Debug, Clone, Parser)]
 #[clap(version, about)]
 struct Opts {
@@ -51,18 +39,6 @@ struct Opts {
     /// Carla simulator port.
     #[clap(long, default_value = "2000")]
     pub carla_port: u16,
-
-    /// Zenoh listen address.
-    #[clap(long, default_value = "tcp/localhost:7447")]
-    pub zenoh_listen: Vec<String>,
-
-    /// Select which kind of bridge you're using: zenoh-bridge-dds or zenoh-bridge-ros2dds.
-    #[clap(short, long, value_enum)]
-    mode: Option<Mode>,
-
-    /// Zenoh Config
-    #[clap(long, value_enum)]
-    zenoh_config: Option<String>,
 
     /// Carla Tick interval (ms)
     #[clap(long, default_value = DEFAULT_CARLA_TICK_INTERVAL_MS)]
@@ -81,17 +57,9 @@ fn main() -> Result<()> {
     let Opts {
         carla_address,
         carla_port,
-        zenoh_listen,
-        mode,
-        zenoh_config,
         tick,
         slowdown,
     } = Opts::parse();
-
-    let mode = match mode {
-        Some(m) => m,
-        None => Mode::ROS2,
-    };
 
     // Flag for graceful shutdown when Ctrl-C is pressed
     let running = Arc::new(AtomicBool::new(true));
@@ -101,15 +69,12 @@ fn main() -> Result<()> {
     })
     .expect("Failed to set Ctrl-C handler");
 
-    log::info!("Running Carla Autoware Zenoh bridge...");
-    let mut config = match zenoh_config {
-        Some(conf_file) => Config::from_file(conf_file).unwrap(),
-        None => Config::default(),
-    };
-    config
-        .insert_json5("listen/endpoints", &json!(zenoh_listen).to_string())
-        .expect("Failed to set zenoh listen endpoints.");
-    let z_session = Arc::new(zenoh::open(config).wait()?);
+    log::info!("Running Carla Autoware ROS 2 bridge...");
+
+    // Initialize ROS 2 context and executor
+    let ctx = rclrs::Context::new(std::env::args(), rclrs::InitOptions::default())?;
+    let mut executor = ctx.create_basic_executor();
+    let node = executor.create_node("autoware_carla_bridge")?;
 
     // Carla
     let client = Client::connect(&carla_address, carla_port, None);
@@ -123,12 +88,10 @@ fn main() -> Result<()> {
     // Create bridge list
     let mut bridge_list: HashMap<ActorId, Box<dyn ActorBridge>> = HashMap::new();
 
-    // Initialize Autoware topic map and liveliness
-    autoware::setup_topics(mode.clone(), z_session.clone());
-
     // Create clock publisher
-    let simulator_clock = SimulatorClock::new(z_session.clone(), mode.clone())
-        .expect("Unable to create simulator clock!");
+    // Node is Arc so we can clone it
+    let simulator_clock =
+        SimulatorClock::new(node.clone()).expect("Unable to create simulator clock!");
 
     // Create thread for ticking
     let client_for_tick = Client::connect(&carla_address, carla_port, None);
@@ -164,11 +127,9 @@ fn main() -> Result<()> {
                     Ok(BridgeType::Vehicle(vehicle_name)) => {
                         let aw = autoware_list
                             .entry(vehicle_name.clone())
-                            .or_insert_with(|| {
-                                autoware::Autoware::new(vehicle_name.clone(), mode.clone())
-                            });
+                            .or_insert_with(|| autoware::Autoware::new(vehicle_name.clone()));
                         bridge::actor_bridge::create_bridge(
-                            z_session.clone(),
+                            node.clone(), // Node is Arc, cheap to clone
                             actor,
                             BridgeType::Vehicle(vehicle_name),
                             aw,
@@ -177,12 +138,10 @@ fn main() -> Result<()> {
                     Ok(BridgeType::Sensor(vehicle_name, sensor_type, sensor_name)) => {
                         let aw = autoware_list
                             .entry(vehicle_name.clone())
-                            .or_insert_with(|| {
-                                autoware::Autoware::new(vehicle_name.clone(), mode.clone())
-                            });
+                            .or_insert_with(|| autoware::Autoware::new(vehicle_name.clone()));
                         aw.add_sensors(sensor_type, sensor_name.clone());
                         bridge::actor_bridge::create_bridge(
-                            z_session.clone(),
+                            node.clone(), // Node is Arc, cheap to clone
                             actor,
                             BridgeType::Sensor(vehicle_name, sensor_type, sensor_name),
                             aw,
@@ -231,7 +190,5 @@ fn main() -> Result<()> {
         world.wait_for_tick();
     }
 
-    // Clean up all declared liveliness tokens before exit
-    autoware::undeclare_all_liveliness();
     Ok(())
 }

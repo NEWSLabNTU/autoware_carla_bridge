@@ -1,7 +1,4 @@
-use std::sync::Arc;
-
 use carla::client::Actor;
-use zenoh::Session;
 
 use super::actor_bridge::ActorBridge;
 use crate::error::Result;
@@ -11,7 +8,7 @@ pub struct OtherActorBridge {
 }
 
 impl OtherActorBridge {
-    pub fn new(_z_session: Arc<Session>, _actor: Actor) -> Result<OtherActorBridge> {
+    pub fn new(_node: rclrs::Node, _actor: Actor) -> Result<OtherActorBridge> {
         Ok(OtherActorBridge { _actor })
     }
 }

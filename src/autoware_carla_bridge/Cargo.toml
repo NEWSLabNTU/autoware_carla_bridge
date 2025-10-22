@@ -9,6 +9,11 @@ repository = "https://github.com/NEWSLabNTU/ros_zenoh_bridge"
 [dependencies]
 # ROS 2 dependencies
 rclrs = "*"
+
+# ROS 2 message packages
+# NOTE: These crates are generated during colcon build (stage 1) and made
+# available through .cargo/config.toml patches. Use wildcards to allow
+# cargo to find them from the generated config.
 std_msgs = "*"
 builtin_interfaces = "*"
 geometry_msgs = "*"
@@ -18,7 +23,7 @@ tier4_vehicle_msgs = "*"
 tier4_control_msgs = "*"
 
 # CARLA and utilities
-carla = "0.11.1"
+carla = "0.12.0"
 atomic_float = "1.1.0"
 arc-swap = "1.6.0"
 clap = { version = "4.5.48", features = ["derive"] }

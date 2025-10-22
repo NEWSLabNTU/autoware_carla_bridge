@@ -1,7 +1,4 @@
-use std::sync::Arc;
-
 use carla::client::{Actor, ActorKind};
-use zenoh::Session;
 
 use super::{
     other_bridge::OtherActorBridge,
@@ -35,29 +32,25 @@ pub fn get_bridge_type(actor: Actor) -> Result<BridgeType> {
     })
 }
 
-// z_session should outlive Box<>
 pub fn create_bridge(
-    z_session: Arc<Session>,
+    node: rclrs::Node, // Node is already Arc<NodeState>
     actor: Actor,
     bridge_type: BridgeType,
     autoware: &Autoware,
 ) -> Result<Box<dyn ActorBridge>> {
     Ok(match actor.into_kinds() {
-        ActorKind::Vehicle(vehicle) => Box::new(VehicleBridge::new(
-            z_session,
-            vehicle,
-            bridge_type,
-            autoware,
-        )?),
+        ActorKind::Vehicle(vehicle) => {
+            Box::new(VehicleBridge::new(node, vehicle, bridge_type, autoware)?)
+        }
         ActorKind::Sensor(sensor) => {
-            Box::new(SensorBridge::new(z_session, sensor, bridge_type, autoware)?)
+            Box::new(SensorBridge::new(node, sensor, bridge_type, autoware)?)
         }
         ActorKind::TrafficLight(traffic_light) => {
-            Box::new(TrafficLightBridge::new(z_session, traffic_light)?)
+            Box::new(TrafficLightBridge::new(node, traffic_light)?)
         }
         ActorKind::TrafficSign(traffic_sign) => {
-            Box::new(TrafficSignBridge::new(z_session, traffic_sign)?)
+            Box::new(TrafficSignBridge::new(node, traffic_sign)?)
         }
-        ActorKind::Other(other) => Box::new(OtherActorBridge::new(z_session, other)?),
+        ActorKind::Other(other) => Box::new(OtherActorBridge::new(node, other)?),
     })
 }

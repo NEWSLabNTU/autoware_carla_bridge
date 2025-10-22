@@ -6,58 +6,52 @@ use carla::{
     client::{ActorBase, Vehicle},
     rpc::{VehicleControl, VehicleWheelLocation},
 };
-use cdr::{CdrLe, Infinite};
 use interp::{interp, InterpMode};
-use zenoh::{
-    pubsub::{Publisher, Subscriber},
-    Session, Wait,
-};
-use zenoh_ros_type::{
-    autoware_vehicle_msgs::{
-        control_mode_report, gear_report, hazard_lights_report, turn_indicators_report,
-        ControlModeReport, GearCommand, GearReport, HazardLightsReport, SteeringReport,
-        TurnIndicatorsReport, VelocityReport,
-    },
-    builtin_interfaces::Time,
-    std_msgs::Header,
-    tier4_control_msgs::{gate_mode_data, GateMode},
-    tier4_vehicle_msgs::{
-        ActuationCommand, ActuationCommandStamped, ActuationStatus, ActuationStatusStamped,
-    },
-};
 
 use super::actor_bridge::{ActorBridge, BridgeType};
 use crate::{
     autoware::Autoware,
     error::{BridgeError, Result},
-    put_with_attachment, utils,
+    utils,
 };
 
-pub struct VehicleBridge<'a> {
+pub struct VehicleBridge {
     vehicle_name: String,
     actor: Vehicle,
-    _subscriber_actuation_cmd: Subscriber<()>,
-    _subscriber_gear_cmd: Subscriber<()>,
-    _subscriber_gate_mode: Subscriber<()>,
-    publisher_actuation: Publisher<'a>,
-    publisher_velocity: Publisher<'a>,
-    publisher_steer: Publisher<'a>,
-    publisher_gear: Publisher<'a>,
-    publisher_control: Publisher<'a>,
-    publisher_turnindicator: Publisher<'a>,
-    publisher_hazardlight: Publisher<'a>,
+
+    // Publishers
+    publisher_actuation: Arc<rclrs::Publisher<tier4_vehicle_msgs::msg::ActuationStatusStamped>>,
+    publisher_velocity: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::VelocityReport>>,
+    publisher_steer: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::SteeringReport>>,
+    publisher_gear: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::GearReport>>,
+    publisher_control: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::ControlModeReport>>,
+    publisher_turnindicator:
+        Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::TurnIndicatorsReport>>,
+    publisher_hazardlight: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::HazardLightsReport>>,
+
+    // Subscriptions (kept alive)
+    _subscription_actuation_cmd:
+        Arc<rclrs::Subscription<tier4_vehicle_msgs::msg::ActuationCommandStamped>>,
+    _subscription_gear_cmd: Arc<rclrs::Subscription<autoware_vehicle_msgs::msg::GearCommand>>,
+    _subscription_gate_mode: Arc<rclrs::Subscription<tier4_control_msgs::msg::GateMode>>,
+    _subscription_turnindicator_cmd:
+        Arc<rclrs::Subscription<autoware_vehicle_msgs::msg::TurnIndicatorsCommand>>,
+    _subscription_hazardlight_cmd:
+        Arc<rclrs::Subscription<autoware_vehicle_msgs::msg::HazardLightsCommand>>,
+
+    // Shared state
     velocity: Arc<AtomicF32>,
-    current_actuation_cmd: Arc<ArcSwap<ActuationCommandStamped>>,
+    current_actuation_cmd: Arc<ArcSwap<tier4_vehicle_msgs::msg::ActuationCommandStamped>>,
     current_gear: Arc<ArcSwap<u8>>,
-    current_gate_mode: Arc<ArcSwap<GateMode>>,
-    attachment: Vec<u8>,
-    mode: crate::Mode,
+    current_gate_mode: Arc<ArcSwap<tier4_control_msgs::msg::GateMode>>,
+
+    // Control state
     tau: f32,
     prev_timestamp: Option<f64>,
     prev_steer_output: f32,
 }
 
-impl<'a> VehicleBridge<'a> {
+impl VehicleBridge {
     pub fn get_bridge_type(actor: Vehicle) -> Result<BridgeType> {
         let mut vehicle_name = actor
             .attributes()
@@ -82,117 +76,123 @@ impl<'a> VehicleBridge<'a> {
     }
 
     pub fn new(
-        z_session: Arc<Session>,
+        node: rclrs::Node,
         actor: Vehicle,
         bridge_type: BridgeType,
         autoware: &Autoware,
-    ) -> Result<VehicleBridge<'a>> {
+    ) -> Result<VehicleBridge> {
         let vehicle_name = match bridge_type {
             BridgeType::Vehicle(v) => v,
             _ => panic!("Should never happen!"),
         };
 
-        // The actuation status is only used in accel_brake_map_calibrator; Autoware does not subscribe to it.
-        let publisher_actuation = z_session
-            .declare_publisher(autoware.topic_actuation_status.clone())
-            .wait()?;
-        let publisher_velocity = z_session
-            .declare_publisher(autoware.topic_velocity_status.clone())
-            .wait()?;
-        let publisher_steer = z_session
-            .declare_publisher(autoware.topic_steering_status.clone())
-            .wait()?;
-        let publisher_gear = z_session
-            .declare_publisher(autoware.topic_gear_status.clone())
-            .wait()?;
-        let publisher_control = z_session
-            .declare_publisher(autoware.topic_control_mode.clone())
-            .wait()?;
-        let publisher_turnindicator = z_session
-            .declare_publisher(autoware.topic_turn_indicators_status.clone())
-            .wait()?;
-        let publisher_hazardlight = z_session
-            .declare_publisher(autoware.topic_hazard_lights_status.clone())
-            .wait()?;
+        // Create publishers
+        let publisher_actuation = Arc::new(
+            node.create_publisher::<tier4_vehicle_msgs::msg::ActuationStatusStamped>(
+                &autoware.topic_actuation_status,
+            )?,
+        );
+        let publisher_velocity = Arc::new(
+            node.create_publisher::<autoware_vehicle_msgs::msg::VelocityReport>(
+                &autoware.topic_velocity_status,
+            )?,
+        );
+        let publisher_steer = Arc::new(
+            node.create_publisher::<autoware_vehicle_msgs::msg::SteeringReport>(
+                &autoware.topic_steering_status,
+            )?,
+        );
+        let publisher_gear = Arc::new(
+            node.create_publisher::<autoware_vehicle_msgs::msg::GearReport>(
+                &autoware.topic_gear_status,
+            )?,
+        );
+        let publisher_control = Arc::new(
+            node.create_publisher::<autoware_vehicle_msgs::msg::ControlModeReport>(
+                &autoware.topic_control_mode,
+            )?,
+        );
+        let publisher_turnindicator = Arc::new(
+            node.create_publisher::<autoware_vehicle_msgs::msg::TurnIndicatorsReport>(
+                &autoware.topic_turn_indicators_status,
+            )?,
+        );
+        let publisher_hazardlight = Arc::new(
+            node.create_publisher::<autoware_vehicle_msgs::msg::HazardLightsReport>(
+                &autoware.topic_hazard_lights_status,
+            )?,
+        );
+
         let velocity = Arc::new(AtomicF32::new(0.0));
 
-        // Using actuation instead of Ackermann to prevent mismatch with Autoware's speed logic and CARLA's motion constraints
-        let current_actuation_cmd = Arc::new(ArcSwap::from_pointee(ActuationCommandStamped {
-            header: Header {
-                stamp: Time { sec: 0, nanosec: 0 },
-                frame_id: "".to_string(),
+        // Initialize shared state for actuation commands
+        let current_actuation_cmd = Arc::new(ArcSwap::from_pointee(
+            tier4_vehicle_msgs::msg::ActuationCommandStamped {
+                header: std_msgs::msg::Header {
+                    stamp: builtin_interfaces::msg::Time { sec: 0, nanosec: 0 },
+                    frame_id: "".to_string(),
+                },
+                actuation: tier4_vehicle_msgs::msg::ActuationCommand {
+                    accel_cmd: 0.0,
+                    brake_cmd: 0.0,
+                    steer_cmd: 0.0,
+                },
             },
-            actuation: ActuationCommand {
-                accel_cmd: 0.0,
-                brake_cmd: 0.0,
-                steer_cmd: 0.0,
-            },
-        }));
-        let cloned_cmd = current_actuation_cmd.clone();
-        let subscriber_actuation_cmd = z_session
-            .declare_subscriber(autoware.topic_actuation_cmd.clone())
-            .callback_mut(move |sample| {
-                let result: Result<ActuationCommandStamped, _> =
-                    cdr::deserialize_from(sample.payload().reader(), cdr::size::Infinite);
-                let Ok(cmd) = result else {
-                    log::error!("Unable to parse data from /control/command/actuation_cmd");
-                    return;
-                };
-                cloned_cmd.store(Arc::new(cmd));
-            })
-            .wait()?;
-        let current_gear = Arc::new(ArcSwap::from_pointee(gear_report::NONE));
-        let cloned_gear = current_gear.clone();
-        let subscriber_gear_cmd = z_session
-            .declare_subscriber(autoware.topic_gear_cmd.clone())
-            .callback_mut(move |sample| {
-                let result: Result<GearCommand, _> =
-                    cdr::deserialize_from(sample.payload().reader(), cdr::size::Infinite);
-                let Ok(cmd) = result else {
-                    log::error!("Unable to parse data from /control/command/gear_cmd");
-                    return;
-                };
-                cloned_gear.store(Arc::new(cmd.command));
-            })
-            .wait()?;
-        let current_gate_mode = Arc::new(ArcSwap::from_pointee(GateMode {
-            data: gate_mode_data::AUTO,
-        }));
-        let cloned_gate_mode = current_gate_mode.clone();
-        let subscriber_gate_mode = z_session
-            .declare_subscriber(autoware.topic_current_gate_mode.clone())
-            .callback_mut(move |sample| {
-                let result: Result<GateMode, _> =
-                    cdr::deserialize_from(sample.payload().reader(), cdr::size::Infinite);
-                let Ok(mode) = result else {
-                    log::error!("Unable to parse data from /control/current_gate_mode");
-                    return;
-                };
-                cloned_gate_mode.store(Arc::new(mode));
-            })
-            .wait()?;
-        let _subscriber_turnindicator = z_session
-            .declare_subscriber(autoware.topic_turn_indicators_cmd.clone())
-            .callback_mut(move |_sample| {
-                // TODO: Not support yet
-            })
-            .wait()?;
-        let _subscriber_hazardlight = z_session
-            .declare_subscriber(autoware.topic_hazard_lights_cmd.clone())
-            .callback_mut(move |_sample| {
-                // TODO: Not support yet
-            })
-            .wait()?;
+        ));
 
-        // Generate rmw_zenoh-compatible attachment
-        let attachment = utils::generate_attachment();
+        // Create subscription for actuation commands
+        let cloned_cmd = current_actuation_cmd.clone();
+        let subscription_actuation_cmd = Arc::new(node.create_subscription(
+            &autoware.topic_actuation_cmd,
+            move |cmd: tier4_vehicle_msgs::msg::ActuationCommandStamped| {
+                cloned_cmd.store(Arc::new(cmd));
+            },
+        )?);
+
+        // Initialize shared state for gear commands
+        let current_gear = Arc::new(ArcSwap::from_pointee(
+            autoware_vehicle_msgs::msg::GearReport::NONE,
+        ));
+        let cloned_gear = current_gear.clone();
+        let subscription_gear_cmd = Arc::new(node.create_subscription(
+            &autoware.topic_gear_cmd,
+            move |cmd: autoware_vehicle_msgs::msg::GearCommand| {
+                cloned_gear.store(Arc::new(cmd.command));
+            },
+        )?);
+
+        // Initialize shared state for gate mode
+        let current_gate_mode =
+            Arc::new(ArcSwap::from_pointee(tier4_control_msgs::msg::GateMode {
+                data: tier4_control_msgs::msg::GateMode::AUTO,
+            }));
+        let cloned_gate_mode = current_gate_mode.clone();
+        let subscription_gate_mode = Arc::new(node.create_subscription(
+            &autoware.topic_current_gate_mode,
+            move |mode: tier4_control_msgs::msg::GateMode| {
+                cloned_gate_mode.store(Arc::new(mode));
+            },
+        )?);
+
+        // Subscription for turn indicators (not implemented yet)
+        let subscription_turnindicator_cmd = Arc::new(node.create_subscription(
+            &autoware.topic_turn_indicators_cmd,
+            move |_cmd: autoware_vehicle_msgs::msg::TurnIndicatorsCommand| {
+                // TODO: Not supported yet
+            },
+        )?);
+
+        // Subscription for hazard lights (not implemented yet)
+        let subscription_hazardlight_cmd = Arc::new(node.create_subscription(
+            &autoware.topic_hazard_lights_cmd,
+            move |_cmd: autoware_vehicle_msgs::msg::HazardLightsCommand| {
+                // TODO: Not supported yet
+            },
+        )?);
 
         Ok(VehicleBridge {
             vehicle_name,
             actor,
-            _subscriber_actuation_cmd: subscriber_actuation_cmd,
-            _subscriber_gear_cmd: subscriber_gear_cmd,
-            _subscriber_gate_mode: subscriber_gate_mode,
             publisher_actuation,
             publisher_velocity,
             publisher_steer,
@@ -200,12 +200,15 @@ impl<'a> VehicleBridge<'a> {
             publisher_control,
             publisher_turnindicator,
             publisher_hazardlight,
+            _subscription_actuation_cmd: subscription_actuation_cmd,
+            _subscription_gear_cmd: subscription_gear_cmd,
+            _subscription_gate_mode: subscription_gate_mode,
+            _subscription_turnindicator_cmd: subscription_turnindicator_cmd,
+            _subscription_hazardlight_cmd: subscription_hazardlight_cmd,
             velocity,
             current_actuation_cmd,
             current_gear,
             current_gate_mode,
-            attachment,
-            mode: autoware.mode.clone(),
             tau: 0.2,
             prev_timestamp: None,
             prev_steer_output: 0.0,
@@ -216,38 +219,33 @@ impl<'a> VehicleBridge<'a> {
         let control = self.actor.control();
         let mut header = utils::create_ros_header(Some(timestamp));
         header.frame_id = String::from("base_link");
-        let actuation_msg = ActuationStatusStamped {
+
+        let actuation_msg = tier4_vehicle_msgs::msg::ActuationStatusStamped {
             header,
-            status: ActuationStatus {
+            status: tier4_vehicle_msgs::msg::ActuationStatus {
                 accel_status: control.throttle as f64,
                 brake_status: control.brake as f64,
                 steer_status: -control.steer as f64,
             },
         };
+
         log::debug!(
             "Carla => Autoware: accel_status={:.3}, brake_status={:.3}, steer_status={:.3}",
             control.throttle,
             control.brake,
             -control.steer
         );
-        let encoded = cdr::serialize::<_, _, CdrLe>(&actuation_msg, Infinite)?;
-        put_with_attachment!(
-            self.publisher_actuation,
-            encoded,
-            self.attachment,
-            self.mode
-        )?;
+
+        self.publisher_actuation.publish(&actuation_msg)?;
         Ok(())
     }
 
     fn pub_current_velocity(&mut self, timestamp: f64) -> Result<()> {
-        //let transform = vehicle_actor.transform();
         let velocity = self.actor.velocity();
-        //let angular_velocity = vehicle_actor.angular_velocity();
-        //let accel = vehicle_actor.acceleration();
         let mut header = utils::create_ros_header(Some(timestamp));
         header.frame_id = String::from("base_link");
-        let velocity_msg = VelocityReport {
+
+        let velocity_msg = autoware_vehicle_msgs::msg::VelocityReport {
             header,
             // Since the velocity report from Carla is always positive, we need to check reverse.
             longitudinal_velocity: if self.actor.control().reverse {
@@ -261,12 +259,13 @@ impl<'a> VehicleBridge<'a> {
                 .wheel_steer_angle(VehicleWheelLocation::FL_Wheel)
                 .to_radians(),
         };
+
         log::debug!(
             "Carla => Autoware: current velocity: {}",
             velocity_msg.longitudinal_velocity
         );
-        let encoded = cdr::serialize::<_, _, CdrLe>(&velocity_msg, Infinite)?;
-        put_with_attachment!(self.publisher_velocity, encoded, self.attachment, self.mode)?;
+
+        self.publisher_velocity.publish(&velocity_msg)?;
         self.velocity
             .store(velocity_msg.longitudinal_velocity, Ordering::Relaxed);
 
@@ -274,8 +273,8 @@ impl<'a> VehicleBridge<'a> {
     }
 
     fn pub_current_steer(&mut self, timestamp: f64) -> Result<()> {
-        let steer_msg = SteeringReport {
-            stamp: Time {
+        let steer_msg = autoware_vehicle_msgs::msg::SteeringReport {
+            stamp: builtin_interfaces::msg::Time {
                 sec: timestamp.floor() as i32,
                 nanosec: (timestamp.fract() * 1_000_000_000_f64) as u32,
             },
@@ -284,77 +283,69 @@ impl<'a> VehicleBridge<'a> {
                 .wheel_steer_angle(VehicleWheelLocation::FL_Wheel)
                 .to_radians(),
         };
-        let encoded = cdr::serialize::<_, _, CdrLe>(&steer_msg, Infinite)?;
-        put_with_attachment!(self.publisher_steer, encoded, self.attachment, self.mode)?;
+
+        self.publisher_steer.publish(&steer_msg)?;
         Ok(())
     }
 
     fn pub_current_gear(&mut self, timestamp: f64) -> Result<()> {
-        let gear_msg = GearReport {
-            stamp: Time {
+        let gear_msg = autoware_vehicle_msgs::msg::GearReport {
+            stamp: builtin_interfaces::msg::Time {
                 sec: timestamp.floor() as i32,
                 nanosec: (timestamp.fract() * 1_000_000_000_f64) as u32,
             },
             report: **self.current_gear.load(),
         };
-        let encoded = cdr::serialize::<_, _, CdrLe>(&gear_msg, Infinite)?;
-        put_with_attachment!(self.publisher_gear, encoded, self.attachment, self.mode)?;
+
+        self.publisher_gear.publish(&gear_msg)?;
         Ok(())
     }
 
     fn pub_current_control(&mut self, timestamp: f64) -> Result<()> {
-        let mode = if self.current_gate_mode.load().data == gate_mode_data::AUTO {
-            control_mode_report::AUTONOMOUS
+        let mode = if self.current_gate_mode.load().data == tier4_control_msgs::msg::GateMode::AUTO
+        {
+            autoware_vehicle_msgs::msg::ControlModeReport::AUTONOMOUS
         } else {
-            control_mode_report::MANUAL
+            autoware_vehicle_msgs::msg::ControlModeReport::MANUAL
         };
-        let control_msg = ControlModeReport {
-            stamp: Time {
+
+        let control_msg = autoware_vehicle_msgs::msg::ControlModeReport {
+            stamp: builtin_interfaces::msg::Time {
                 sec: timestamp.floor() as i32,
                 nanosec: (timestamp.fract() * 1_000_000_000_f64) as u32,
             },
             mode,
         };
-        let encoded = cdr::serialize::<_, _, CdrLe>(&control_msg, Infinite)?;
-        put_with_attachment!(self.publisher_control, encoded, self.attachment, self.mode)?;
+
+        self.publisher_control.publish(&control_msg)?;
         Ok(())
     }
 
     fn pub_current_indicator(&mut self, timestamp: f64) -> Result<()> {
         // TODO: Not support yet
-        let turnindicator_msg = TurnIndicatorsReport {
-            stamp: Time {
+        let turnindicator_msg = autoware_vehicle_msgs::msg::TurnIndicatorsReport {
+            stamp: builtin_interfaces::msg::Time {
                 sec: timestamp.floor() as i32,
                 nanosec: (timestamp.fract() * 1_000_000_000_f64) as u32,
             },
-            report: turn_indicators_report::DISABLE,
+            report: autoware_vehicle_msgs::msg::TurnIndicatorsReport::DISABLE,
         };
-        let encoded = cdr::serialize::<_, _, CdrLe>(&turnindicator_msg, Infinite)?;
-        put_with_attachment!(
-            self.publisher_turnindicator,
-            encoded,
-            self.attachment,
-            self.mode
-        )?;
+
+        self.publisher_turnindicator.publish(&turnindicator_msg)?;
         Ok(())
     }
 
     fn pub_hazard_light(&mut self, timestamp: f64) -> Result<()> {
         // TODO: Not support yet
-        let hazardlight_msg = HazardLightsReport {
-            stamp: Time {
+        let hazardlight_msg = autoware_vehicle_msgs::msg::HazardLightsReport {
+            stamp: builtin_interfaces::msg::Time {
                 sec: timestamp.floor() as i32,
                 nanosec: (timestamp.fract() * 1_000_000_000_f64) as u32,
             },
-            report: hazard_lights_report::DISABLE,
+            report: autoware_vehicle_msgs::msg::HazardLightsReport::DISABLE,
         };
-        let encoded = cdr::serialize::<_, _, CdrLe>(&hazardlight_msg, Infinite)?;
-        put_with_attachment!(
-            self.publisher_hazardlight,
-            encoded,
-            self.attachment,
-            self.mode
-        )?;
+
+        self.publisher_hazardlight.publish(&hazardlight_msg)?;
         Ok(())
     }
 
@@ -375,9 +366,9 @@ impl<'a> VehicleBridge<'a> {
     }
 
     fn update_carla_control(&mut self, timestamp: f64) {
-        let ActuationCommandStamped {
+        let tier4_vehicle_msgs::msg::ActuationCommandStamped {
             actuation:
-                ActuationCommand {
+                tier4_vehicle_msgs::msg::ActuationCommand {
                     mut accel_cmd,
                     mut brake_cmd,
                     mut steer_cmd,
@@ -394,12 +385,12 @@ impl<'a> VehicleBridge<'a> {
         let mut hand_brake = false;
 
         match **self.current_gear.load() {
-            gear_report::DRIVE => { /* Do nothing */ }
-            gear_report::REVERSE => {
+            autoware_vehicle_msgs::msg::GearReport::DRIVE => { /* Do nothing */ }
+            autoware_vehicle_msgs::msg::GearReport::REVERSE => {
                 /* Set reverse to true for reverse gear */
                 reverse = true;
             }
-            gear_report::PARK => {
+            autoware_vehicle_msgs::msg::GearReport::PARK => {
                 /* Force the vehicle to stop */
                 accel_cmd = 0.0;
                 brake_cmd = 0.0;
@@ -429,6 +420,7 @@ impl<'a> VehicleBridge<'a> {
             manual_gear_shift: false,
             gear: 0,
         });
+
         log::debug!(
             "Bridge => Carla: throttle={:.3}, steer={:.3}, brake={:.3}, hand_brake={}, reverse={}",
             accel_cmd as f32,
@@ -444,7 +436,7 @@ impl<'a> VehicleBridge<'a> {
     }
 }
 
-impl ActorBridge for VehicleBridge<'_> {
+impl ActorBridge for VehicleBridge {
     fn step(&mut self, timestamp: f64) -> Result<()> {
         self.pub_current_actuation(timestamp)?;
         self.pub_current_velocity(timestamp)?;
@@ -458,7 +450,7 @@ impl ActorBridge for VehicleBridge<'_> {
     }
 }
 
-impl Drop for VehicleBridge<'_> {
+impl Drop for VehicleBridge {
     fn drop(&mut self) {
         log::info!("Remove vehicle name {}", self.vehicle_name());
     }

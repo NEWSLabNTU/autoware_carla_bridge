@@ -2,8 +2,8 @@ pub type Result<T, E = BridgeError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BridgeError {
-    #[error("CDR error: {0}")]
-    Cdr(#[from] cdr::Error),
+    #[error("ROS 2 error: {0}")]
+    Rclrs(#[from] rclrs::RclrsError),
 
     #[error("Communication error: {0}")]
     Communication(&'static str),

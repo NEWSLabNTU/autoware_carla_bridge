@@ -1,13 +1,4 @@
-use std::{
-    convert::Infallible,
-    mem,
-    str::FromStr,
-    sync::{
-        mpsc::{self, Receiver, Sender},
-        Arc,
-    },
-    thread,
-};
+use std::{convert::Infallible, mem, str::FromStr, sync::Arc};
 
 use carla::{
     client::{ActorBase, Sensor},
@@ -20,16 +11,13 @@ use carla::{
         SensorDataBase,
     },
 };
-use cdr::{CdrLe, Infinite};
 use nalgebra::{coordinates::XYZ, UnitQuaternion};
-use zenoh::{Session, Wait};
-use zenoh_ros_type::{geometry_msgs, sensor_msgs, std_msgs};
+use rclrs::IntoPrimitiveOptions;
 
 use super::actor_bridge::{ActorBridge, BridgeType};
 use crate::{
     autoware::Autoware,
     error::{BridgeError, Result},
-    put_with_attachment,
     types::{GnssService, GnssStatus, PointFieldType},
     utils,
 };
@@ -43,12 +31,6 @@ pub enum SensorType {
     Gnss,
     Collision,
     NotSupport,
-}
-
-enum MessageType {
-    StopThread,
-    SensorData,
-    InfoData,
 }
 
 impl FromStr for SensorType {
@@ -72,7 +54,6 @@ pub struct SensorBridge {
     sensor_type: SensorType,
     _actor: Sensor,
     sensor_name: String,
-    tx: Sender<(MessageType, Vec<u8>)>,
 }
 
 impl SensorBridge {
@@ -109,8 +90,9 @@ impl SensorBridge {
         )))?;
         Ok(BridgeType::Sensor(vehicle_name, sensor_type, sensor_name))
     }
+
     pub fn new(
-        z_session: Arc<Session>,
+        node: rclrs::Node,
         actor: Sensor,
         bridge_type: BridgeType,
         autoware: &Autoware,
@@ -120,67 +102,25 @@ impl SensorBridge {
             _ => panic!("Should never happen!"),
         };
 
-        let (tx, rx) = mpsc::channel();
         let key_list = autoware.get_sensors_key(sensor_type, &sensor_name);
 
-        // Generate rmw_zenoh-compatible attachment
-        let attachment = utils::generate_attachment();
+        let node = Arc::new(node);
 
         match sensor_type {
             SensorType::CameraRgb => {
-                register_camera_rgb(
-                    z_session,
-                    &actor,
-                    key_list,
-                    tx.clone(),
-                    rx,
-                    attachment.clone(),
-                    autoware.mode.clone(),
-                )?;
+                register_camera_rgb(node.clone(), &actor, key_list)?;
             }
             SensorType::LidarRayCast => {
-                register_lidar_raycast(
-                    z_session,
-                    &actor,
-                    key_list,
-                    tx.clone(),
-                    rx,
-                    attachment.clone(),
-                    autoware.mode.clone(),
-                )?;
+                register_lidar_raycast(node.clone(), &actor, key_list)?;
             }
             SensorType::LidarRayCastSemantic => {
-                register_lidar_raycast_semantic(
-                    z_session,
-                    &actor,
-                    key_list,
-                    tx.clone(),
-                    rx,
-                    attachment.clone(),
-                    autoware.mode.clone(),
-                )?;
+                register_lidar_raycast_semantic(node.clone(), &actor, key_list)?;
             }
             SensorType::Imu => {
-                register_imu(
-                    z_session,
-                    &actor,
-                    key_list,
-                    tx.clone(),
-                    rx,
-                    attachment.clone(),
-                    autoware.mode.clone(),
-                )?;
+                register_imu(node.clone(), &actor, key_list)?;
             }
             SensorType::Gnss => {
-                register_gnss(
-                    z_session,
-                    &actor,
-                    key_list,
-                    tx.clone(),
-                    rx,
-                    attachment.clone(),
-                    autoware.mode.clone(),
-                )?;
+                register_gnss(node.clone(), &actor, key_list)?;
             }
             SensorType::Collision => {
                 log::warn!("Collision sensor is not supported yet");
@@ -195,7 +135,6 @@ impl SensorBridge {
             sensor_type,
             _actor: actor,
             sensor_name,
-            tx,
         })
     }
 }
@@ -207,40 +146,24 @@ impl ActorBridge for SensorBridge {
 }
 
 fn register_camera_rgb(
-    z_session: Arc<Session>,
+    node: Arc<rclrs::Node>,
     actor: &Sensor,
     key_list: Option<Vec<String>>,
-    tx: Sender<(MessageType, Vec<u8>)>,
-    rx: Receiver<(MessageType, Vec<u8>)>,
-    attachment: Vec<u8>,
-    mode: crate::Mode,
 ) -> Result<()> {
-    let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sesnsor exists"))?;
-    let raw_key = key_list[0].clone();
-    let info_key = key_list[1].clone();
+    let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
+    let raw_topic = key_list[0].clone();
+    let info_topic = key_list[1].clone();
 
-    let image_publisher = z_session.declare_publisher(raw_key.clone()).wait()?;
-    let info_publisher = z_session.declare_publisher(info_key.clone()).wait()?;
-    thread::spawn(move || loop {
-        match rx.recv() {
-            Ok((MessageType::SensorData, sensor_data)) => {
-                if let Err(e) = put_with_attachment!(image_publisher, sensor_data, attachment, mode)
-                {
-                    log::error!("Failed to publish to {raw_key}: {e:?}");
-                }
-            }
-            Ok((MessageType::InfoData, info_data)) => {
-                if let Err(e) = put_with_attachment!(info_publisher, info_data, attachment, mode) {
-                    log::error!("Failed to publish to {info_key}: {e:?}");
-                }
-            }
-            _ => {
-                // If tx is released, then the thread will stop
-                log::info!("Sensor actor thread for {raw_key} stop.");
-                break;
-            }
-        }
-    });
+    // Create publishers
+    let image_publisher = Arc::new(
+        node.create_publisher::<sensor_msgs::msg::Image>(raw_topic.as_str().sensor_data_qos())?,
+    );
+    let info_publisher =
+        Arc::new(node.create_publisher::<sensor_msgs::msg::CameraInfo>(
+            info_topic.as_str().sensor_data_qos(),
+        )?);
+
+    // Get camera parameters
     let width = actor
         .attributes()
         .iter()
@@ -269,15 +192,20 @@ fn register_camera_rgb(
         .try_into_f32()
         .or(Err(BridgeError::CarlaIssue("Unable to transform into f32")))? as f64;
 
+    // Setup CARLA listener
     actor.listen(move |data| {
         let mut header = utils::create_ros_header(Some(data.timestamp()));
         header.frame_id = String::from("camera4/camera_link");
-        if let Ok(data) = data.try_into() {
-            if let Err(e) = camera_callback(header.clone(), data, &tx) {
-                log::error!("Failed to call camera_callback: {e:?}");
+
+        if let Ok(carla_image) = data.try_into() {
+            // Publish image
+            if let Err(e) = publish_camera_image(&image_publisher, header.clone(), carla_image) {
+                log::error!("Failed to publish camera image: {e:?}");
             }
-            if let Err(e) = camera_info_callback(header, width, height, fov, &tx) {
-                log::error!("Failed to call camera_info_callback: {e:?}");
+
+            // Publish camera info
+            if let Err(e) = publish_camera_info(&info_publisher, header, width, height, fov) {
+                log::error!("Failed to publish camera info: {e:?}");
             }
         } else {
             log::error!("Failed to transform camera image");
@@ -288,37 +216,24 @@ fn register_camera_rgb(
 }
 
 fn register_lidar_raycast(
-    z_session: Arc<Session>,
+    node: Arc<rclrs::Node>,
     actor: &Sensor,
     key_list: Option<Vec<String>>,
-    tx: Sender<(MessageType, Vec<u8>)>,
-    rx: Receiver<(MessageType, Vec<u8>)>,
-    attachment: Vec<u8>,
-    mode: crate::Mode,
 ) -> Result<()> {
-    let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sesnsor exists"))?;
-    let key = key_list[0].clone();
-    let pcd_publisher = z_session.declare_publisher(key.clone()).wait()?;
-    thread::spawn(move || loop {
-        match rx.recv() {
-            Ok((MessageType::SensorData, sensor_data)) => {
-                if let Err(e) = put_with_attachment!(pcd_publisher, sensor_data, attachment, mode) {
-                    log::error!("Failed to publish to {key}: {e:?}");
-                }
-            }
-            _ => {
-                // If tx is released, then the thread will stop
-                log::info!("Sensor actor thread for {key} stop.");
-                break;
-            }
-        }
-    });
+    let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
+    let topic = key_list[0].clone();
+
+    let publisher = Arc::new(
+        node.create_publisher::<sensor_msgs::msg::PointCloud2>(topic.as_str().sensor_data_qos())?,
+    );
+
     actor.listen(move |data| {
         let mut header = utils::create_ros_header(Some(data.timestamp()));
         header.frame_id = String::from("velodyne_top_base_link");
-        if let Ok(data) = data.try_into() {
-            if let Err(e) = lidar_callback(header, data, &tx) {
-                log::error!("Failed to call lidar_callback: {e:?}");
+
+        if let Ok(measure) = data.try_into() {
+            if let Err(e) = publish_lidar(&publisher, header, measure) {
+                log::error!("Failed to publish lidar data: {e:?}");
             }
         } else {
             log::error!("Failed to transform lidar data");
@@ -329,40 +244,27 @@ fn register_lidar_raycast(
 }
 
 fn register_lidar_raycast_semantic(
-    z_session: Arc<Session>,
+    node: Arc<rclrs::Node>,
     actor: &Sensor,
     key_list: Option<Vec<String>>,
-    tx: Sender<(MessageType, Vec<u8>)>,
-    rx: Receiver<(MessageType, Vec<u8>)>,
-    attachment: Vec<u8>,
-    mode: crate::Mode,
 ) -> Result<()> {
-    let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sesnsor exists"))?;
-    let key = key_list[0].clone();
-    let pcd_publisher = z_session.declare_publisher(key.clone()).wait()?;
-    thread::spawn(move || loop {
-        match rx.recv() {
-            Ok((MessageType::SensorData, sensor_data)) => {
-                if let Err(e) = put_with_attachment!(pcd_publisher, sensor_data, attachment, mode) {
-                    log::error!("Failed to publish to {key}: {e:?}");
-                }
-            }
-            _ => {
-                // If tx is released, then the thread will stop
-                log::info!("Sensor actor thread for {key} stop.");
-                break;
-            }
-        }
-    });
+    let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
+    let topic = key_list[0].clone();
+
+    let publisher = Arc::new(
+        node.create_publisher::<sensor_msgs::msg::PointCloud2>(topic.as_str().sensor_data_qos())?,
+    );
+
     actor.listen(move |data| {
         let mut header = utils::create_ros_header(Some(data.timestamp()));
         header.frame_id = String::from("velodyne_top_base_link");
-        if let Ok(data) = data.try_into() {
-            if let Err(e) = sematic_lidar_callback(header, data, &tx) {
-                log::error!("Failed to call sematic_lidar_callback: {e:?}");
+
+        if let Ok(measure) = data.try_into() {
+            if let Err(e) = publish_semantic_lidar(&publisher, header, measure) {
+                log::error!("Failed to publish semantic lidar data: {e:?}");
             }
         } else {
-            log::error!("Failed to transform lidar data");
+            log::error!("Failed to transform semantic lidar data");
         }
     });
 
@@ -370,95 +272,69 @@ fn register_lidar_raycast_semantic(
 }
 
 fn register_imu(
-    z_session: Arc<Session>,
+    node: Arc<rclrs::Node>,
     actor: &Sensor,
     key_list: Option<Vec<String>>,
-    tx: Sender<(MessageType, Vec<u8>)>,
-    rx: Receiver<(MessageType, Vec<u8>)>,
-    attachment: Vec<u8>,
-    mode: crate::Mode,
 ) -> Result<()> {
-    let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sesnsor exists"))?;
-    let key = key_list[0].clone();
-    let imu_publisher = z_session.declare_publisher(key.clone()).wait()?;
-    thread::spawn(move || loop {
-        match rx.recv() {
-            Ok((MessageType::SensorData, sensor_data)) => {
-                if let Err(e) = put_with_attachment!(imu_publisher, sensor_data, attachment, mode) {
-                    log::error!("Failed to publish to {key}: {e:?}");
-                }
-            }
-            _ => {
-                // If tx is released, then the thread will stop
-                log::info!("Sensor actor thread for {key} stop.");
-                break;
-            }
-        }
-    });
+    let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
+    let topic = key_list[0].clone();
+
+    let publisher = Arc::new(node.create_publisher::<sensor_msgs::msg::Imu>(topic.as_str())?);
+
     actor.listen(move |data| {
         let mut header = utils::create_ros_header(Some(data.timestamp()));
         header.frame_id = String::from("tamagawa/imu_link");
-        if let Ok(data) = data.try_into() {
-            if let Err(e) = imu_callback(header, data, &tx) {
-                log::error!("Failed to call imu_callback: {e:?}");
+
+        if let Ok(measure) = data.try_into() {
+            if let Err(e) = publish_imu(&publisher, header, measure) {
+                log::error!("Failed to publish IMU data: {e:?}");
             }
         } else {
             log::error!("Failed to transform IMU data");
         }
     });
+
     Ok(())
 }
 
 fn register_gnss(
-    z_session: Arc<Session>,
+    node: Arc<rclrs::Node>,
     actor: &Sensor,
     key_list: Option<Vec<String>>,
-    tx: Sender<(MessageType, Vec<u8>)>,
-    rx: Receiver<(MessageType, Vec<u8>)>,
-    attachment: Vec<u8>,
-    mode: crate::Mode,
 ) -> Result<()> {
-    let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sesnsor exists"))?;
-    let key = key_list[0].clone();
-    let gnss_publisher = z_session.declare_publisher(key.clone()).wait()?;
-    thread::spawn(move || loop {
-        match rx.recv() {
-            Ok((MessageType::SensorData, sensor_data)) => {
-                if let Err(e) = put_with_attachment!(gnss_publisher, sensor_data, attachment, mode)
-                {
-                    log::error!("Failed to publish to {key}: {e:?}");
-                }
-            }
-            _ => {
-                // If tx is released, then the thread will stop
-                log::info!("Sensor actor thread for {key} stop.");
-                break;
-            }
-        }
-    });
+    let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
+    let topic = key_list[0].clone();
+
+    let publisher = Arc::new(node.create_publisher::<sensor_msgs::msg::NavSatFix>(topic.as_str())?);
+
     actor.listen(move |data| {
         let mut header = utils::create_ros_header(Some(data.timestamp()));
         header.frame_id = String::from("gnss_link");
-        if let Ok(data) = data.try_into() {
-            if let Err(e) = gnss_callback(header, data, &tx) {
-                log::error!("Failed to call gnss_callback: {e:?}");
+
+        if let Ok(measure) = data.try_into() {
+            if let Err(e) = publish_gnss(&publisher, header, measure) {
+                log::error!("Failed to publish GNSS data: {e:?}");
             }
         } else {
             log::error!("Failed to transform GNSS data");
         }
     });
+
     Ok(())
 }
 
-fn camera_callback(
-    header: std_msgs::Header,
+// Helper functions to build and publish messages
+
+fn publish_camera_image(
+    publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::Image>>,
+    header: std_msgs::msg::Header,
     image: CarlaImage,
-    tx: &Sender<(MessageType, Vec<u8>)>,
 ) -> Result<()> {
     let image_data = image.as_slice();
     if image_data.is_empty() {
         return Ok(());
     }
+
     let width = image.width();
     let height = image.height();
     let data: Vec<_> = image_data
@@ -466,37 +342,33 @@ fn camera_callback(
         .flat_map(|&Color { b, g, r, a }| [b, g, r, a])
         .collect();
 
-    let image_msg = sensor_msgs::Image {
+    let image_msg = sensor_msgs::msg::Image {
         header,
         height: height as u32,
         width: width as u32,
         encoding: "bgra8".to_string(),
-        is_bigendian: utils::is_bigendian().into(),
+        is_bigendian: utils::is_bigendian() as u8,
         step: (width * 4) as u32,
         data,
     };
 
-    let encoded = cdr::serialize::<_, _, CdrLe>(&image_msg, Infinite)?;
-    tx.send((MessageType::SensorData, encoded))
-        .or(Err(BridgeError::Communication(
-            "Unable to send camera data",
-        )))?;
+    publisher.publish(&image_msg)?;
     Ok(())
 }
 
-fn camera_info_callback(
-    header: std_msgs::Header,
+fn publish_camera_info(
+    publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::CameraInfo>>,
+    header: std_msgs::msg::Header,
     width: u32,
     height: u32,
     fov: f64,
-    tx: &Sender<(MessageType, Vec<u8>)>,
 ) -> Result<()> {
     let cx = width as f64 / 2.0;
     let cy = height as f64 / 2.0;
     let fx = width as f64 / (2.0 * (fov * std::f64::consts::PI / 360.0).tan());
     let fy = fx;
 
-    let camera_info = sensor_msgs::CameraInfo {
+    let camera_info = sensor_msgs::msg::CameraInfo {
         header,
         width,
         height,
@@ -507,7 +379,7 @@ fn camera_info_callback(
         p: [fx, 0.0, cx, 0.0, 0.0, fy, cy, 0.0, 0.0, 0.0, 1.0, 0.0],
         binning_x: 0,
         binning_y: 0,
-        roi: sensor_msgs::RegionOfInterest {
+        roi: sensor_msgs::msg::RegionOfInterest {
             x_offset: 0,
             y_offset: 0,
             height: 0,
@@ -516,23 +388,20 @@ fn camera_info_callback(
         },
     };
 
-    let encoded = cdr::serialize::<_, _, CdrLe>(&camera_info, Infinite)?;
-    tx.send((MessageType::InfoData, encoded))
-        .or(Err(BridgeError::Communication(
-            "Unable to send camera info data",
-        )))?;
+    publisher.publish(&camera_info)?;
     Ok(())
 }
 
-fn lidar_callback(
-    header: std_msgs::Header,
+fn publish_lidar(
+    publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::PointCloud2>>,
+    header: std_msgs::msg::Header,
     measure: LidarMeasurement,
-    tx: &Sender<(MessageType, Vec<u8>)>,
 ) -> Result<()> {
     let lidar_data = measure.as_slice();
     if lidar_data.is_empty() {
         return Ok(());
     }
+
     let point_step = mem::size_of_val(&lidar_data[0]) as u32;
     let data: Vec<_> = lidar_data
         .iter()
@@ -546,45 +415,35 @@ fn lidar_callback(
         .flat_map(|elem| elem.to_ne_bytes())
         .collect();
     let row_step = data.len() as u32;
+
     let fields = vec![
-        sensor_msgs::PointField {
+        sensor_msgs::msg::PointField {
             name: "x".to_string(),
             offset: 0,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
+        sensor_msgs::msg::PointField {
             name: "y".to_string(),
             offset: 4,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
+        sensor_msgs::msg::PointField {
             name: "z".to_string(),
             offset: 8,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
+        sensor_msgs::msg::PointField {
             name: "intensity".to_string(),
             offset: 12,
-            datatype: PointFieldType::UINT8 as u8,
-            count: 1,
-        },
-        sensor_msgs::PointField {
-            name: "return_type".to_string(),
-            offset: 13,
-            datatype: PointFieldType::UINT8 as u8,
-            count: 1,
-        },
-        sensor_msgs::PointField {
-            name: "channel".to_string(),
-            offset: 14,
-            datatype: PointFieldType::UINT16 as u8,
+            datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
     ];
-    let lidar_msg = sensor_msgs::PointCloud2 {
+
+    let lidar_msg = sensor_msgs::msg::PointCloud2 {
         header,
         height: 1,
         width: lidar_data.len() as u32,
@@ -595,23 +454,22 @@ fn lidar_callback(
         data,
         is_dense: true,
     };
-    let encoded = cdr::serialize::<_, _, CdrLe>(&lidar_msg, Infinite)?;
-    tx.send((MessageType::SensorData, encoded))
-        .or(Err(BridgeError::Communication("Unable to send lidar data")))?;
+
+    publisher.publish(&lidar_msg)?;
     Ok(())
 }
 
-fn sematic_lidar_callback(
-    header: std_msgs::Header,
+fn publish_semantic_lidar(
+    publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::PointCloud2>>,
+    header: std_msgs::msg::Header,
     measure: SemanticLidarMeasurement,
-    tx: &Sender<(MessageType, Vec<u8>)>,
 ) -> Result<()> {
     let lidar_data = measure.as_slice();
     if lidar_data.is_empty() {
         return Ok(());
     }
+
     let point_step = mem::size_of_val(&lidar_data[0]) as u32;
-    let row_step = lidar_data.len() as u32;
     let data: Vec<_> = lidar_data
         .iter()
         .flat_map(|det| {
@@ -621,10 +479,9 @@ fn sematic_lidar_callback(
                 object_idx,
                 object_tag,
             } = *det;
-
             [
-                x.to_ne_bytes(),
                 y.to_ne_bytes(),
+                x.to_ne_bytes(),
                 z.to_ne_bytes(),
                 cos_inc_angle.to_ne_bytes(),
                 object_idx.to_ne_bytes(),
@@ -633,45 +490,48 @@ fn sematic_lidar_callback(
         })
         .flatten()
         .collect();
+    let row_step = data.len() as u32;
+
     let fields = vec![
-        sensor_msgs::PointField {
+        sensor_msgs::msg::PointField {
             name: "x".to_string(),
             offset: 0,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
+        sensor_msgs::msg::PointField {
             name: "y".to_string(),
             offset: 4,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
+        sensor_msgs::msg::PointField {
             name: "z".to_string(),
             offset: 8,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
-            name: "cos_inc_angle".to_string(),
+        sensor_msgs::msg::PointField {
+            name: "CosAngle".to_string(),
             offset: 12,
             datatype: PointFieldType::FLOAT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
-            name: "object_idx".to_string(),
+        sensor_msgs::msg::PointField {
+            name: "ObjIdx".to_string(),
             offset: 16,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: PointFieldType::UINT32 as u8,
             count: 1,
         },
-        sensor_msgs::PointField {
-            name: "object_tag".to_string(),
+        sensor_msgs::msg::PointField {
+            name: "ObjTag".to_string(),
             offset: 20,
-            datatype: PointFieldType::FLOAT32 as u8,
+            datatype: PointFieldType::UINT32 as u8,
             count: 1,
         },
     ];
-    let lidar_msg = sensor_msgs::PointCloud2 {
+
+    let lidar_msg = sensor_msgs::msg::PointCloud2 {
         header,
         height: 1,
         width: lidar_data.len() as u32,
@@ -682,91 +542,81 @@ fn sematic_lidar_callback(
         data,
         is_dense: true,
     };
-    let encoded = cdr::serialize::<_, _, CdrLe>(&lidar_msg, Infinite)?;
-    tx.send((MessageType::SensorData, encoded))
-        .or(Err(BridgeError::Communication("Unable to send lidar data")))?;
+
+    publisher.publish(&lidar_msg)?;
     Ok(())
 }
 
-fn imu_callback(
-    header: std_msgs::Header,
+fn publish_imu(
+    publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::Imu>>,
+    header: std_msgs::msg::Header,
     measure: ImuMeasurement,
-    tx: &Sender<(MessageType, Vec<u8>)>,
 ) -> Result<()> {
     let accel = measure.accelerometer();
     let gyro = measure.gyroscope();
-    let compass = measure.compass().to_radians();
-    let orientation = UnitQuaternion::from_euler_angles(0.0, 0.0, -compass);
+    let compass = measure.compass();
 
-    let imu_msg = sensor_msgs::IMU {
+    // Convert compass (north vector) to quaternion orientation
+    let yaw = compass.atan2(-compass);
+    let quat = UnitQuaternion::from_euler_angles(0.0, 0.0, yaw);
+    let XYZ {
+        x: qx,
+        y: qy,
+        z: qz,
+    } = *quat.vector();
+    let qw = quat.scalar();
+
+    let imu_msg = sensor_msgs::msg::Imu {
         header,
-        orientation: geometry_msgs::Quaternion {
-            x: orientation.coords.data.0[0][3] as f64,
-            y: orientation.coords.data.0[0][1] as f64,
-            z: orientation.coords.data.0[0][0] as f64,
-            w: orientation.coords.data.0[0][2] as f64,
+        orientation: geometry_msgs::msg::Quaternion {
+            x: qx as f64,
+            y: qy as f64,
+            z: qz as f64,
+            w: qw as f64,
         },
         orientation_covariance: [0.0; 9],
-        angular_velocity: geometry_msgs::Vector3 {
-            x: -gyro[0] as f64,
-            y: gyro[1] as f64,
-            z: -gyro[2] as f64,
+        angular_velocity: geometry_msgs::msg::Vector3 {
+            x: gyro.x as f64,
+            y: -gyro.y as f64,
+            z: -gyro.z as f64,
         },
         angular_velocity_covariance: [0.0; 9],
-        linear_acceleration: geometry_msgs::Vector3 {
-            x: accel[0] as f64,
-            y: -accel[1] as f64,
-            z: accel[2] as f64,
+        linear_acceleration: geometry_msgs::msg::Vector3 {
+            x: accel.x as f64,
+            y: -accel.y as f64,
+            z: accel.z as f64,
         },
         linear_acceleration_covariance: [0.0; 9],
     };
 
-    let encoded = cdr::serialize::<_, _, CdrLe>(&imu_msg, Infinite)?;
-    tx.send((MessageType::SensorData, encoded))
-        .or(Err(BridgeError::Communication("Unable to send IMU data")))?;
+    publisher.publish(&imu_msg)?;
     Ok(())
 }
 
-fn gnss_callback(
-    header: std_msgs::Header,
+fn publish_gnss(
+    publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::NavSatFix>>,
+    header: std_msgs::msg::Header,
     measure: GnssMeasurement,
-    tx: &Sender<(MessageType, Vec<u8>)>,
 ) -> Result<()> {
-    let gnss_msg = sensor_msgs::NavSatFix {
+    let gnss_msg = sensor_msgs::msg::NavSatFix {
         header,
+        status: sensor_msgs::msg::NavSatStatus {
+            status: GnssStatus::GbasFix as i8,
+            service: GnssService::Gps as u16,
+        },
         latitude: measure.latitude(),
         longitude: measure.longitude(),
-        altitude: measure.attitude() + 17.0,
-        status: sensor_msgs::NavSatStatus {
-            status: GnssStatus::SbasFix as i8,
-            service: GnssService::Gps as u16
-                | GnssService::Glonass as u16
-                | GnssService::Compass as u16
-                | GnssService::Galileo as u16,
-        },
+        altitude: measure.attitude(),
         position_covariance: [0.0; 9],
-        position_covariance_type: 0, // unknown type
+        position_covariance_type: 0,
     };
-    let encoded = cdr::serialize::<_, _, CdrLe>(&gnss_msg, Infinite)?;
-    tx.send((MessageType::SensorData, encoded))
-        .or(Err(BridgeError::Communication("Unable to send GNSS data")))?;
+
+    publisher.publish(&gnss_msg)?;
     Ok(())
 }
 
 fn generate_sensor_name(actor: &Sensor) -> String {
-    let XYZ { x, y, z } = *actor.location();
-    format!("{x}_{y}_{z}")
-}
-
-impl Drop for SensorBridge {
-    fn drop(&mut self) {
-        log::info!("Remove sensor name {}", self.sensor_name);
-        if self.sensor_type != SensorType::Collision && self.sensor_type != SensorType::NotSupport {
-            // Not sure why the tx doesn't release in sensor callback, so rx can't use RecvErr to close the thread
-            // I create another message type to notify the thread to close
-            if let Err(e) = self.tx.send((MessageType::StopThread, vec![])) {
-                log::error!("Unable to stop the thread: {e:?}");
-            }
-        }
-    }
+    let id = actor.id();
+    let type_id = actor.type_id();
+    format!("{type_id}_{id}")
 }
