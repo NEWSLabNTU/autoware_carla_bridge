@@ -73,7 +73,7 @@ fn main() -> Result<()> {
 
     // Initialize ROS 2 context and executor
     let ctx = rclrs::Context::new(std::env::args(), rclrs::InitOptions::default())?;
-    let mut executor = ctx.create_basic_executor();
+    let executor = ctx.create_basic_executor();
     let node = executor.create_node("autoware_carla_bridge")?;
 
     // Carla
@@ -106,6 +106,10 @@ fn main() -> Result<()> {
     });
 
     let mut autoware_list: HashMap<String, autoware::Autoware> = HashMap::new();
+
+    // Track consecutive timeouts to detect CARLA connection issues
+    let mut consecutive_timeouts = 0;
+    const MAX_CONSECUTIVE_TIMEOUTS: u32 = 5;
 
     // === Main loop ===
     // Keep running until Ctrl-C is pressed
@@ -187,8 +191,28 @@ fn main() -> Result<()> {
             .values_mut()
             .try_for_each(|bridge| bridge.step(sec))?;
 
-        world.wait_for_tick();
+        // Wait for next CARLA tick, checking for timeout errors
+        match world.wait_for_tick() {
+            Ok(_) => {
+                // Successfully waited for tick, reset timeout counter
+                consecutive_timeouts = 0;
+            }
+            Err(e) => {
+                // Check if this is a timeout error
+                log::warn!("Failed to wait for CARLA tick: {e:?}");
+                consecutive_timeouts += 1;
+
+                if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS {
+                    log::error!(
+                        "Reached {} consecutive timeouts. CARLA may be unresponsive. Stopping bridge.",
+                        MAX_CONSECUTIVE_TIMEOUTS
+                    );
+                    break;
+                }
+            }
+        }
     }
 
+    log::info!("Bridge shutting down gracefully");
     Ok(())
 }
