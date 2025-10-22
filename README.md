@@ -74,16 +74,41 @@ Note: The required Autoware message packages are already symlinked in `src/inter
 Build the workspace using colcon:
 
 ```bash
-make build          # Debug build
-# OR
-make build-release  # Release build
+make build          # Release build (default)
 ```
 
-This will:
-1. Generate Rust bindings for all ROS 2 messages (standard + Autoware)
-2. Create `.cargo/config.toml` with paths to generated crates
-3. Build `autoware_carla_bridge` as a ROS 2 node
-4. Install to `install/` directory
+The build happens in three stages:
+
+**Stage 1**: Build ros2_rust packages (from `src/ros2_rust/`)
+- Builds `rosidl_generator_rs` - the Rust code generator for ROS 2 messages
+- Builds `rosidl_runtime_rs` - runtime support for Rust messages
+- Installs these tools so they're available for stage 2
+
+**Stage 2**: Build message packages (from `src/interface/`)
+- Now that `rosidl_generator_rs` is installed, building message packages automatically generates Rust bindings
+- Generates Rust crates in `build/<package>/rust/`
+- Creates `.cargo/config.toml` with [patch.crates-io] entries pointing to generated crates
+- Makes message crates available to Rust code
+
+**Stage 3**: Build `autoware_carla_bridge`
+- Now that `.cargo/config.toml` exists, cargo can resolve message dependencies via patches
+- Builds the bridge as a ROS 2 node with `--release` profile
+- Installs to `install/` directory
+
+**What gets built:**
+- `autoware_vehicle_msgs` - Vehicle control and status messages
+- `tier4_vehicle_msgs` - Tier4-specific vehicle messages
+- `tier4_control_msgs` - Tier4 control messages
+- `autoware_carla_bridge` - The main bridge node
+- Standard ROS 2 messages (std_msgs, sensor_msgs, etc.) from `/opt/ros/humble`
+
+**Incremental builds**: After the first successful build, subsequent `make build` commands will skip stages 1 and 2 if those packages haven't changed, making rebuilds much faster. Only stage 3 (the bridge itself) will rebuild if you modify bridge code.
+
+**Build artifacts**:
+- `build/` - Colcon build intermediates
+- `install/` - Installed packages and executables
+- `log/` - Build logs
+- `.cargo/config.toml` - Generated cargo patches (points to message crates)
 
 ## Running
 
@@ -125,6 +150,8 @@ make lint
 ```bash
 make clean
 ```
+
+This removes `build/`, `install/`, `log/`, and `.cargo/` directories. After cleaning, the next `make build` will run both stages from scratch.
 
 ## Troubleshooting
 
