@@ -50,10 +50,14 @@ impl FromStr for SensorType {
 }
 
 pub struct SensorBridge {
+    /// Vehicle name - stored for potential future use in logging/debugging
     _vehicle_name: String,
-    sensor_type: SensorType,
+    /// Sensor type - stored for potential future sensor-specific processing
+    _sensor_type: SensorType,
+    /// CARLA sensor actor - must be kept alive to maintain sensor listeners
     _actor: Sensor,
-    sensor_name: String,
+    /// Sensor name - stored for potential future use in logging/debugging
+    _sensor_name: String,
 }
 
 impl SensorBridge {
@@ -132,9 +136,9 @@ impl SensorBridge {
 
         Ok(SensorBridge {
             _vehicle_name: vehicle_name,
-            sensor_type,
+            _sensor_type: sensor_type,
             _actor: actor,
-            sensor_name,
+            _sensor_name: sensor_name,
         })
     }
 }

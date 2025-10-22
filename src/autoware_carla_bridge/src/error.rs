@@ -5,7 +5,9 @@ pub enum BridgeError {
     #[error("ROS 2 error: {0}")]
     Rclrs(#[from] rclrs::RclrsError),
 
+    /// Communication error - reserved for future network/communication failure handling
     #[error("Communication error: {0}")]
+    #[allow(dead_code)]
     Communication(&'static str),
 
     #[error("The sensor with ID {sensor_id} is ownerless")]
