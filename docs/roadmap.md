@@ -14,6 +14,7 @@ This document outlines the phased approach for migrating `zenoh_carla_bridge` to
 - [Phase 4: Vehicle Bridge Migration](#phase-4-vehicle-bridge-migration)
 - [Phase 5: Testing and Optimization](#phase-5-testing-and-optimization)
 - [Phase 6: Documentation and Release](#phase-6-documentation-and-release)
+- [Phase 7: carla-rust Integration and Enhancements](#phase-7-carla-rust-integration-and-enhancements)
 - [Success Criteria](#success-criteria)
 - [Risk Management](#risk-management)
 
@@ -1002,24 +1003,196 @@ Track progress by marking tasks complete in this document:
 - `[x]` = Complete
 - `[!]` = Blocked
 
-### Current Phase: Phase 0 (Preparation)
+### Current Phase: Phase 7 (carla-rust Integration)
 
-**Last Updated**: 2025-10-20
+**Last Updated**: 2025-10-29
 
-### Completed Items
+### Completed Items (Phase 0-1)
 - [x] Study Zenoh API usage
 - [x] Study rclrs API
 - [x] Create API comparison document
 - [x] Create roadmap document
+- [x] Complete Phase 1: Core Infrastructure migration
+- [x] Integrate local carla-rust repository
+- [x] Switch to path dependency for carla crate
+- [x] Create carla-rust integration documentation
+
+### Current Focus (Phase 7)
+1. Implement actor cleanup with `destroy()`
+2. Add efficient world loading
+3. Multi-version CARLA support testing
+4. Documentation updates
 
 ### Next Steps
-1. Set up development branch
-2. Tag current working version
-3. Set up test environment
-4. Begin Phase 1: Core Infrastructure
+1. Add Drop implementation with actor.destroy()
+2. Test with CARLA 0.9.15 and 0.9.14
+3. Explore advanced carla-rust APIs
+4. Begin Phase 2: Testing with CARLA simulator
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: 2025-10-20
+## Phase 7: carla-rust Integration and Enhancements
+
+**Objective**: Leverage new APIs from local carla-rust repository to improve bridge functionality and robustness.
+
+**Status**: 🔄 **IN PROGRESS** - Local carla-rust integrated (2025-10-29)
+
+**Duration**: 1-2 weeks
+
+### 7.1 Implement Proper Actor Cleanup
+
+**Priority**: High
+
+- [ ] Add `ActorBase::destroy()` to SensorBridge Drop implementation
+  ```rust
+  impl Drop for SensorBridge {
+      fn drop(&mut self) {
+          if self._actor.destroy() {
+              log::info!("Destroyed sensor: {}", self._sensor_name);
+          }
+      }
+  }
+  ```
+- [ ] Add `ActorBase::destroy()` to VehicleBridge Drop implementation
+- [ ] Test actor cleanup with rapid spawn/despawn cycles
+- [ ] Verify no resource leaks with CARLA monitor tools
+- [ ] Document actor lifecycle management
+
+**Benefits**:
+- Explicit resource cleanup instead of relying on CARLA GC
+- Faster actor removal from simulation
+- Better memory management
+- Clearer resource lifecycle
+
+### 7.2 Implement Efficient World Loading
+
+**Priority**: Medium
+
+- [ ] Add world loading utility with `Client::load_world_if_different()`
+  ```rust
+  pub fn load_world_smart(client: &Client, map_name: &str) -> World {
+      #[cfg(carla_0916)]
+      {
+          client.load_world_if_different(map_name)
+      }
+      #[cfg(not(carla_0916))]
+      {
+          client.load_world(map_name)
+      }
+  }
+  ```
+- [ ] Add CLI option for initial map selection
+- [ ] Support map switching without bridge restart
+- [ ] Test with different map combinations
+- [ ] Benchmark loading time improvement vs. reload
+
+**Benefits**:
+- Avoids unnecessary map reloads (saves 5-10 seconds per switch)
+- Smoother testing workflow
+- Less CARLA server restarts needed
+
+### 7.3 Add Debug Data Recording
+
+**Priority**: Low
+
+- [ ] Add `--debug-record` CLI flag
+- [ ] Implement sensor data recording with `Sensor::save_to_disk()`
+  ```rust
+  if args.debug_record {
+      sensor.save_to_disk(&format!("debug/{}_{}", vehicle_name, sensor_name));
+  }
+  ```
+- [ ] Create debug output directory structure
+- [ ] Add recording controls (start/stop via ROS service)
+- [ ] Document debug recording usage
+
+**Benefits**:
+- Capture sensor data for offline debugging
+- Reproduce issues without running full simulation
+- Compare sensor outputs across CARLA versions
+
+### 7.4 Multi-Version CARLA Support
+
+**Priority**: Medium
+
+- [ ] Add `CARLA_VERSION` variable to Makefile
+  ```makefile
+  CARLA_VERSION ?= 0.9.16
+  ```
+- [ ] Document version selection in README.md
+- [ ] Create test scripts for each CARLA version
+  - [ ] `scripts/test_carla_0914.sh`
+  - [ ] `scripts/test_carla_0915.sh`
+  - [ ] `scripts/test_carla_0916.sh`
+- [ ] Test bridge with CARLA 0.9.14
+- [ ] Test bridge with CARLA 0.9.15
+- [ ] Test bridge with CARLA 0.9.16 (current)
+- [ ] Document version-specific features and limitations
+- [ ] Add CI/CD matrix testing for multiple versions
+
+**Benefits**:
+- Support users with different CARLA installations
+- Test backward compatibility
+- Identify version-specific issues early
+
+### 7.5 Explore Advanced carla-rust APIs
+
+**Priority**: Low (Research)
+
+Investigate and document potential uses for:
+
+- [ ] **Walker Control APIs**
+  - Walker bone control for pedestrian simulation
+  - Walker AI controller integration
+- [ ] **Batch Operations**
+  - Batch spawn/destroy for performance
+  - Bulk command execution
+- [ ] **Debug Visualization**
+  - Add ROS markers for CARLA debug shapes
+  - Visualize waypoints, bounding boxes in RViz
+- [ ] **Recording/Playback**
+  - CARLA native recording integration
+  - Playback for deterministic testing
+- [ ] **Traffic Light Extensions**
+  - Traffic light group control
+  - Traffic light state synchronization
+- [ ] **Vehicle Telemetry**
+  - Failure state monitoring
+  - Advanced telemetry publishing
+
+**Deliverables**:
+- [ ] Research document: `docs/advanced-carla-apis.md`
+- [ ] Proof-of-concept implementations in separate branch
+- [ ] Recommendations for future integration
+
+### 7.6 Update Documentation
+
+- [ ] Update README.md with carla-rust integration notes
+- [ ] Update CLAUDE.md with new API patterns
+- [ ] Add troubleshooting section for multi-version builds
+- [ ] Create examples for new features
+- [ ] Update migration guide with carla-rust benefits
+
+**Deliverables**:
+- Updated documentation across all docs
+- Example code demonstrating new APIs
+- Version compatibility matrix
+
+**Success Criteria**:
+- ✅ Actor cleanup implemented and tested
+- ✅ Smart world loading reduces unnecessary reloads
+- ✅ Debug recording available for troubleshooting
+- ✅ Bridge tested with at least 2 CARLA versions
+- ✅ Documentation updated with new features
+- ✅ No performance regression from new features
+
+**Risks**:
+- Version-specific APIs may require conditional compilation
+- Debug recording may impact performance
+- Multi-version testing increases CI/CD complexity
+
+---
+
+**Document Version**: 1.1
+**Last Updated**: 2025-10-29
 **Maintained By**: Autoware CARLA Bridge Team
