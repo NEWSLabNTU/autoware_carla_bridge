@@ -21,3 +21,6 @@ build/
 install/
 log/
 .cargo/
+
+# direnv
+.direnv/
