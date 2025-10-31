@@ -21,7 +21,7 @@ build-interface: ## Build message packages (generates Rust crates)
 	cd src/interface && \
 	colcon build $(COLCON_BUILD_FLAGS)
 
-.PHONY: build-packages
+.PHONY: build-bridge
 build-bridge: ## Build autoware_carla_bridge package
 	. src/interface/install/setup.sh && \
 	cd src/autoware_carla_bridge && \
@@ -30,10 +30,10 @@ build-bridge: ## Build autoware_carla_bridge package
 .PHONY: build
 build: build-ros2-rust build-interface build-bridge ## Build all stages (complete build)
 
-.PHONY: launch
-launch: ## Launch the bridge with ros2 launch
-	source src/autoware_carla_bridge/install/setup.sh && \
-	ros2 launch autoware_carla_bridge autoware_carla_bridge.launch.xml
+.PHONY: run
+run: ## Launch the bridge with ros2 launch
+	@. src/autoware_carla_bridge/install/setup.sh && \
+	ros2 run autoware_carla_bridge autoware_carla_bridge --carla-port 3000
 
 .PHONY: clean-ros2-rust
 clean-ros2-rust:
