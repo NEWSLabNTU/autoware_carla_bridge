@@ -1,4 +1,5 @@
 .DEFAULT_GOAL := help
+COLCON_BUILD_FLAGS := --symlink-install --cargo-args --release
 
 .PHONY: help
 help: ## Display available targets
@@ -7,38 +8,50 @@ help: ## Display available targets
 
 .PHONY: install-deps
 install-deps: ## Install colcon plugins and dependencies
-	bash scripts/install_deps.sh
+	./scripts/install_deps.sh
 
 .PHONY: build-ros2-rust
 build-ros2-rust: ## Build ros2_rust packages (Rust generator, runtime, and rclrs)
-	@echo "Stage 1: Building ros2_rust packages (Rust generator, runtime, and rclrs)..."
-	colcon build --symlink-install --base-paths src/ros2_rust
+	cd src/ros2_rust && \
+	colcon build $(COLCON_BUILD_FLAGS)
 
 .PHONY: build-interface
 build-interface: ## Build message packages (generates Rust crates)
-	@echo "Stage 2: Building message packages (generates Rust crates)..."
-	colcon build --symlink-install --base-paths src/interface
+	. src/ros2_rust/install/setup.sh && \
+	cd src/interface && \
+	colcon build $(COLCON_BUILD_FLAGS)
 
 .PHONY: build-packages
-build-packages: ## Build autoware_carla_bridge package
-	@echo "Stage 3: Building autoware_carla_bridge..."
-	colcon build --symlink-install --packages-up-to autoware_carla_bridge \
-	  --cargo-args --release
+build-bridge: ## Build autoware_carla_bridge package
+	. src/interface/install/setup.sh && \
+	cd src/autoware_carla_bridge && \
+	colcon build $(COLCON_BUILD_FLAGS)
 
 .PHONY: build
 build: build-ros2-rust build-interface build-packages ## Build all stages (complete build)
 
 .PHONY: launch
 launch: ## Launch the bridge with ros2 launch
+	source src/autoware_carla_bridge/install/setup.sh && \
 	ros2 launch autoware_carla_bridge autoware_carla_bridge.launch.xml
 
-.PHONY: run
-run: ## Run the bridge executable directly
-	ros2 run autoware_carla_bridge autoware_carla_bridge
+.PHONY: clean-ros2-rust
+clean-ros2-rust:
+	cd src/ros2_rust && \
+	rm -rf build install log
+
+.PHONY: clean-interface
+clean-interface:
+	cd src/interface && \
+	rm -rf build install log
+
+.PHONY: clean-bridge
+clean-bridge:
+	cd src/autoware_carla_bridge && \
+	rm -rf build install log
 
 .PHONY: clean
-clean: ## Clean build artifacts
-	rm -rf build install log .cargo
+clean: clean-ros2-rust clean-interface clean-bridge ## Clean build artifacts
 
 .PHONY: format
 format: ## Format code with rustfmt
@@ -47,10 +60,12 @@ format: ## Format code with rustfmt
 .PHONY: lint
 lint: ## Run format check and clippy
 	cargo +nightly fmt --check --manifest-path src/autoware_carla_bridge/Cargo.toml
+	source src/interface/install/setup.sh && \
 	cargo clippy --manifest-path src/autoware_carla_bridge/Cargo.toml
 
 .PHONY: test
 test: ## Run tests
+	source src/interface/install/setup.sh && \
 	cargo nextest run --no-fail-fast --manifest-path src/autoware_carla_bridge/Cargo.toml
 
 .PHONY: agent-setup
