@@ -253,69 +253,34 @@ Files: `src/autoware.rs`, `src/utils.rs`
 
 **Objective**: Migrate the simplest publisher (clock) as a proof of concept.
 
-**Duration**: 3-4 days
+**Status**: ✅ **COMPLETE** - Completed during Phase 1 (2025-10-22)
+
+**Duration**: N/A (integrated with Phase 1)
 
 ### 2.1 Migrate Clock Publisher
 
 File: `src/clock.rs`
 
-- [ ] Review current Zenoh implementation:
-  ```rust
-  pub struct SimulatorClock<'a> {
-      publisher: Publisher<'a>,
-      mode: Mode,
-      attachment: Vec<u8>,
-  }
-  ```
-- [ ] Refactor to use rclrs:
+- [x] ✅ Review current Zenoh implementation
+- [x] ✅ Refactor to use rclrs:
   ```rust
   pub struct SimulatorClock {
-      publisher: Arc<rclrs::Publisher<rosgraph_msgs::msg::Clock>>,
+      publisher_clock: Arc<rclrs::Publisher<builtin_interfaces::msg::Time>>,
   }
   ```
-- [ ] Update `new()` function:
+- [x] ✅ Update `new()` function:
   ```rust
-  pub fn new(node: Arc<rclrs::Node>) -> Result<SimulatorClock> {
-      let publisher = node.create_publisher::<rosgraph_msgs::msg::Clock>(
-          "clock",
-          rclrs::QOS_PROFILE_CLOCK,
-      )?;
+  pub fn new(node: rclrs::Node) -> Result<SimulatorClock> {
+      let publisher_clock = node.create_publisher("/clock")?;
       Ok(SimulatorClock {
-          publisher: Arc::new(publisher),
+          publisher_clock: Arc::new(publisher_clock),
       })
   }
   ```
-- [ ] Update `publish_clock()` function:
+- [x] ✅ Update `publish_clock()` function:
   ```rust
   pub fn publish_clock(&self, timestamp: Option<f64>) -> Result<()> {
-      let clock_msg = rosgraph_msgs::msg::Clock {
-          clock: create_ros_time(timestamp),
-      };
-      self.publisher.publish(&clock_msg)?;
-      Ok(())
-  }
-  ```
-- [ ] Remove CDR serialization
-- [ ] Remove attachment logic
-- [ ] Remove mode handling
-
-### 2.2 Update Utility Functions
-
-File: `src/utils.rs`
-
-- [ ] Keep `is_bigendian()` function
-- [ ] Update `create_ros_header()` to work with rclrs message types:
-  ```rust
-  pub fn create_ros_header(timestamp: Option<f64>) -> std_msgs::msg::Header {
-      let time = create_ros_time(timestamp);
-      std_msgs::msg::Header {
-          stamp: time,
-          frame_id: String::new(),
-      }
-  }
-
-  pub fn create_ros_time(timestamp: Option<f64>) -> builtin_interfaces::msg::Time {
-      if let Some(sec) = timestamp {
+      let time = if let Some(sec) = timestamp {
           builtin_interfaces::msg::Time {
               sec: sec.floor() as i32,
               nanosec: (sec.fract() * 1_000_000_000_f64) as u32,
@@ -328,16 +293,50 @@ File: `src/utils.rs`
               sec: now.as_secs() as i32,
               nanosec: now.subsec_nanos(),
           }
+      };
+      self.publisher_clock.publish(time)?;
+      Ok(())
+  }
+  ```
+- [x] ✅ Remove CDR serialization
+- [x] ✅ Remove attachment logic
+- [x] ✅ Remove mode handling
+
+### 2.2 Update Utility Functions
+
+File: `src/utils.rs`
+
+- [x] ✅ Keep `is_bigendian()` function
+- [x] ✅ Update `create_ros_header()` to work with rclrs message types:
+  ```rust
+  pub fn create_ros_header(timestamp: Option<f64>) -> std_msgs::msg::Header {
+      let time = if let Some(sec) = timestamp {
+          builtin_interfaces::msg::Time {
+              sec: sec.floor() as i32,
+              nanosec: (sec.fract() * 1_000_000_000_f64) as u32,
+          }
+      } else {
+          let now = SystemTime::now()
+              .duration_since(UNIX_EPOCH)
+              .expect("Unable to get current time");
+          builtin_interfaces::msg::Time {
+              sec: now.as_secs() as i32,
+              nanosec: now.subsec_nanos(),
+          }
+      };
+      std_msgs::msg::Header {
+          stamp: time,
+          frame_id: "".to_string(),
       }
   }
   ```
 
 ### 2.3 Test Clock Publisher
 
-- [ ] Build the project: `make build`
-- [ ] Start CARLA simulator
-- [ ] Spawn test vehicle with `make agent-spawn`
-- [ ] Run the bridge: `make run`
+- [ ] Build the project: `make build` *(already tested)*
+- [ ] Start CARLA simulator *(pending runtime testing)*
+- [ ] Spawn test vehicle with `make agent-spawn` *(pending runtime testing)*
+- [ ] Run the bridge: `make launch` *(pending runtime testing)*
 - [ ] In another terminal, verify clock topic:
   ```bash
   source /opt/ros/humble/setup.bash
@@ -345,17 +344,19 @@ File: `src/utils.rs`
   ros2 topic echo /clock
   ros2 topic hz /clock
   ```
-- [ ] Verify clock publishes at expected rate
+- [ ] Verify clock publishes at expected rate *(pending runtime testing)*
 
 **Deliverables**:
-- [ ] Working clock publisher using rclrs
-- [ ] Updated utility functions
-- [ ] Verification test results
+- [x] ✅ Working clock publisher using rclrs
+- [x] ✅ Updated utility functions
+- [ ] Verification test results *(pending CARLA runtime testing)*
 
 **Success Criteria**:
-- Clock topic appears in `ros2 topic list`
-- Clock messages publish at correct rate
-- Timestamps are accurate
+- ✅ Clock publisher compiles and integrates with bridge
+- ✅ No Zenoh dependencies or CDR serialization
+- ⏳ Clock topic appears in `ros2 topic list` *(pending CARLA testing)*
+- ⏳ Clock messages publish at correct rate *(pending CARLA testing)*
+- ⏳ Timestamps are accurate *(pending CARLA testing)*
 
 ---
 
@@ -368,13 +369,13 @@ File: `src/utils.rs`
 ### 3.1 Define Message Type Mappings
 
 - [ ] Document message type mappings:
-  | Sensor Type | ROS Message Type | QoS Profile |
-  |-------------|------------------|-------------|
-  | Camera RGB | `sensor_msgs::msg::Image` | `QOS_PROFILE_SENSOR_DATA` |
-  | Camera Info | `sensor_msgs::msg::CameraInfo` | `QOS_PROFILE_SENSOR_DATA` |
-  | LiDAR | `sensor_msgs::msg::PointCloud2` | `QOS_PROFILE_SENSOR_DATA` |
-  | IMU | `sensor_msgs::msg::Imu` | `QOS_PROFILE_DEFAULT` |
-  | GNSS | `sensor_msgs::msg::NavSatFix` | `QOS_PROFILE_DEFAULT` |
+  | Sensor Type | ROS Message Type                | QoS Profile               |
+  |-------------|---------------------------------|---------------------------|
+  | Camera RGB  | `sensor_msgs::msg::Image`       | `QOS_PROFILE_SENSOR_DATA` |
+  | Camera Info | `sensor_msgs::msg::CameraInfo`  | `QOS_PROFILE_SENSOR_DATA` |
+  | LiDAR       | `sensor_msgs::msg::PointCloud2` | `QOS_PROFILE_SENSOR_DATA` |
+  | IMU         | `sensor_msgs::msg::Imu`         | `QOS_PROFILE_DEFAULT`     |
+  | GNSS        | `sensor_msgs::msg::NavSatFix`   | `QOS_PROFILE_DEFAULT`     |
 
 ### 3.2 Refactor Sensor Bridge Structure
 
@@ -1011,7 +1012,7 @@ Track progress by marking tasks complete in this document:
 
 ### Current Phase: Phase 7 (carla-rust Integration)
 
-**Last Updated**: 2025-10-29
+**Last Updated**: 2025-10-31
 
 ### Phase Completion Status
 
@@ -1030,16 +1031,25 @@ Track progress by marking tasks complete in this document:
 - ✅ Binary built: 9.3 MB
 - ✅ .cargo/config.toml generated with 50+ message packages
 
+**✅ Phase 2: Clock and Simple Publishers** - COMPLETE (2025-10-22, integrated with Phase 1)
+- ✅ Clock publisher migrated to rclrs (src/clock.rs)
+- ✅ Utility functions updated (src/utils.rs)
+- ✅ No CDR serialization or Zenoh dependencies
+- ✅ Code compiles successfully
+- ⏳ Runtime testing pending (requires CARLA)
+
 **🔄 Phase 7: carla-rust Integration** - IN PROGRESS (Started 2025-10-29)
 - ✅ Local carla-rust path dependency configured
 - ✅ Build system verified
 - ✅ Documentation created (`docs/carla-rust-integration.md`)
-- 🔄 Roadmap updated with enhancement tasks
+- ✅ Roadmap updated with enhancement tasks (Phase 2 marked complete)
 - ⏳ Actor cleanup implementation (pending)
 - ⏳ Multi-version CARLA testing (pending)
 
-**⏳ Phase 2+: Testing and Further Development** - PENDING
+**⏳ Phase 3+: Sensor/Vehicle Bridge Testing and Further Development** - PENDING
 - Awaiting CARLA simulator testing
+- Sensor bridge runtime verification (Camera, LiDAR, IMU, GNSS)
+- Vehicle bridge runtime verification (control subscribers, status publishers)
 - Integration testing with Autoware
 - Performance optimization
 
@@ -1053,11 +1063,16 @@ Track progress by marking tasks complete in this document:
 - [x] ✅ Remove all Zenoh dependencies
 - [x] ✅ Remove Mode enum and liveliness logic
 - [x] ✅ Update all 5 bridge types to rclrs
+- [x] ✅ Complete Phase 2: Clock and Simple Publishers migration
+- [x] ✅ Migrate clock publisher to rclrs (src/clock.rs)
+- [x] ✅ Update utility functions (src/utils.rs)
+- [x] ✅ Remove CDR serialization from clock publisher
 - [x] ✅ Integrate local carla-rust repository
 - [x] ✅ Switch to path dependency for carla crate
 - [x] ✅ Create carla-rust integration documentation (386 lines)
 - [x] ✅ Configure direnv for automatic environment
 - [x] ✅ Simplify Makefile (removed manual sourcing)
+- [x] ✅ Fix Makefile typo (build-packages → build-bridge)
 
 ### Current Focus (Phase 7)
 1. ⏳ Implement actor cleanup with `ActorBase::destroy()`
@@ -1066,19 +1081,24 @@ Track progress by marking tasks complete in this document:
 4. ⏳ Documentation updates for new APIs
 
 ### Next Steps
-1. Add Drop implementation with actor.destroy() to SensorBridge and VehicleBridge
-2. Add world loading utility with version-conditional compilation
-3. Test bridge with CARLA 0.9.15 and 0.9.14
-4. Begin Phase 2: Testing with CARLA simulator
+1. **Immediate**: Begin Phase 3 runtime testing with CARLA simulator
+   - Verify clock publisher (Phase 2) publishes to `/clock` topic
+   - Test sensor bridges (Camera, LiDAR, IMU, GNSS) with spawned vehicles
+   - Validate vehicle control and status publishing
+2. Add Drop implementation with `actor.destroy()` to SensorBridge and VehicleBridge
+3. Add world loading utility with version-conditional compilation
+4. Test bridge with multiple CARLA versions (0.9.14, 0.9.15, 0.9.16)
 5. Explore advanced carla-rust APIs (walker control, batch operations, debug visualization)
 
 ### Metrics
 - **Documentation**: 4 guides, 2,713 total lines
+- **Phases Complete**: 3 of 7 (Phase 0, 1, 2)
 - **Code Changes**: 15 files modified, ~800 lines changed, ~300 lines removed
 - **Build Time**: ~5.5 minutes (first build), ~3 minutes (incremental)
 - **Binary Size**: 9.3 MB
 - **Lint Warnings**: 0
 - **Compilation Status**: ✅ Success
+- **Runtime Testing**: ⏳ Pending CARLA availability
 
 ---
 
@@ -1244,6 +1264,6 @@ Investigate and document potential uses for:
 
 ---
 
-**Document Version**: 1.1
-**Last Updated**: 2025-10-29
+**Document Version**: 1.2
+**Last Updated**: 2025-10-31
 **Maintained By**: Autoware CARLA Bridge Team
