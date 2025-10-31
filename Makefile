@@ -28,7 +28,7 @@ build-bridge: ## Build autoware_carla_bridge package
 	colcon build $(COLCON_BUILD_FLAGS)
 
 .PHONY: build
-build: build-ros2-rust build-interface build-packages ## Build all stages (complete build)
+build: build-ros2-rust build-interface build-bridge ## Build all stages (complete build)
 
 .PHONY: launch
 launch: ## Launch the bridge with ros2 launch
