@@ -6,6 +6,7 @@ This document outlines the phased approach for migrating `zenoh_carla_bridge` to
 
 - [Project Overview](#project-overview)
 - [Migration Goals](#migration-goals)
+- [Architecture Design Decisions](#architecture-design-decisions)
 - [Prerequisites](#prerequisites)
 - [Phase 0: Preparation](#phase-0-preparation)
 - [Phase 1: Core Infrastructure](#phase-1-core-infrastructure)
@@ -15,6 +16,8 @@ This document outlines the phased approach for migrating `zenoh_carla_bridge` to
 - [Phase 5: Testing and Optimization](#phase-5-testing-and-optimization)
 - [Phase 6: Documentation and Release](#phase-6-documentation-and-release)
 - [Phase 7: carla-rust Integration and Enhancements](#phase-7-carla-rust-integration-and-enhancements)
+- [Phase 8: Architecture Refactoring - 1-to-1 Design](#phase-8-architecture-refactoring---1-to-1-design)
+- [Architecture Decision Record](#architecture-decision-record)
 - [Success Criteria](#success-criteria)
 - [Risk Management](#risk-management)
 
@@ -47,6 +50,259 @@ Before starting the migration, ensure:
 - [ ] `carla_agent` vehicle spawning tool is working
 - [ ] `external/autoware` symlink points to Autoware installation
 - [ ] Familiarity with both Zenoh and rclrs APIs (see `docs/zenoh-to-rclrs-api-comparison.md`)
+
+---
+
+## Architecture Design Decisions
+
+### 1-to-1 Autoware-Centric Design Philosophy
+
+**Decision Date**: 2025-10-31
+
+The bridge architecture follows a **1-to-1 mapping** between CARLA vehicles and Autoware instances:
+
+```
+CARLA Vehicle ↔ Bridge Instance ↔ Autoware Instance
+```
+
+This design choice aligns with Autoware's single-vehicle autonomous driving architecture and provides clean isolation between multiple vehicles in simulation.
+
+### Core Principles
+
+#### 1. One Bridge Per Vehicle
+
+Each bridge instance manages exactly one CARLA vehicle (the "ego vehicle") and all its attached sensors. To simulate multiple vehicles:
+
+- Spawn multiple bridge processes (one per vehicle)
+- Use `ROS_DOMAIN_ID` for isolation (prevents topic name conflicts)
+- Each bridge connects to the same CARLA server but manages different vehicles
+
+**Benefits**:
+- ✅ Aligns with Autoware's single-vehicle design (no multi-vehicle awareness needed)
+- ✅ Standard ROS 2 domain isolation (no hacks or workarounds)
+- ✅ No topic naming conflicts (domains are isolated)
+- ✅ Works with Autoware's hardcoded absolute topic names
+- ✅ Fault isolation (one bridge crash doesn't affect others)
+- ✅ Simple to understand, test, and debug
+- ✅ Natural horizontal scaling (add vehicles = add bridges)
+
+#### 2. Bridge is Passive Adapter
+
+The bridge does **NOT** control simulation execution. Simulation control is the responsibility of external scenario scripts.
+
+**Bridge Responsibilities**:
+- ✅ Connect to CARLA (passive mode)
+- ✅ Find and track assigned ego vehicle
+- ✅ Bridge sensor data (CARLA → ROS 2)
+- ✅ Bridge vehicle control (ROS 2 → CARLA)
+- ✅ Publish TF tree for sensor transforms
+- ✅ Wait for and respond to simulation ticks
+
+**NOT Bridge Responsibilities**:
+- ❌ Configure CARLA synchronous mode settings
+- ❌ Call `world.tick()` to advance simulation
+- ❌ Control simulation time or speed
+- ❌ Manage scenario logic or vehicle spawning
+
+**External Scenario Script Responsibilities**:
+- Configure CARLA synchronous_mode and fixed_delta_seconds
+- Spawn vehicles with appropriate role_name attributes
+- Control simulation ticking (call world.tick() in loop)
+- Manage scenario progression and vehicle lifecycle
+
+#### 3. Root Namespace Topics
+
+The bridge publishes to **standard Autoware topic names** without vehicle-specific prefixes:
+
+```
+/vehicle/status/velocity_status
+/vehicle/status/actuation_status
+/sensing/camera/traffic_light/image_raw
+/sensing/lidar/top/pointcloud
+/sensing/imu/tamagawa/imu_raw
+/sensing/gnss/ublox/nav_sat_fix
+/control/command/actuation_cmd
+/clock
+```
+
+This allows Autoware to run unmodified with its hardcoded absolute topic names. When running multiple vehicles:
+- Each bridge runs in a separate ROS domain (`ROS_DOMAIN_ID=0`, `ROS_DOMAIN_ID=1`, etc.)
+- Topics within each domain use standard names
+- Domains provide isolation, preventing conflicts
+
+#### 4. Vehicle Discovery and Selection
+
+The bridge must be told which CARLA vehicle to manage:
+
+```bash
+# Select by role_name
+ros2 run autoware_carla_bridge autoware_carla_bridge --vehicle-name ego_vehicle
+
+# Or select by actor ID
+ros2 run autoware_carla_bridge autoware_carla_bridge --vehicle-id 42
+```
+
+**Vehicle Lifecycle**:
+1. **Startup**: Bridge polls CARLA for target vehicle (with configurable timeout)
+2. **Not Found**: Wait up to `--vehicle-wait-timeout` seconds (default: 30s)
+3. **Found**: Create bridges for vehicle + all attached sensors
+4. **Running**: Monitor vehicle existence each tick
+5. **Destroyed**: Detect vehicle destruction, wait for respawn
+6. **Respawn**: Recreate bridges when vehicle reappears
+
+This design allows flexible scenario scripting:
+- Scenario can spawn vehicle before or after bridge starts
+- Vehicle can be destroyed and recreated (testing reset scenarios)
+- Bridge remains robust to vehicle lifecycle changes
+
+### Startup Sequence
+
+**Revised sequence** for 1-to-1 Autoware-centric design:
+
+1. **Parse Command Line Arguments**
+   - Vehicle selector: `--vehicle-name` (role_name) or `--vehicle-id` (actor ID)
+   - Wait timeout: `--vehicle-wait-timeout` (default: 30s, 0 = wait forever)
+   - CARLA connection: `--carla-host`, `--carla-port`
+
+2. **Initialize ROS 2 Infrastructure**
+   - Create rclrs Context, Executor, Node
+   - Node name: `autoware_carla_bridge`
+   - No ROS domain configuration (use `ROS_DOMAIN_ID` environment variable)
+
+3. **Connect to CARLA (Passive Mode)**
+   - Connect client to CARLA server
+   - Get world handle
+   - **Do NOT configure synchronous mode** (scenario script's responsibility)
+   - **Do NOT spawn tick thread** (scenario script controls ticking)
+
+4. **Find Target Ego Vehicle**
+   - Search CARLA world for vehicle matching selector
+   - If not found: poll every 1 second until found or timeout
+   - Error and exit on timeout
+   - Log when ego vehicle is found
+
+5. **Create Vehicle Bridge**
+   - Create single `VehicleBridge` for ego vehicle
+   - Subscribe to Autoware control commands (root namespace)
+   - Publish vehicle status (root namespace)
+
+6. **Discover and Bridge Sensors**
+   - Find all sensors attached to ego vehicle (filter by parent ID)
+   - Create `SensorBridge` for each (Camera, LiDAR, IMU, GNSS)
+   - Register CARLA sensor callbacks
+   - Publish to root namespace sensor topics
+
+7. **Publish TF Tree** (TODO - Phase 8)
+   - Read sensor transforms from CARLA
+   - Publish base_link → sensor_link transforms
+   - Required for Autoware localization and sensor fusion
+
+8. **Publish /clock Topic**
+   - Create clock publisher for CARLA simulation time
+   - Even though we don't control ticking, Autoware needs sim time
+
+9. **Enter Main Loop**
+   - Check if ego vehicle still exists each iteration
+   - If destroyed: wait for respawn (go back to step 4)
+   - If alive: call `ego_vehicle_bridge.step(timestamp)`
+   - Wait for next tick: `world.wait_for_tick()`
+   - No multi-vehicle actor discovery needed
+
+### Multi-Vehicle Simulation Example
+
+```bash
+# Terminal 1: CARLA simulator
+systemctl --user start carla-0.9.16@3000
+
+# Terminal 2: Scenario script (controls simulation)
+python scripts/scenario/multi_vehicle_scenario.py
+# - Configures synchronous_mode = True
+# - Spawns vehicle_1 (role_name="ego_vehicle_1")
+# - Spawns vehicle_2 (role_name="ego_vehicle_2")
+# - Runs tick loop at 20 Hz
+
+# Terminal 3: Bridge for vehicle 1 (domain 0)
+ROS_DOMAIN_ID=0 ros2 run autoware_carla_bridge autoware_carla_bridge \
+  --vehicle-name ego_vehicle_1 \
+  --carla-port 3000
+
+# Terminal 4: Bridge for vehicle 2 (domain 1)
+ROS_DOMAIN_ID=1 ros2 run autoware_carla_bridge autoware_carla_bridge \
+  --vehicle-name ego_vehicle_2 \
+  --carla-port 3000
+
+# Terminal 5: Autoware instance 1
+ROS_DOMAIN_ID=0 ros2 launch autoware_launch autoware.launch.xml
+
+# Terminal 6: Autoware instance 2
+ROS_DOMAIN_ID=1 ros2 launch autoware_launch autoware.launch.xml
+
+# Terminal 7: Monitor vehicle 1 topics
+ROS_DOMAIN_ID=0 ros2 topic list
+
+# Terminal 8: Monitor vehicle 2 topics
+ROS_DOMAIN_ID=1 ros2 topic list
+```
+
+Each domain is completely isolated - topics, nodes, and services don't leak between domains.
+
+### Alternative Designs Considered
+
+#### Option 1: Multi-Vehicle Bridge with Domain Workarounds (❌ Rejected)
+
+One bridge instance publishes topics for all vehicles into multiple ROS domains.
+
+**Problems**:
+- ❌ No standard way for one ROS node to exist in multiple domains
+- ❌ Would require rclrs hacks or multiple context instances (non-standard)
+- ❌ Debugging nightmare (one process doing multiple things)
+- ❌ Tight coupling between vehicle lifecycles
+- ❌ Resource contention between vehicles
+- ❌ Complex implementation for minimal benefit
+
+#### Option 2: Topic Namespacing Instead of Domains (❌ Rejected)
+
+Use topic prefixes (`/vehicle_1/...`, `/vehicle_2/...`) instead of domain isolation.
+
+**Problems**:
+- ❌ Requires modifying Autoware launch files (brittle, maintenance burden)
+- ❌ Autoware has many hardcoded absolute topic names
+- ❌ No isolation at node/service level (only topics)
+- ❌ More complex configuration
+- ❌ Less clean than standard domain separation
+
+#### Option 3: 1-to-1 Bridge-Vehicle Design (✅ Selected)
+
+**Advantages**:
+- ✅ Simple and robust
+- ✅ Standard ROS 2 patterns (domain isolation)
+- ✅ Minimal code changes needed
+- ✅ Mirrors real-world deployment (one Autoware per vehicle)
+- ✅ Easy to test and debug
+- ✅ Works with unmodified Autoware
+- ✅ Natural fault isolation
+
+### Consequences and Trade-offs
+
+**Consequences of 1-to-1 Design**:
+
+**Positive**:
+- Clean separation of concerns
+- Simple mental model (one bridge = one vehicle)
+- Standard ROS tooling works as expected
+- Easy to add/remove vehicles dynamically
+- No cross-talk between vehicles
+- Independent resource management
+
+**Trade-offs**:
+- Need multiple bridge processes for multi-vehicle
+  - Mitigation: This is how real-world deployment works anyway
+- Slightly more resource usage (N processes vs 1)
+  - Mitigation: Rust bridges are lightweight (~10-20 MB RAM each)
+- Need to manage ROS_DOMAIN_ID environment variable
+  - Mitigation: Standard ROS 2 practice, well-documented
+
+**Overall**: Trade-offs are minimal, benefits are substantial.
 
 ---
 
@@ -1045,10 +1301,23 @@ Track progress by marking tasks complete in this document:
 - ⏳ Actor cleanup implementation (pending)
 - ⏳ Multi-version CARLA testing (pending)
 
-**⏳ Phase 3+: Sensor/Vehicle Bridge Testing and Further Development** - PENDING
+**📋 Phase 8: Architecture Refactoring - 1-to-1 Design** - PLANNED (2025-10-31)
+- ✅ Architecture design documented
+- ✅ 1-to-1 Autoware-centric design specified
+- ✅ 9 subsections with detailed work items (8.1-8.9)
+- ✅ 3 Architecture Decision Records created
+- ✅ Multi-vehicle simulation pattern documented
+- ⏳ Implementation pending (depends on Phase 2/3 testing)
+- ⏳ ~100 tasks defined across all subsections
+- **Estimated Duration**: 1-2 weeks
+- **Prerequisites**: Phase 2/3 runtime validation
+
+**⏳ Phase 3-6: Sensor/Vehicle Bridge Testing and Further Development** - PENDING
+- Phase 3: Sensor bridge runtime verification (Camera, LiDAR, IMU, GNSS)
+- Phase 4: Vehicle bridge runtime verification (control subscribers, status publishers)
+- Phase 5: Testing and optimization
+- Phase 6: Documentation and release
 - Awaiting CARLA simulator testing
-- Sensor bridge runtime verification (Camera, LiDAR, IMU, GNSS)
-- Vehicle bridge runtime verification (control subscribers, status publishers)
 - Integration testing with Autoware
 - Performance optimization
 
@@ -1092,14 +1361,18 @@ Track progress by marking tasks complete in this document:
 5. Explore advanced carla-rust APIs (walker control, batch operations, debug visualization)
 
 ### Metrics
-- **Documentation**: 4 guides, 2,713 total lines
-- **Phases Complete**: 3 of 7 (Phase 0, 1, 2) - **Phase 2 runtime verified**
+- **Documentation**: 5 guides (includes roadmap), 3,600+ total lines
+- **Phases Total**: 8 phases (0-7 plus new Phase 8)
+- **Phases Complete**: 3 of 8 (Phase 0, 1, 2) - **Phase 2 runtime verified**
+- **Phases In Progress**: Phase 7 (carla-rust Integration)
+- **Phases Pending**: Phase 3-6, 8 (Architecture Refactoring)
 - **Code Changes**: 15 files modified, ~800 lines changed, ~300 lines removed
 - **Build Time**: ~5.5 minutes (first build), ~3 minutes (incremental)
 - **Binary Size**: 9.3 MB
 - **Lint Warnings**: 0
 - **Compilation Status**: ✅ Success
 - **Runtime Testing**: ✅ **Phase 2 PASSED** - Clock publisher verified (2025-10-31)
+- **Architecture Design**: ✅ **DOCUMENTED** - 1-to-1 design, 3 ADRs (2025-10-31)
 
 ---
 
@@ -1265,6 +1538,470 @@ Investigate and document potential uses for:
 
 ---
 
-**Document Version**: 1.3
-**Last Updated**: 2025-10-31 (Runtime verification milestone)
+## Phase 8: Architecture Refactoring - 1-to-1 Design
+
+**Objective**: Refactor bridge architecture to implement Autoware-centric 1-to-1 design where one bridge instance manages exactly one CARLA vehicle.
+
+**Status**: ⏳ **PENDING** - Depends on Phase 2/3 runtime validation
+
+**Duration**: 1-2 weeks
+
+**Prerequisites**:
+- Phase 2 runtime testing complete
+- Phase 3 sensor testing complete (at least Camera, LiDAR, IMU, GNSS)
+- Understanding of current multi-vehicle architecture
+- Review Architecture Design Decisions section above
+
+### 8.1 Remove Simulation Control
+
+**Priority**: High
+
+**Objective**: Remove all simulation control logic from bridge. Scenario scripts will control CARLA ticking.
+
+**Tasks**:
+- [ ] Remove tick thread spawn (main.rs:97-106)
+- [ ] Remove `tick` CLI parameter from Opts struct
+- [ ] Remove `slowdown` CLI parameter from Opts struct
+- [ ] Remove synchronous mode configuration (main.rs:83-86)
+  ```rust
+  // DELETE:
+  carla_settings.synchronous_mode = true;
+  carla_settings.fixed_delta_seconds = Some(tick_ms * 0.001);
+  world.apply_settings(&carla_settings);
+  ```
+- [ ] Keep SimulatorClock but remove tick publishing responsibility
+- [ ] Update SimulatorClock to only publish on world.wait_for_tick()
+- [ ] Remove thread spawning and sleep logic
+- [ ] Update error messages to not reference tick parameters
+
+**Testing**:
+- [ ] Verify bridge compiles without tick parameters
+- [ ] Create test scenario script that controls ticking
+- [ ] Verify bridge waits for external ticks
+
+**Benefits**:
+- Cleaner separation of concerns
+- Bridge becomes passive adapter
+- Easier to coordinate simulation with external scenarios
+- No risk of bridge tick conflicts with scenario logic
+
+### 8.2 Add Vehicle Selection
+
+**Priority**: High
+
+**Objective**: Add CLI arguments to select specific vehicle by name or ID.
+
+**Tasks**:
+- [ ] Add `--vehicle-name` parameter to Opts
+  ```rust
+  /// Vehicle role_name to bridge (e.g., "ego_vehicle")
+  #[clap(long, conflicts_with = "vehicle_id")]
+  pub vehicle_name: Option<String>,
+  ```
+- [ ] Add `--vehicle-id` parameter to Opts
+  ```rust
+  /// Vehicle actor ID to bridge
+  #[clap(long, conflicts_with = "vehicle_name")]
+  pub vehicle_id: Option<u32>,
+  ```
+- [ ] Add `--vehicle-wait-timeout` parameter
+  ```rust
+  /// Timeout in seconds to wait for vehicle (0 = wait forever)
+  #[clap(long, default_value_t = 30)]
+  pub vehicle_wait_timeout: u64,
+  ```
+- [ ] Validate that at least one of vehicle_name or vehicle_id is provided
+- [ ] Create `find_target_vehicle()` function
+  ```rust
+  fn find_target_vehicle(
+      world: &World,
+      opts: &Opts,
+      timeout: Duration,
+  ) -> Result<Vehicle>
+  ```
+- [ ] Implement polling loop with timeout
+- [ ] Add logging for vehicle search progress
+
+**Testing**:
+- [ ] Test `--vehicle-name` with exact match
+- [ ] Test `--vehicle-id` with actor ID
+- [ ] Test timeout behavior (vehicle not found)
+- [ ] Test vehicle appearing after bridge starts
+- [ ] Verify error messages are clear
+
+**Benefits**:
+- Explicit vehicle selection
+- Support both role_name and actor ID matching
+- Flexible timing (vehicle can spawn before or after bridge)
+
+### 8.3 Simplify Actor Management
+
+**Priority**: High
+
+**Objective**: Remove multi-vehicle discovery and management. Track only the selected ego vehicle.
+
+**Tasks**:
+- [ ] Replace `HashMap<ActorId, Box<dyn ActorBridge>>` with `EgoBridges` struct
+  ```rust
+  struct EgoBridges {
+      vehicle: VehicleBridge,
+      sensors: Vec<SensorBridge>,
+  }
+  ```
+- [ ] Replace `HashMap<String, Autoware>` with single `Autoware` instance
+- [ ] Remove actor discovery diff logic (added_ids, deleted_ids)
+- [ ] Remove "autoware_" prefix filtering from vehicle_bridge.rs
+- [ ] Remove "autoware_" prefix filtering from sensor_bridge.rs
+- [ ] Implement exact vehicle matching in `is_target_vehicle()`
+- [ ] Filter sensors by parent vehicle ID
+  ```rust
+  fn is_ego_sensor(sensor: &Sensor, ego_id: ActorId) -> bool {
+      sensor.parent().map_or(false, |p| p.id() == ego_id)
+  }
+  ```
+- [ ] Update get_bridge_type() to not require prefix matching
+- [ ] Remove BridgeError::Npc variant (no longer needed)
+
+**Testing**:
+- [ ] Verify only ego vehicle is bridged
+- [ ] Verify only ego's sensors are bridged
+- [ ] Verify other vehicles are ignored
+- [ ] Test with multiple vehicles in CARLA (should only bridge one)
+
+**Benefits**:
+- Simpler code (no multi-vehicle tracking)
+- Clear single-vehicle focus
+- No NPC filtering needed
+
+### 8.4 Root Namespace Topics
+
+**Priority**: High
+
+**Objective**: Publish to standard Autoware topic names without vehicle prefixes.
+
+**Tasks**:
+- [ ] Modify `Autoware::new()` to remove vehicle_name parameter
+  ```rust
+  impl Autoware {
+      pub fn new() -> Autoware {
+          Autoware {
+              topic_actuation_status: "/vehicle/status/actuation_status".to_string(),
+              topic_velocity_status: "/vehicle/status/velocity_status".to_string(),
+              // ... all topics with root namespace
+          }
+      }
+  }
+  ```
+- [ ] Update all vehicle status topics to root namespace
+- [ ] Update all control command topics to root namespace
+- [ ] Update sensor topics to root namespace pattern
+  ```rust
+  format!("/sensing/camera/{}/image_raw", sensor_name)
+  format!("/sensing/lidar/{}/pointcloud", sensor_name)
+  format!("/sensing/imu/{}/imu_raw", sensor_name)
+  format!("/sensing/gnss/{}/nav_sat_fix", sensor_name)
+  ```
+- [ ] Update clock topic to "/clock" (no prefix)
+- [ ] Remove vehicle_name field from Autoware struct
+- [ ] Update all topic creation in vehicle_bridge.rs
+- [ ] Update all topic creation in sensor_bridge.rs
+
+**Testing**:
+- [ ] Verify topics with `ros2 topic list`
+- [ ] Should see `/vehicle/status/...` not `/autoware_v1/vehicle/status/...`
+- [ ] Should see `/sensing/...` not `/autoware_v1/sensing/...`
+- [ ] Test with unmodified Autoware launch files
+
+**Benefits**:
+- Works with standard Autoware topic names
+- No launch file modifications needed
+- Clean, predictable topic structure
+
+### 8.5 Vehicle Respawn Handling
+
+**Priority**: Medium
+
+**Objective**: Detect when ego vehicle is destroyed and wait for it to respawn.
+
+**Tasks**:
+- [ ] Add vehicle alive check in main loop
+  ```rust
+  if !ego_vehicle.is_alive() {
+      log::warn!("Ego vehicle destroyed, waiting for respawn...");
+      ego_vehicle = find_target_vehicle(&world, &opts, timeout)?;
+      ego_bridges = create_ego_bridges(&ego_vehicle, &node)?;
+      log::info!("Ego vehicle respawned, bridges recreated");
+  }
+  ```
+- [ ] Implement `Actor::is_alive()` check
+- [ ] Drop old bridges before creating new ones
+- [ ] Re-register sensor callbacks after respawn
+- [ ] Add logging for vehicle lifecycle events
+- [ ] Test with rapid destroy/respawn cycles
+
+**Testing**:
+- [ ] Manually destroy vehicle in CARLA
+- [ ] Verify bridge detects destruction
+- [ ] Respawn vehicle with same role_name
+- [ ] Verify bridge recreates connections
+- [ ] Test sensor data flows after respawn
+
+**Benefits**:
+- Robust to vehicle destruction
+- Supports scenario resets
+- No need to restart bridge for vehicle respawn
+
+### 8.6 Main Loop Refactoring
+
+**Priority**: High
+
+**Objective**: Simplify main loop to focus on single ego vehicle.
+
+**Tasks**:
+- [ ] Remove actor discovery loop
+- [ ] Remove bridge_list HashMap iteration
+- [ ] Simplify to single vehicle step:
+  ```rust
+  loop {
+      // Check vehicle alive
+      if !ego_vehicle.is_alive() {
+          handle_respawn();
+      }
+
+      // Step ego vehicle
+      ego_bridges.vehicle.step(timestamp)?;
+      // Sensors use callbacks, no step needed
+
+      // Wait for next tick
+      world.wait_for_tick();
+  }
+  ```
+- [ ] Remove added_ids/deleted_ids computation
+- [ ] Keep timeout detection logic
+- [ ] Update error handling for simpler flow
+- [ ] Add clear logging for main loop events
+
+**Testing**:
+- [ ] Verify main loop is simpler and clearer
+- [ ] Verify no performance regression
+- [ ] Test with long-running scenarios
+- [ ] Monitor CPU/memory usage
+
+**Benefits**:
+- Cleaner, easier to understand code
+- Fewer moving parts
+- More predictable behavior
+
+### 8.7 Create Scenario Scripts
+
+**Priority**: Medium
+
+**Objective**: Create example scenario scripts that demonstrate simulation control.
+
+**Tasks**:
+- [ ] Create `scripts/scenario/` directory
+- [ ] Create `scripts/scenario/README.md`
+- [ ] Create `scripts/scenario/simple_drive.py`:
+  - Configure synchronous mode
+  - Spawn vehicle with role_name
+  - Run tick loop at 20 Hz
+  - Handle Ctrl-C cleanup
+- [ ] Create `scripts/scenario/multi_vehicle.py`:
+  - Spawn multiple vehicles with different role_names
+  - Demonstrate multiple bridge instances with domains
+- [ ] Create `scripts/scenario/vehicle_respawn.py`:
+  - Test vehicle destruction and respawn
+  - Demonstrate bridge resilience
+- [ ] Document scenario script API patterns
+- [ ] Add scenario templates for common testing patterns
+
+**Testing**:
+- [ ] Run each scenario script
+- [ ] Verify CARLA responds correctly
+- [ ] Test with bridge in different states
+- [ ] Document expected behavior
+
+**Benefits**:
+- Clear examples of simulation control
+- Testing templates
+- Documentation for users
+
+### 8.8 Testing & Validation
+
+**Priority**: High
+
+**Objective**: Comprehensive testing of refactored architecture.
+
+**Tasks**:
+- [ ] Test vehicle selection by name with exact match
+- [ ] Test vehicle selection by actor ID
+- [ ] Test vehicle wait timeout (vehicle not spawned)
+- [ ] Test vehicle appearing after bridge starts
+- [ ] Test vehicle respawn after destruction
+- [ ] Test root namespace topics with Autoware
+- [ ] Test multi-vehicle simulation:
+  - Run two bridges in different domains
+  - Verify topic isolation
+  - Test with two Autoware instances
+- [ ] Performance testing:
+  - Measure CPU usage (single vehicle)
+  - Measure memory usage
+  - Compare with old multi-vehicle code
+- [ ] Update `scripts/run_test_env.sh` for new CLI arguments
+- [ ] Update test documentation
+- [ ] Add integration tests for new features
+
+**Expected Results**:
+- Bridge connects to specific vehicle only
+- External scenario controls ticking
+- Topics use root namespace
+- Vehicle respawn works smoothly
+- Multiple bridges work in separate domains
+- No performance regression
+
+**Documentation Updates**:
+- [ ] Update README.md with new CLI arguments
+- [ ] Update scripts/README.md with new patterns
+- [ ] Document multi-vehicle setup with domains
+- [ ] Update CLAUDE.md with architecture changes
+- [ ] Create migration guide for users of old version
+
+### 8.9 TF Publisher Implementation (Optional)
+
+**Priority**: Low
+
+**Objective**: Publish TF tree for sensor transforms.
+
+**Tasks**:
+- [ ] Create `src/tf_publisher.rs`
+- [ ] Read sensor transforms from CARLA
+- [ ] Publish base_link → sensor_link transforms
+- [ ] Update on vehicle/sensor changes
+- [ ] Test with Autoware localization
+
+**Benefits**:
+- Required for proper Autoware sensor fusion
+- Correct spatial relationships between sensors
+
+**Deliverables**:
+- [ ] Refactored bridge with 1-to-1 architecture
+- [ ] Vehicle selection CLI arguments
+- [ ] Root namespace topic publishing
+- [ ] Vehicle respawn handling
+- [ ] Scenario script examples
+- [ ] Updated documentation
+- [ ] Test results and validation
+
+**Success Criteria**:
+- ✅ Bridge manages exactly one vehicle
+- ✅ External scenario script controls simulation
+- ✅ Topics use root namespace (standard Autoware)
+- ✅ Vehicle selection works by name and ID
+- ✅ Vehicle respawn is handled gracefully
+- ✅ Multiple bridges run successfully in separate domains
+- ✅ Code is simpler and easier to maintain
+- ✅ No performance regression
+- ✅ Documentation is updated and clear
+
+**Risks**:
+- Breaking changes require migration guide
+- Users need to update launch workflows
+- Testing with actual Autoware may reveal edge cases
+
+**Mitigation**:
+- Comprehensive testing before merging
+- Clear migration documentation
+- Maintain backward compatibility flag if needed
+
+---
+
+## Architecture Decision Record
+
+### ADR-001: 1-to-1 Bridge-Vehicle Mapping
+
+**Status**: Proposed (2025-10-31)
+
+**Context**:
+We need to decide how to handle multiple vehicles in CARLA simulation when integrating with Autoware. Autoware is designed for single-vehicle autonomous driving and has hardcoded absolute topic names.
+
+**Decision**:
+Adopt a 1-to-1 mapping where each bridge instance manages exactly one CARLA vehicle. Multiple vehicles require multiple bridge processes running in separate ROS domains.
+
+**Alternatives Considered**:
+
+1. **Multi-Vehicle Bridge with Domain Workarounds** (Rejected)
+   - Pros: Single process
+   - Cons: Complex implementation, non-standard ROS patterns, tight coupling, debugging difficulty
+
+2. **Topic Namespacing** (Rejected)
+   - Pros: Works in single domain
+   - Cons: Requires Autoware modification, brittle, maintenance burden
+
+3. **1-to-1 Mapping** (Selected)
+   - Pros: Simple, robust, standard patterns, fault isolation, matches real-world deployment
+   - Cons: Multiple processes needed (minimal trade-off)
+
+**Consequences**:
+- **Positive**: Clean architecture, standard ROS 2, easy testing, matches production
+- **Negative**: Need N processes for N vehicles (acceptable trade-off)
+- **Neutral**: ROS_DOMAIN_ID management (standard practice)
+
+**Related**:
+- See [Architecture Design Decisions](#architecture-design-decisions) section
+- See Phase 8 implementation tasks
+
+### ADR-002: Bridge Does Not Control Simulation
+
+**Status**: Proposed (2025-10-31)
+
+**Context**:
+Original bridge implementation controls CARLA simulation by configuring synchronous mode and running a tick thread. This creates tight coupling and makes coordination with external scenarios difficult.
+
+**Decision**:
+Bridge will not control simulation. External scenario scripts configure CARLA and control ticking. Bridge is a passive adapter that responds to ticks.
+
+**Rationale**:
+- Scenario scripts need full control of simulation for testing
+- Bridge should not interfere with scenario timing
+- Clearer separation of concerns
+- More flexible for different testing patterns
+
+**Consequences**:
+- **Positive**: Cleaner separation, flexible scenarios, no tick conflicts
+- **Negative**: Users must write scenario scripts (acceptable, provides examples)
+- **Migration**: Existing users need to add scenario script to their workflow
+
+**Related**:
+- Phase 8.1: Remove Simulation Control
+- Phase 8.7: Create Scenario Scripts
+
+### ADR-003: Root Namespace Topics
+
+**Status**: Proposed (2025-10-31)
+
+**Context**:
+Original bridge used vehicle-prefixed topics (`/autoware_v1/vehicle/status/...`). Autoware has hardcoded absolute topic names that don't use prefixes.
+
+**Decision**:
+Publish to root namespace using standard Autoware topic names. Use ROS domains for isolation when running multiple vehicles.
+
+**Rationale**:
+- Works with unmodified Autoware
+- No launch file modifications needed
+- Standard topic structure
+- ROS domains provide clean isolation
+
+**Consequences**:
+- **Positive**: Standard Autoware topics, no configuration needed, clear structure
+- **Negative**: Must use ROS_DOMAIN_ID for multiple vehicles (standard practice)
+- **Migration**: Topic names change, but standard names easier to remember
+
+**Related**:
+- Phase 8.4: Root Namespace Topics
+- Architecture Design Decisions: Core Principles
+
+---
+
+**Document Version**: 1.4
+**Last Updated**: 2025-10-31 (Architecture design documented, Phase 8 added)
 **Maintained By**: Autoware CARLA Bridge Team
