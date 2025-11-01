@@ -55,18 +55,24 @@ clean: clean-ros2-rust clean-interface clean-bridge ## Clean build artifacts
 
 .PHONY: format
 format: ## Format code with rustfmt
-	cargo +nightly fmt --manifest-path src/autoware_carla_bridge/Cargo.toml
+	. src/interface/install/setup.sh && \
+	cd src/autoware_carla_bridge && \
+	cargo +nightly fmt
 
 .PHONY: lint
 lint: ## Run format check and clippy
-	cargo +nightly fmt --check --manifest-path src/autoware_carla_bridge/Cargo.toml
 	. src/interface/install/setup.sh && \
-	cargo clippy --manifest-path src/autoware_carla_bridge/Cargo.toml
+	cd src/autoware_carla_bridge && \
+	( \
+	  cargo +nightly fmt --check; \
+	  cargo clippy \
+	)
 
 .PHONY: test
 test: ## Run tests
 	. src/interface/install/setup.sh && \
-	cargo nextest run --no-fail-fast --manifest-path src/autoware_carla_bridge/Cargo.toml
+	cd src/autoware_carla_bridge && \
+	cargo nextest run --no-fail-fast
 
 .PHONY: agent-setup
 agent-setup: ## Setup carla_agent environment
