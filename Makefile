@@ -60,12 +60,12 @@ format: ## Format code with rustfmt
 .PHONY: lint
 lint: ## Run format check and clippy
 	cargo +nightly fmt --check --manifest-path src/autoware_carla_bridge/Cargo.toml
-	source src/interface/install/setup.sh && \
+	. src/interface/install/setup.sh && \
 	cargo clippy --manifest-path src/autoware_carla_bridge/Cargo.toml
 
 .PHONY: test
 test: ## Run tests
-	source src/interface/install/setup.sh && \
+	. src/interface/install/setup.sh && \
 	cargo nextest run --no-fail-fast --manifest-path src/autoware_carla_bridge/Cargo.toml
 
 .PHONY: agent-setup
@@ -75,3 +75,7 @@ agent-setup: ## Setup carla_agent environment
 .PHONY: agent-spawn
 agent-spawn: ## Spawn test vehicles (requires CARLA running)
 	cd carla_agent && uv run python simple_spawn.py
+
+.PHONY: test-env
+test-env: ## Run complete test environment (CARLA + agents + bridge)
+	./scripts/run_test_env.sh
