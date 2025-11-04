@@ -4,6 +4,7 @@ mod bridge;
 mod clock;
 mod error;
 mod types;
+mod urdf_parser;
 mod utils;
 
 use std::{
