@@ -1,4 +1,5 @@
 mod autoware;
+mod autoware_detection;
 mod bridge;
 mod clock;
 mod error;
