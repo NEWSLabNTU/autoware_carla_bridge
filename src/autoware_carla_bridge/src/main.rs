@@ -8,6 +8,7 @@ mod tf_bridge;
 mod types;
 mod urdf_parser;
 mod utils;
+mod vehicle_lifecycle;
 
 use std::{
     collections::HashMap,

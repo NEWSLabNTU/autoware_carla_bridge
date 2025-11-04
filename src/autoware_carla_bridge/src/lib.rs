@@ -8,6 +8,7 @@ pub mod tf_bridge;
 pub mod types;
 pub mod urdf_parser;
 pub mod utils;
+pub mod vehicle_lifecycle;
 
 // Re-export commonly used items
 pub use autoware_detection::{AutowareDetector, AutowareState, DetectionDiagnostics};
@@ -15,3 +16,4 @@ pub use bridge::sensor_bridge::SensorType;
 pub use error::{BridgeError, Result};
 pub use tf_bridge::TFBuffer;
 pub use urdf_parser::{parse_urdf_sensors, SensorConfig};
+pub use vehicle_lifecycle::{LifecycleState, VehicleLifecycle};
