@@ -371,43 +371,480 @@ fn attach_sensor(
 
 **Autoware (ROS) vs CARLA Conventions:**
 
-| Axis | ROS (Autoware) | CARLA |
-|------|----------------|-------|
-| Forward | +X | +X |
-| Left | +Y | +Y |
-| Up | +Z | +Z |
-| Rotation | Right-handed | Right-handed |
+| Axis     | ROS (Autoware)      | CARLA (Unreal Engine) |
+|----------|---------------------|-----------------------|
+| Forward  | +X                  | +X                    |
+| Lateral  | +Y (Left)           | +Y (Right)            |
+| Up       | +Z                  | +Z                    |
+| Rotation | Right-handed        | Left-handed           |
+| Units    | meters, radians     | centimeters, degrees  |
 
-**Note**: Both use same coordinate system! But CARLA uses Unreal Engine units (cm), ROS uses meters.
+**⚠️ CRITICAL**: CARLA uses a **left-handed** coordinate system (inherited from Unreal Engine 4), while ROS/Autoware uses a **right-handed** coordinate system. This requires Y-axis inversion during conversion.
+
+**Coordinate Handedness Difference:**
+- **ROS (Right-handed)**: When looking down from +Z, positive rotation is counter-clockwise
+- **CARLA (Left-handed)**: When looking down from +Z, positive rotation is clockwise
+
+**Conversion Formula:**
 
 ```rust
 fn convert_ros_to_carla_transform(ros_tf: &Transform) -> carla::Transform {
     carla::Transform {
         location: carla::Location {
-            x: ros_tf.x * 100.0,  // m → cm
-            y: ros_tf.y * 100.0,
-            z: ros_tf.z * 100.0,
+            x: ros_tf.x * 100.0,   // m → cm
+            y: -ros_tf.y * 100.0,  // m → cm, LEFT/RIGHT FLIP (right-handed → left-handed)
+            z: ros_tf.z * 100.0,   // m → cm
         },
         rotation: carla::Rotation {
-            roll: ros_tf.roll.to_degrees(),    // rad → deg
-            pitch: ros_tf.pitch.to_degrees(),
-            yaw: ros_tf.yaw.to_degrees(),
+            roll: ros_tf.roll.to_degrees(),      // rad → deg
+            pitch: -ros_tf.pitch.to_degrees(),   // rad → deg, SIGN FLIP
+            yaw: -ros_tf.yaw.to_degrees(),       // rad → deg, SIGN FLIP
         },
+    }
+}
+
+fn convert_carla_to_ros_transform(carla_tf: &carla::Transform) -> Transform {
+    Transform {
+        x: carla_tf.location.x / 100.0,   // cm → m
+        y: -carla_tf.location.y / 100.0,  // cm → m, LEFT/RIGHT FLIP
+        z: carla_tf.location.z / 100.0,   // cm → m
+        roll: carla_tf.rotation.roll.to_radians(),     // deg → rad
+        pitch: -carla_tf.rotation.pitch.to_radians(),  // deg → rad, SIGN FLIP
+        yaw: -carla_tf.rotation.yaw.to_radians(),      // deg → rad, SIGN FLIP
     }
 }
 ```
 
+**Visual Example:**
+
+```
+ROS (Right-handed):          CARLA (Left-handed):
+      Z↑                           Z↑
+       |                            |
+       |                            |
+       o----→ X                     o----→ X
+      /                            /
+     / Y (Left)               Y (Right)
+    ↙                           ↙
+```
+
+### 4.3 Initial Pose Workflow from RViz
+
+**Background**: In Autoware's planning simulator, the initial vehicle pose is set interactively using RViz's "2D Pose Estimate" tool. The bridge should replicate this workflow for CARLA simulation.
+
+**Initial Pose Topic:**
+
+```
+Topic: /initialpose
+Type: geometry_msgs/msg/PoseWithCovarianceStamped
+QoS: Transient Local, Reliable
+```
+
+**Message Structure:**
+
+```rust
+geometry_msgs::msg::PoseWithCovarianceStamped {
+    header: Header {
+        stamp: Time,
+        frame_id: "map",  // Coordinate frame (typically "map")
+    },
+    pose: PoseWithCovariance {
+        pose: Pose {
+            position: Point { x, y, z },      // Position in map frame
+            orientation: Quaternion { x, y, z, w },  // Orientation
+        },
+        covariance: [f64; 36],  // Position and orientation uncertainty
+    }
+}
+```
+
+**RViz Interaction:**
+
+- User clicks "2D Pose Estimate" button (or presses 'P' key) in RViz toolbar
+- User clicks on map to set position and drags to set orientation
+- RViz publishes pose to `/initialpose` topic
+
+**Bridge Implementation:**
+
+```rust
+fn subscribe_to_initial_pose(node: &Arc<Node>, carla_world: Arc<World>) -> Result<()> {
+    let subscription = node.create_subscription(
+        "/initialpose",
+        rclrs::QOS_PROFILE_TRANSIENT_LOCAL.reliable(),
+        move |msg: geometry_msgs::msg::PoseWithCovarianceStamped| {
+            log::info!(
+                "Received initial pose: ({:.2}, {:.2}, {:.2})",
+                msg.pose.pose.position.x,
+                msg.pose.pose.position.y,
+                msg.pose.pose.position.z
+            );
+
+            // Convert ROS pose to CARLA transform
+            let carla_transform = convert_ros_pose_to_carla_transform(&msg.pose.pose);
+
+            // Spawn or teleport vehicle to new pose
+            match spawn_or_teleport_vehicle(&carla_world, &carla_transform) {
+                Ok(_) => log::info!("Vehicle spawned/teleported to initial pose"),
+                Err(e) => log::error!("Failed to set vehicle pose: {}", e),
+            }
+        },
+    )?;
+
+    Ok(())
+}
+
+fn convert_ros_pose_to_carla_transform(pose: &geometry_msgs::msg::Pose) -> carla::Transform {
+    // Extract position
+    let location = carla::Location {
+        x: pose.position.x * 100.0,   // m → cm
+        y: -pose.position.y * 100.0,  // m → cm, LEFT/RIGHT FLIP
+        z: pose.position.z * 100.0,   // m → cm
+    };
+
+    // Convert quaternion to Euler angles (ROS convention)
+    let (roll, pitch, yaw) = quaternion_to_euler(
+        pose.orientation.x,
+        pose.orientation.y,
+        pose.orientation.z,
+        pose.orientation.w,
+    );
+
+    // Convert to CARLA rotation with sign flips
+    let rotation = carla::Rotation {
+        roll: roll.to_degrees(),
+        pitch: -pitch.to_degrees(),   // SIGN FLIP
+        yaw: -yaw.to_degrees(),       // SIGN FLIP
+    };
+
+    carla::Transform { location, rotation }
+}
+
+fn spawn_or_teleport_vehicle(
+    world: &World,
+    transform: &carla::Transform,
+) -> Result<Vehicle> {
+    // Check if vehicle already exists
+    if let Some(vehicle) = get_existing_ego_vehicle(world) {
+        log::info!("Teleporting existing vehicle to new pose");
+        vehicle.set_transform(transform)?;
+        Ok(vehicle)
+    } else {
+        log::info!("Spawning new vehicle at initial pose");
+        spawn_vehicle_from_autoware(world, transform)?
+    }
+}
+```
+
+**Startup Sequence Options:**
+
+**Option A - Wait for Initial Pose:**
+1. Bridge starts and detects Autoware
+2. Waits for `/initialpose` message before spawning vehicle
+3. User sets initial pose in RViz → vehicle spawns in CARLA
+
+**Option B - Default Spawn with Update:**
+1. Bridge spawns vehicle at CARLA's default spawn point
+2. Subscribes to `/initialpose` for updates
+3. When user sets pose in RViz → vehicle teleports in CARLA
+
+**Recommendation**: Use **Option B** for better user experience. The bridge can spawn a vehicle immediately and update its pose when the user provides one. This matches Autoware's behavior where the vehicle model is visible in RViz before setting initial pose.
+
+**Coordinate Frame Considerations:**
+
+- `/initialpose` uses the `map` frame (Autoware's global coordinate system)
+- CARLA uses its own world coordinate system
+- For proper alignment, the bridge needs to know the map origin in CARLA coordinates
+- **Simplest approach**: Assume map and CARLA world origins align (both at 0,0,0)
+- **Advanced approach**: Add ROS parameter for map origin offset
+
+```yaml
+carla_bridge:
+  ros__parameters:
+    map_origin:
+      x: 0.0  # CARLA X coordinate of map origin
+      y: 0.0  # CARLA Y coordinate of map origin
+      z: 0.0  # CARLA Z coordinate of map origin
+      yaw: 0.0  # Rotation offset
+```
+
 ---
 
-## 5. Custom Sensor Kit Package Design
+## 5. CARLA Map Export to Autoware
 
-### 5.1 Why Custom Sensor Kit?
+**Challenge**: Autoware requires map data (road network topology and 3D point cloud) to operate. CARLA provides maps in OpenDRIVE format, which must be converted to Autoware-compatible formats.
+
+### 5.1 Map Data Requirements
+
+**Autoware Map Components:**
+
+1. **Lanelet2 Map** (.osm file)
+   - Road network topology (lanes, intersections, traffic rules)
+   - Format: XML-based Lanelet2 format
+   - Loaded by `map_loader` node
+   - Published to: `/map/vector_map` and `/lanelet2_map`
+
+2. **Point Cloud Map** (.pcd file)
+   - 3D environmental structure for localization
+   - Format: PCL Point Cloud Data format
+   - Loaded by `map_loader` node
+   - Published to: `/map/pointcloud_map`
+
+**CARLA Map Format:**
+- OpenDRIVE (.xodr) - Road network definition
+- No native point cloud (must be generated from simulation)
+
+### 5.2 Approach 1: Offline Export (File-Based)
+
+**Overview**: Export CARLA map data to files that Autoware can load using standard `map_loader` package.
+
+**Step 1 - Export OpenDRIVE from CARLA:**
+
+```python
+# Python script to export CARLA map
+import carla
+
+client = carla.Client('localhost', 2000)
+world = client.get_world()
+carla_map = world.get_map()
+
+# Save OpenDRIVE XML
+opendrive_xml = carla_map.to_opendrive()
+with open('Town01.xodr', 'w') as f:
+    f.write(opendrive_xml)
+```
+
+**Step 2 - Convert OpenDRIVE to Lanelet2:**
+
+**Tool 1: opendrive2lanelet**
+- GitHub: https://github.com/fzi-forschungszentrum-informatik/opendrive2lanelet
+- Conversion: .xodr → .osm (Lanelet2)
+
+```bash
+# Install
+pip install opendrive2lanelet
+
+# Convert
+opendrive2lanelet Town01.xodr -o Town01.osm
+```
+
+**Tool 2: AssuremappingTools (TIER IV)**
+- GitHub: https://github.com/tier4/autoware_tools/tree/main/map/autoware_lanelet2_map_validator
+- Better integration with Autoware
+
+**Known Limitations:**
+- ⚠️ OpenDRIVE to Lanelet2 conversion is not perfect
+- ⚠️ Traffic light positions may be missing or incorrect
+- ⚠️ Lane width/boundary interpretation differences
+- ⚠️ Requires manual validation and corrections
+
+**Step 3 - Generate Point Cloud Map:**
+
+**Option A - Use CARLA Bridge to Record Point Cloud:**
+
+```rust
+// Spawn LiDAR sensor in CARLA
+// Drive vehicle around map to collect points
+// Save accumulated point cloud to .pcd file
+
+fn record_map_pointcloud(world: &World, duration: Duration) -> Result<()> {
+    let lidar_bp = world.blueprint_library()
+        .find("sensor.lidar.ray_cast")?;
+
+    // Configure high-density LiDAR for mapping
+    lidar_bp.set_attribute("channels", "128");
+    lidar_bp.set_attribute("range", "200.0");
+    lidar_bp.set_attribute("points_per_second", "2560000");
+
+    let mut accumulated_points = Vec::new();
+
+    // Attach to vehicle and drive around
+    let subscription = lidar.listen(move |point_cloud| {
+        accumulated_points.extend(point_cloud.points());
+    });
+
+    // Wait for recording duration
+    std::thread::sleep(duration);
+
+    // Save to PCD file
+    save_to_pcd("Town01.pcd", &accumulated_points)?;
+    Ok(())
+}
+```
+
+**Option B - Use Semantic Segmentation:**
+
+```python
+# Generate point cloud from semantic camera
+# Place cameras at multiple viewpoints
+# Combine depth and semantic info to create map
+```
+
+**Step 4 - Place Files in Autoware Map Directory:**
+
+```bash
+mkdir -p ~/autoware_map/carla_town01/
+cp Town01.osm ~/autoware_map/carla_town01/lanelet2_map.osm
+cp Town01.pcd ~/autoware_map/carla_town01/pointcloud_map.pcd
+```
+
+**Step 5 - Launch Autoware with CARLA Map:**
+
+```bash
+cd autoware_repo && \
+. install/setup.sh && \
+play_launch launch \
+  autoware_launch planning_simulator.launch.xml \
+  map_path:=$HOME/autoware_map/carla_town01 \
+  vehicle_model:=sample_vehicle \
+  sensor_model:=carla_sensor_kit
+```
+
+**Pros:**
+- ✅ Uses standard Autoware workflow
+- ✅ No code changes to bridge
+- ✅ Maps can be pre-generated and shared
+- ✅ Works offline (no CARLA needed after export)
+
+**Cons:**
+- ❌ Manual conversion process
+- ❌ Potential conversion errors require manual fixes
+- ❌ Point cloud recording requires driving around map
+- ❌ Static map (doesn't update if CARLA map changes)
+
+### 5.3 Approach 2: Runtime Topic Publishing
+
+**Overview**: Bridge directly publishes map data to Autoware's map loader topics, bypassing file-based loading.
+
+**Map Loader Topics:**
+
+```
+Topic: /map/vector_map
+Type: autoware_lanelet2_msgs/msg/MapBin
+QoS: Transient Local, Reliable
+
+Topic: /map/pointcloud_map
+Type: sensor_msgs/msg/PointCloud2
+QoS: Transient Local, Reliable
+```
+
+**Implementation Approach:**
+
+```rust
+fn publish_carla_map_to_autoware(
+    node: &Arc<Node>,
+    carla_world: &World,
+) -> Result<()> {
+    // Get CARLA map
+    let carla_map = carla_world.get_map();
+    let opendrive_xml = carla_map.to_opendrive();
+
+    // Convert OpenDRIVE to Lanelet2 (in-memory)
+    let lanelet2_map = convert_opendrive_to_lanelet2(&opendrive_xml)?;
+
+    // Serialize to MapBin message
+    let map_bin_msg = autoware_lanelet2_msgs::msg::MapBin {
+        header: create_header("map"),
+        version_map_format: "lanelet2_map".to_string(),
+        format_version: "1.0".to_string(),
+        data: lanelet2_map.serialize()?,
+    };
+
+    // Publish vector map (transient local = latching)
+    let vector_map_pub = node.create_publisher(
+        "/map/vector_map",
+        rclrs::QOS_PROFILE_TRANSIENT_LOCAL.reliable()
+    )?;
+    vector_map_pub.publish(&map_bin_msg)?;
+
+    // Generate point cloud from CARLA
+    let point_cloud = generate_pointcloud_from_carla(&carla_world)?;
+
+    // Publish point cloud map
+    let pcd_map_pub = node.create_publisher(
+        "/map/pointcloud_map",
+        rclrs::QOS_PROFILE_TRANSIENT_LOCAL.reliable()
+    )?;
+    pcd_map_pub.publish(&point_cloud)?;
+
+    log::info!("Published CARLA map to Autoware");
+    Ok(())
+}
+
+fn generate_pointcloud_from_carla(world: &World) -> Result<sensor_msgs::msg::PointCloud2> {
+    // Approach 1: Use CARLA semantic LiDAR to scan environment
+    // Approach 2: Raycasting from multiple viewpoints
+    // Approach 3: Extract mesh geometry and convert to points
+
+    // This is complex and may require significant development
+    unimplemented!("Point cloud generation from CARLA mesh")
+}
+```
+
+**Pros:**
+- ✅ Fully automated (no manual steps)
+- ✅ Dynamic map updates possible
+- ✅ No file management
+- ✅ Consistent map between CARLA and Autoware
+
+**Cons:**
+- ❌ Complex implementation (OpenDRIVE → Lanelet2 conversion in Rust)
+- ❌ Point cloud generation non-trivial
+- ❌ Requires CARLA running for map loading
+- ❌ May have memory overhead for large maps
+
+### 5.4 Recommendation
+
+**Phase 1 (Immediate)**: Use **Approach 1 (Offline Export)** for initial integration
+- Focus on getting basic workflow working
+- Use manually converted maps
+- Document conversion process
+- Start with small maps (Town01, Town03)
+
+**Phase 2 (Future Enhancement)**: Add **Approach 2 (Runtime Publishing)** as optional feature
+- Implement OpenDRIVE to Lanelet2 converter in Rust
+- Research point cloud generation methods
+- Provide CLI flag: `--publish-map-topics`
+
+**Example Workflow for Phase 1:**
+
+```bash
+# 1. Export CARLA map
+python scripts/export_carla_map.py --town Town01
+
+# 2. Convert to Lanelet2 (may require manual edits)
+opendrive2lanelet Town01.xodr -o Town01.osm
+# Edit Town01.osm if needed
+
+# 3. Generate point cloud (drive in CARLA with recording)
+make run -- --map-name Town01 --record-pointcloud --duration 300
+
+# 4. Place in Autoware map directory
+make install-map MAP=Town01
+
+# 5. Launch Autoware
+cd scripts/autoware && make launch MAP_PATH=$HOME/autoware_map/carla_town01
+
+# 6. Launch bridge
+make run -- --map-name Town01 --vehicle-name ego_vehicle
+```
+
+**Documentation TODO:**
+- Create `docs/map-export-guide.md` with step-by-step instructions
+- Add Python scripts to `scripts/map_export/`
+- Document known conversion issues and workarounds
+- Provide pre-converted maps for common CARLA towns
+
+---
+
+## 6. Custom Sensor Kit Package Design
+
+### 6.1 Why Custom Sensor Kit?
 
 **Problem**: Autoware's default sensor kits may not perfectly match CARLA's sensor capabilities.
 
 **Solution**: Create `carla_sensor_kit` package with CARLA-optimized sensor configurations.
 
-### 5.2 Package Structure
+### 6.2 Package Structure
 
 ```
 src/interface/carla_sensor_kit_launch/
@@ -427,7 +864,7 @@ src/interface/carla_sensor_kit_launch/
 └── package.xml
 ```
 
-### 5.3 Example sensor_kit.xacro for CARLA
+### 6.3 Example sensor_kit.xacro for CARLA
 
 ```xml
 <?xml version="1.0"?>
@@ -493,7 +930,7 @@ src/interface/carla_sensor_kit_launch/
 </robot>
 ```
 
-### 5.4 CARLA Sensor Mappings Config
+### 6.4 CARLA Sensor Mappings Config
 
 ```yaml
 # carla_sensor_mappings.yaml
@@ -580,7 +1017,7 @@ sensors:
     topic: /sensing/gnss/pose
 ```
 
-### 5.5 Launch File for CARLA Sensor Kit
+### 6.5 Launch File for CARLA Sensor Kit
 
 ```xml
 <!-- carla_sensor_kit.launch.xml -->
@@ -598,9 +1035,9 @@ sensors:
 
 ---
 
-## 6. Implementation Recommendations
+## 7. Implementation Recommendations
 
-### 6.1 Phase 1: Basic Detection and Parsing
+### 7.1 Phase 1: Basic Detection and Parsing
 
 **Deliverables:**
 1. ✅ rclrs subscriber for `/robot_description`
@@ -611,7 +1048,7 @@ sensors:
 
 **Code Location:** `src/autoware_carla_bridge/src/autoware_detection.rs`
 
-### 6.2 Phase 2: TF Integration
+### 7.2 Phase 2: TF Integration
 
 **Deliverables:**
 1. ✅ `/tf_static` subscriber
@@ -622,7 +1059,7 @@ sensors:
 
 **Code Location:** `src/autoware_carla_bridge/src/tf_bridge.rs`
 
-### 6.3 Phase 3: CARLA Spawning
+### 7.3 Phase 3: CARLA Spawning
 
 **Deliverables:**
 1. ✅ Vehicle spawner from Autoware config
@@ -633,7 +1070,7 @@ sensors:
 
 **Code Location:** `src/autoware_carla_bridge/src/carla_spawner.rs`
 
-### 6.4 Phase 4: Custom Sensor Kit
+### 7.4 Phase 4: Custom Sensor Kit
 
 **Deliverables:**
 1. ✅ carla_sensor_kit_launch package
@@ -645,7 +1082,7 @@ sensors:
 
 **Code Location:** `src/interface/carla_sensor_kit_launch/`
 
-### 6.5 Phase 5: End-to-End Integration
+### 7.5 Phase 5: End-to-End Integration
 
 **Deliverables:**
 1. ✅ Launch file orchestration
@@ -658,9 +1095,9 @@ sensors:
 
 ---
 
-## 7. Alternative Approaches Considered
+## 8. Alternative Approaches Considered
 
-### 7.1 Manual Configuration (Rejected)
+### 8.1 Manual Configuration (Rejected)
 
 **Approach**: Require users to manually specify sensors in bridge config file.
 
@@ -675,7 +1112,7 @@ sensors:
 
 **Decision**: Rejected in favor of automatic detection.
 
-### 7.2 Parameter Server Query (Considered)
+### 8.2 Parameter Server Query (Considered)
 
 **Approach**: Query ROS 2 parameter server for sensor parameters.
 
@@ -689,7 +1126,7 @@ sensors:
 
 **Decision**: Use as supplementary source, not primary. Config file + URDF parsing is more reliable.
 
-### 7.3 CARLA-Specific ROS Parameters (Recommended for Phase 4)
+### 8.3 CARLA-Specific ROS Parameters (Recommended for Phase 4)
 
 **Approach**: Add ROS parameters to bridge for CARLA-specific overrides.
 
@@ -713,16 +1150,16 @@ carla_bridge:
 
 ---
 
-## 8. Key Recommendations Summary
+## 9. Key Recommendations Summary
 
-### 8.1 Immediate Actions
+### 9.1 Immediate Actions
 
 1. **✅ Start with Phase 1**: Implement /robot_description subscriber and URDF parsing
 2. **✅ Create carla_sensor_mappings.yaml**: Define CARLA blueprint mappings for common sensors
 3. **✅ Test with sample_sensor_kit**: Validate detection and parsing with Autoware's default kit
 4. **✅ Document workflow**: Update README with Autoware integration instructions
 
-### 8.2 Architecture Decisions
+### 9.2 Architecture Decisions
 
 | Decision | Rationale |
 |----------|-----------|
@@ -732,7 +1169,7 @@ carla_bridge:
 | Custom sensor kit optional | Start with sample_sensor_kit, add carla_sensor_kit for optimization |
 | rclrs native implementation | Stay consistent with existing bridge architecture |
 
-### 8.3 Open Questions for User
+### 9.3 Open Questions for User
 
 1. **Vehicle Selection**: Should bridge auto-select CARLA vehicle blueprint, or make it configurable via ROS param?
    - **Recommendation**: Configurable via `carla_sensor_mappings.yaml` → `vehicle.blueprint`
@@ -755,21 +1192,21 @@ carla_bridge:
 
 ---
 
-## 9. Testing Strategy
+## 10. Testing Strategy
 
-### 9.1 Unit Tests
+### 10.1 Unit Tests
 - URDF parsing with sample robot_description
 - Sensor classification logic
 - Transform coordinate conversions
 - Config file parsing
 
-### 9.2 Integration Tests
+### 10.2 Integration Tests
 - Autoware detection when planning_simulator running
 - Sensor spawning in CARLA
 - Data flow: CARLA → Bridge → ROS topics
 - Control flow: Autoware → Bridge → CARLA vehicle
 
-### 9.3 End-to-End Validation
+### 10.3 End-to-End Validation
 - Launch Autoware planning_simulator
 - Launch CARLA
 - Launch bridge (auto-detects and spawns)
@@ -778,19 +1215,19 @@ carla_bridge:
 
 ---
 
-## 10. Documentation Requirements
+## 11. Documentation Requirements
 
-### 10.1 User Documentation
+### 11.1 User Documentation
 - **Quick Start Guide**: Autoware + CARLA + Bridge setup
 - **Sensor Kit Guide**: How to create custom kits
 - **Troubleshooting**: Common issues and solutions
 
-### 10.2 Developer Documentation
+### 11.2 Developer Documentation
 - **Architecture Diagram**: System components and data flow
 - **API Reference**: Key functions and data structures
 - **Extension Guide**: How to add new sensor types
 
-### 10.3 Configuration Examples
+### 11.3 Configuration Examples
 - **Example 1**: Using sample_sensor_kit
 - **Example 2**: Custom sensor configuration
 - **Example 3**: Multi-vehicle with domain isolation
