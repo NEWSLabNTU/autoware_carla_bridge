@@ -1,8 +1,8 @@
-# Core Migration (Phases 0-2)
+# Infrastructure
 
-This document covers the completed core migration phases from Zenoh to rclrs.
+This document covers the core infrastructure work for the autoware_carla_bridge project, including environment setup, core migration from Zenoh to rclrs, and carla-rust integration.
 
-**Status**: ✅ **COMPLETE** - All phases runtime verified
+**Status**: ✅ **COMPLETE** - All infrastructure phases complete
 
 ---
 
@@ -88,7 +88,7 @@ This document covers the completed core migration phases from Zenoh to rclrs.
 - [x] ✅ Examine generated `.cargo/config.toml`:
   - ✅ Generated at project root with ROS message patches
   - ✅ Contains paths to all required message crates (50+ packages)
-  - ✅ Verified patches include: std_msgs, sensor_msgs, geometry_msgs, autoware_vehicle_msgs, tier4_vehicle_msgs, tier4_control_msgs
+  - ✅ Verified patches include: std_msgs, sensor_msgs, geometry_msgs, autoware_vehicle_msgs, tier4_vehicle_msgs
 
 ### 1.2 Update Dependencies
 
@@ -209,116 +209,172 @@ Files: `src/autoware.rs`, `src/utils.rs`
 
 ---
 
-## Phase 2: Clock and Simple Publishers
+## Phase 7: carla-rust Integration and Enhancements
 
-**Objective**: Migrate the simplest publisher (clock) as a proof of concept.
+**Objective**: Integrate local carla-rust repository for enhanced CARLA API access.
 
-**Status**: ✅ **COMPLETE** - Code migration (2025-10-22), Runtime verified (2025-10-31)
+**Status**: ✅ **COMPLETE** (2025-10-29 to 2025-11-04)
 
-**Duration**: N/A (integrated with Phase 1, testing completed separately)
+**Duration**: 2-3 days
 
-### 2.1 Migrate Clock Publisher
+### 7.1 Local Repository Integration - ✅ COMPLETE
 
-File: `src/clock.rs`
-
-- [x] ✅ Review current Zenoh implementation
-- [x] ✅ Refactor to use rclrs:
-  ```rust
-  pub struct SimulatorClock {
-      publisher_clock: Arc<rclrs::Publisher<builtin_interfaces::msg::Time>>,
-  }
+- [x] ✅ Configure local path dependency in `Cargo.toml`:
+  ```toml
+  carla = { version = "0.12.0", path = "../../../carla-rust/carla" }
   ```
-- [x] ✅ Update `new()` function:
-  ```rust
-  pub fn new(node: rclrs::Node) -> Result<SimulatorClock> {
-      let publisher_clock = node.create_publisher("/clock")?;
-      Ok(SimulatorClock {
-          publisher_clock: Arc::new(publisher_clock),
-      })
-  }
-  ```
-- [x] ✅ Update `publish_clock()` function:
-  ```rust
-  pub fn publish_clock(&self, timestamp: Option<f64>) -> Result<()> {
-      let time = if let Some(sec) = timestamp {
-          builtin_interfaces::msg::Time {
-              sec: sec.floor() as i32,
-              nanosec: (sec.fract() * 1_000_000_000_f64) as u32,
-          }
-      } else {
-          let now = SystemTime::now()
-              .duration_since(UNIX_EPOCH)
-              .expect("Unable to get current time");
-          builtin_interfaces::msg::Time {
-              sec: now.as_secs() as i32,
-              nanosec: now.subsec_nanos(),
-          }
-      };
-      self.publisher_clock.publish(time)?;
-      Ok(())
-  }
-  ```
-- [x] ✅ Remove CDR serialization
-- [x] ✅ Remove attachment logic
-- [x] ✅ Remove mode handling
+- [x] ✅ Verify build succeeds with local dependency
+- [x] ✅ Test with carla-rust multi-version support (CARLA_VERSION env var)
+- [x] ✅ Document integration in `docs/carla-rust-integration.md`
 
-### 2.2 Update Utility Functions
+**Benefits**:
+- Access to latest carla-rust APIs (not yet on crates.io)
+- Multi-version CARLA support (0.9.14, 0.9.15, 0.9.16)
+- Ability to contribute improvements back to carla-rust
+- Local debugging and development
 
-File: `src/utils.rs`
+### 7.2 Build System Configuration - ✅ COMPLETE
 
-- [x] ✅ Keep `is_bigendian()` function
-- [x] ✅ Update `create_ros_header()` to work with rclrs message types:
-  ```rust
-  pub fn create_ros_header(timestamp: Option<f64>) -> std_msgs::msg::Header {
-      let time = if let Some(sec) = timestamp {
-          builtin_interfaces::msg::Time {
-              sec: sec.floor() as i32,
-              nanosec: (sec.fract() * 1_000_000_000_f64) as u32,
-          }
-      } else {
-          let now = SystemTime::now()
-              .duration_since(UNIX_EPOCH)
-              .expect("Unable to get current time");
-          builtin_interfaces::msg::Time {
-              sec: now.as_secs() as i32,
-              nanosec: now.subsec_nanos(),
-          }
-      };
-      std_msgs::msg::Header {
-          stamp: time,
-          frame_id: "".to_string(),
-      }
-  }
-  ```
-
-### 2.3 Test Clock Publisher
-
-- [x] ✅ Build the project: `make build`
-- [x] ✅ Start CARLA simulator (port 3000)
-- [x] ✅ Run the bridge: `make run` (connects to CARLA on port 3000)
-- [x] ✅ In another terminal, verify clock topic:
+- [x] ✅ Configure direnv for automatic environment setup
+- [x] ✅ Update `.envrc` with CARLA_VERSION and paths
+- [x] ✅ Simplify Makefile (remove manual sourcing)
+- [x] ✅ Test build process:
   ```bash
-  source /opt/ros/humble/setup.bash
-  ros2 topic list | grep clock
-  ros2 topic echo /clock
-  ros2 topic hz /clock
+  # Stage 1: Build ros2_rust (rosidl_generator_rs)
+  make build-ros2-rust
+
+  # Stage 2: Build interface packages (generates .cargo/config.toml)
+  make build-interfaces
+
+  # Stage 3: Build autoware_carla_bridge
+  make build-bridge
+
+  # Or all at once:
+  make build
   ```
-- [x] ✅ Verify clock publishes successfully *(verified 2025-10-31)*
 
-**Deliverables**:
-- [x] ✅ Working clock publisher using rclrs
-- [x] ✅ Updated utility functions
-- [x] ✅ **Verification test results - PASSED** *(2025-10-31)*
+**Automation**:
+- direnv automatically sources ROS 2 and Autoware environments
+- CARLA_VERSION environment variable selects CARLA version at build time
+- Three-stage build ensures correct dependency resolution
 
-**Success Criteria**:
-- ✅ Clock publisher compiles and integrates with bridge
-- ✅ No Zenoh dependencies or CDR serialization
-- ✅ Clock topic appears in `ros2 topic list` - **VERIFIED**
-- ✅ Clock messages publish successfully - **VERIFIED**
-- ✅ Bridge connects to CARLA and runs - **VERIFIED**
+### 7.3 Actor Cleanup Implementation - ⚠️ DEFERRED
+
+**Note**: Actor cleanup APIs are available in carla-rust 0.12.0 but implementation is deferred to future phases when needed.
+
+**Available APIs**:
+- `ActorBase::destroy()` - Explicit actor cleanup
+- Replaces manual "drop and hope" pattern
+- Ensures resources freed immediately
+
+**Future Use Cases**:
+- Phase 4: Vehicle lifecycle management (spawn/cleanup)
+- Phase 9: Testing cleanup between test runs
+- Error recovery scenarios
+
+### 7.4 Documentation - ✅ COMPLETE
+
+- [x] ✅ Create `docs/carla-rust-integration.md` (386 lines)
+  - Integration setup instructions
+  - Multi-version CARLA support guide
+  - Environment configuration
+  - Build troubleshooting
+  - API usage examples
+
+- [x] ✅ Update roadmap with Phase 7 tasks
+- [x] ✅ Mark Phase 2 as runtime verified in roadmap
+
+### 7.5 Advanced Features - ⚠️ DEFERRED TO FUTURE
+
+The following enhancements are available but not yet implemented:
+
+**Efficient World Loading**:
+- `Client::load_world_if_different()` - Avoids unnecessary world reloads
+- Checks current world name before loading
+- Reduces testing overhead
+
+**Debug Data Recording** (Phase 9):
+- `Client::start_recorder()` / `stop_recorder()` - Record simulation
+- `Client::show_recorder_file_info()` - Inspect recordings
+- `Client::replay_file()` - Replay recorded sessions
+- Useful for reproducible bug reports and integration testing
+
+**Multi-Version Support**:
+- Use `CARLA_VERSION` env var to target specific CARLA version
+- Build-time conditional compilation for version-specific APIs
+- Supports 0.9.14, 0.9.15, 0.9.16
+
+---
+
+## Build System Overview
+
+### Three-Stage Build Process
+
+The project uses a three-stage colcon build to properly generate ROS message bindings:
+
+**Stage 1: Build ros2_rust packages**
+```bash
+make build-ros2-rust
+```
+- Builds rosidl_generator_rs (Rust message generator)
+- Installs generator into colcon workspace
+- Required before building any message packages
+
+**Stage 2: Build interface packages**
+```bash
+make build-interfaces
+```
+- Builds ROS 2 message packages (std_msgs, sensor_msgs, etc.)
+- Generates Rust bindings for all message types
+- Generates `.cargo/config.toml` with message package patches
+- Includes Autoware message packages (autoware_vehicle_msgs, tier4_vehicle_msgs, etc.)
+
+**Stage 3: Build autoware_carla_bridge**
+```bash
+make build-bridge
+```
+- Builds the main bridge application
+- Uses message types from Stage 2 via .cargo/config.toml patches
+- Links against rclrs and message crates
+
+**Incremental Builds**:
+After first complete build, only modified packages rebuild:
+```bash
+make build  # Runs all 3 stages, but only rebuilds changed packages
+```
+
+### Environment Configuration
+
+**direnv** automatically configures:
+- ROS 2 Humble environment (`/opt/ros/humble/setup.bash`)
+- Autoware environment (`src/external/autoware/install/setup.bash`)
+- Local colcon workspace (`install/setup.bash`)
+- CARLA_VERSION environment variable
+- Additional build paths and flags
+
+**Manual activation** (if direnv not installed):
+```bash
+source /opt/ros/humble/setup.bash
+source src/external/autoware/install/setup.bash
+source install/setup.bash
+export CARLA_VERSION=0.9.16  # or 0.9.14, 0.9.15
+```
+
+### Key Files
+
+- **package.xml** - ROS 2 package manifest (colcon metadata)
+- **.cargo/config.toml** - Generated cargo patches for message packages
+- **.envrc** - direnv configuration for automatic environment setup
+- **Makefile** - Build targets for three-stage process
+- **Cargo.toml** (workspace) - Workspace configuration
+- **src/autoware_carla_bridge/Cargo.toml** - Bridge package dependencies
 
 ---
 
 **Document Version**: 1.0
-**Last Updated**: 2025-11-02
-**Related Documents**: [roadmap.md](../roadmap.md), [meta.md](meta.md)
+**Last Updated**: 2025-11-04
+**Related Documents**:
+- [roadmap.md](../roadmap.md) - Main roadmap index
+- [bridge.md](bridge.md) - Data bridge implementation (Phases 2, 5, 6, 8)
+- [integration.md](integration.md) - Autoware integration (Phases 3-4)
+- [testing-and-release.md](testing-and-release.md) - Testing and release (Phases 9-10)
