@@ -1,0 +1,77 @@
+# Vehicle configuration for autoware_carla_bridge
+# This file specifies the vehicle blueprint and sensor mappings for spawning in CARLA
+
+# Vehicle blueprint from CARLA's blueprint library
+vehicle:
+  blueprint: "vehicle.tesla.model3"
+  # Alternative blueprints:
+  # - vehicle.toyota.prius
+  # - vehicle.nissan.patrol
+  # - vehicle.audi.a2
+
+# Sensor mappings from Autoware URDF to CARLA blueprints
+# Format: <sensor_link_name>: <carla_blueprint_id>
+sensors:
+  # LiDAR sensors
+  velodyne_top:
+    blueprint: "sensor.lidar.ray_cast"
+    parameters:
+      channels: "128"
+      range: "130.0"
+      points_per_second: "1280000"
+      rotation_frequency: "10.0"
+      upper_fov: "22.5"
+      lower_fov: "-22.5"
+
+  velodyne_left:
+    blueprint: "sensor.lidar.ray_cast"
+    parameters:
+      channels: "32"
+      range: "100.0"
+      points_per_second: "640000"
+      rotation_frequency: "10.0"
+
+  velodyne_right:
+    blueprint: "sensor.lidar.ray_cast"
+    parameters:
+      channels: "32"
+      range: "100.0"
+      points_per_second: "640000"
+      rotation_frequency: "10.0"
+
+  # Camera sensors
+  camera0:
+    blueprint: "sensor.camera.rgb"
+    parameters:
+      image_size_x: "800"
+      image_size_y: "400"
+      fov: "74.5"
+      sensor_tick: "0.033"
+
+  camera1:
+    blueprint: "sensor.camera.rgb"
+    parameters:
+      image_size_x: "800"
+      image_size_y: "400"
+      fov: "74.5"
+      sensor_tick: "0.033"
+
+  # IMU sensor
+  imu_link:
+    blueprint: "sensor.other.imu"
+    parameters:
+      sensor_tick: "0.01"
+
+  # GNSS sensor
+  gnss_link:
+    blueprint: "sensor.other.gnss"
+    parameters:
+      sensor_tick: "0.1"
+
+# Map origin offset (CARLA coordinates relative to ROS map frame)
+# Default: assume map origin = CARLA (0,0,0)
+map_origin:
+  x: 0.0
+  y: 0.0
+  z: 0.0
+  yaw: 0.0
