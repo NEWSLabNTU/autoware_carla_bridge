@@ -2,11 +2,10 @@ use std::{convert::Infallible, mem, str::FromStr, sync::Arc};
 
 use carla::{
     client::{ActorBase, Sensor},
-    geom::Location,
     sensor::{
         data::{
-            Color, GnssMeasurement, Image as CarlaImage, ImuMeasurement, LidarDetection,
-            LidarMeasurement, SemanticLidarDetection, SemanticLidarMeasurement,
+            Color, GnssMeasurement, Image as CarlaImage, ImuMeasurement, LidarMeasurement,
+            SemanticLidarMeasurement,
         },
         SensorDataBase,
     },
@@ -65,14 +64,12 @@ impl SensorBridge {
         let sensor_id = actor.id();
         let sensor_type_id = actor.type_id();
 
-        let mut vehicle_name = actor
+        // Check if sensor has a parent (should have one if attached to vehicle)
+        let _parent = actor
             .parent()
-            .ok_or(BridgeError::OwnerlessSensor { sensor_id })?
-            .attributes()
-            .iter()
-            .find(|attr| attr.id() == "role_name")
-            .ok_or(BridgeError::CarlaIssue("'role_name' attribute is missing"))?
-            .value_string();
+            .ok_or(BridgeError::OwnerlessSensor { sensor_id })?;
+
+        // Get sensor name
         let sensor_name = actor
             .attributes()
             .iter()
@@ -80,19 +77,13 @@ impl SensorBridge {
             .map(|attr| attr.value_string())
             .unwrap_or_else(|| generate_sensor_name(&actor));
 
-        // Remove "autoware_" in role name
-        if !vehicle_name.starts_with("autoware_") {
-            return Err(BridgeError::Npc {
-                npc_role_name: vehicle_name,
-            });
-        }
-        vehicle_name = vehicle_name.replace("autoware_", "");
-
-        log::info!("Detected a sensor '{sensor_name}' on '{vehicle_name}'");
+        // Parse sensor type
         let sensor_type: SensorType = sensor_type_id.parse().or(Err(BridgeError::CarlaIssue(
             "Unable to recognize sensor type",
         )))?;
-        Ok(BridgeType::Sensor(vehicle_name, sensor_type, sensor_name))
+
+        log::info!("Detected sensor '{sensor_name}' (type: {:?})", sensor_type);
+        Ok(BridgeType::Sensor(sensor_type, sensor_name))
     }
 
     pub fn new(
@@ -101,9 +92,9 @@ impl SensorBridge {
         bridge_type: BridgeType,
         autoware: &Autoware,
     ) -> Result<SensorBridge> {
-        let (vehicle_name, sensor_type, sensor_name) = match bridge_type {
-            BridgeType::Sensor(v, t, s) => (v, t, s),
-            _ => panic!("Should never happen!"),
+        let (sensor_type, sensor_name) = match bridge_type {
+            BridgeType::Sensor(t, s) => (t, s),
+            _ => panic!("SensorBridge::new called with non-Sensor bridge type!"),
         };
 
         let key_list = autoware.get_sensors_key(sensor_type, &sensor_name);
@@ -135,7 +126,7 @@ impl SensorBridge {
         }
 
         Ok(SensorBridge {
-            _vehicle_name: vehicle_name,
+            _vehicle_name: String::new(), // No vehicle name in 1-to-1 mode
             _sensor_type: sensor_type,
             _actor: actor,
             _sensor_name: sensor_name,
@@ -410,10 +401,8 @@ fn publish_lidar(
     let data: Vec<_> = lidar_data
         .iter()
         .flat_map(|det| {
-            let LidarDetection {
-                point: Location { x, y, z },
-                intensity,
-            } = *det;
+            let (x, y, z) = (det.point.x, det.point.y, det.point.z);
+            let intensity = det.intensity;
             [y, x, z, intensity]
         })
         .flat_map(|elem| elem.to_ne_bytes())
@@ -477,12 +466,10 @@ fn publish_semantic_lidar(
     let data: Vec<_> = lidar_data
         .iter()
         .flat_map(|det| {
-            let SemanticLidarDetection {
-                point: Location { x, y, z },
-                cos_inc_angle,
-                object_idx,
-                object_tag,
-            } = *det;
+            let (x, y, z) = (det.point.x, det.point.y, det.point.z);
+            let cos_inc_angle = det.cos_inc_angle;
+            let object_idx = det.object_idx;
+            let object_tag = det.object_tag;
             [
                 y.to_ne_bytes(),
                 x.to_ne_bytes(),

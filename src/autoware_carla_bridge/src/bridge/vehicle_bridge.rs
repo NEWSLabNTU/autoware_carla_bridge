@@ -9,11 +9,7 @@ use carla::{
 use interp::{interp, InterpMode};
 
 use super::actor_bridge::{ActorBridge, BridgeType};
-use crate::{
-    autoware::Autoware,
-    error::{BridgeError, Result},
-    utils,
-};
+use crate::{autoware::Autoware, error::Result, utils};
 
 pub struct VehicleBridge {
     vehicle_name: String,
@@ -52,27 +48,10 @@ pub struct VehicleBridge {
 }
 
 impl VehicleBridge {
-    pub fn get_bridge_type(actor: Vehicle) -> Result<BridgeType> {
-        let mut vehicle_name = actor
-            .attributes()
-            .iter()
-            .find(|attr| attr.id() == "role_name")
-            .ok_or(BridgeError::CarlaIssue(
-                "Unable to find role_name in the vehicle",
-            ))?
-            .value_string();
-
-        // Remove "autoware_" in role name
-        if !vehicle_name.starts_with("autoware_") {
-            return Err(BridgeError::Npc {
-                npc_role_name: vehicle_name,
-            });
-        }
-        vehicle_name = vehicle_name.replace("autoware_", "");
-
-        log::info!("Detect a vehicle {vehicle_name}");
-
-        Ok(BridgeType::Vehicle(vehicle_name))
+    pub fn get_bridge_type(_actor: Vehicle) -> Result<BridgeType> {
+        // In 1-to-1 mode, we don't need to check role_name or filter
+        // The vehicle is already selected by main()
+        Ok(BridgeType::Vehicle)
     }
 
     pub fn new(
@@ -81,10 +60,18 @@ impl VehicleBridge {
         bridge_type: BridgeType,
         autoware: &Autoware,
     ) -> Result<VehicleBridge> {
-        let vehicle_name = match bridge_type {
-            BridgeType::Vehicle(v) => v,
-            _ => panic!("Should never happen!"),
-        };
+        // Validate bridge type
+        if !matches!(bridge_type, BridgeType::Vehicle) {
+            panic!("VehicleBridge::new called with non-Vehicle bridge type!");
+        }
+
+        // Get vehicle name from role_name attribute for logging
+        let vehicle_name = actor
+            .attributes()
+            .iter()
+            .find(|attr| attr.id() == "role_name")
+            .map(|attr| attr.value_string())
+            .unwrap_or_else(|| format!("vehicle_{}", actor.id()));
 
         // Create publishers
         let publisher_actuation = Arc::new(

@@ -1,4 +1,4 @@
-use carla::client::{Actor, ActorKind};
+use carla::client::ActorKind;
 
 use super::{
     other_bridge::OtherActorBridge,
@@ -11,8 +11,8 @@ use crate::{autoware::Autoware, error::Result};
 
 #[derive(Debug)]
 pub enum BridgeType {
-    Vehicle(String),
-    Sensor(String, SensorType, String),
+    Vehicle,
+    Sensor(SensorType, String),
     TrafficLight,
     TrafficSign,
     Other,
@@ -22,8 +22,8 @@ pub trait ActorBridge {
     fn step(&mut self, timestamp: f64) -> Result<()>;
 }
 
-pub fn get_bridge_type(actor: Actor) -> Result<BridgeType> {
-    Ok(match actor.into_kinds() {
+pub fn get_bridge_type(actor_kind: ActorKind) -> Result<BridgeType> {
+    Ok(match actor_kind {
         ActorKind::Vehicle(vehicle) => VehicleBridge::get_bridge_type(vehicle)?,
         ActorKind::Sensor(sensor) => SensorBridge::get_bridge_type(sensor)?,
         ActorKind::TrafficLight(_) => BridgeType::TrafficLight,
@@ -34,11 +34,11 @@ pub fn get_bridge_type(actor: Actor) -> Result<BridgeType> {
 
 pub fn create_bridge(
     node: rclrs::Node, // Node is already Arc<NodeState>
-    actor: Actor,
+    actor_kind: ActorKind,
     bridge_type: BridgeType,
     autoware: &Autoware,
 ) -> Result<Box<dyn ActorBridge>> {
-    Ok(match actor.into_kinds() {
+    Ok(match actor_kind {
         ActorKind::Vehicle(vehicle) => {
             Box::new(VehicleBridge::new(node, vehicle, bridge_type, autoware)?)
         }

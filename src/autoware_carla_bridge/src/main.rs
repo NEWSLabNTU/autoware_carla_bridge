@@ -6,27 +6,23 @@ mod types;
 mod utils;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    thread,
     time::Duration,
 };
 
 use bridge::actor_bridge::{ActorBridge, BridgeType};
 use carla::{
-    client::{ActorBase, Client},
+    client::{ActorBase, Client, Vehicle},
     rpc::ActorId,
 };
 use clap::Parser;
 use clock::SimulatorClock;
 use error::{BridgeError, Result};
 use rclrs::CreateBasicExecutor;
-
-// The default interval between ticks
-const DEFAULT_CARLA_TICK_INTERVAL_MS: &str = "50";
 
 /// ROS 2 Carla bridge for Autoware
 #[derive(Debug, Clone, Parser)]
@@ -40,26 +36,94 @@ struct Opts {
     #[clap(long, default_value = "2000")]
     pub carla_port: u16,
 
-    /// Carla Tick interval (ms)
-    #[clap(long, default_value = DEFAULT_CARLA_TICK_INTERVAL_MS)]
-    pub tick: u64,
+    /// Vehicle role_name to bridge (e.g., "ego_vehicle")
+    #[clap(long, conflicts_with = "vehicle_id")]
+    pub vehicle_name: Option<String>,
 
-    /// The multiplier to slow down simulated time
-    /// For example, if slowdown == 2, 1 simulated second = 2 real seconds
-    /// Suggest to set higher if the machine is not powerful enough
-    #[clap(long, default_value = "1")]
-    pub slowdown: u16,
+    /// Vehicle actor ID to bridge
+    #[clap(long, conflicts_with = "vehicle_name")]
+    pub vehicle_id: Option<u32>,
+
+    /// Timeout in seconds to wait for vehicle (0 = wait forever)
+    #[clap(long, default_value_t = 30)]
+    pub vehicle_wait_timeout: u64,
+}
+
+/// Structure to hold ego vehicle and its sensors
+struct EgoBridges {
+    vehicle: Box<dyn ActorBridge>,
+    sensors: HashMap<ActorId, Box<dyn ActorBridge>>,
+}
+
+/// Find the target vehicle by name or ID
+fn find_target_vehicle(client: &Client, opts: &Opts, timeout_secs: u64) -> Result<Vehicle> {
+    let start_time = std::time::Instant::now();
+    let timeout = if timeout_secs == 0 {
+        Duration::MAX
+    } else {
+        Duration::from_secs(timeout_secs)
+    };
+
+    loop {
+        let world = client.world();
+        let actors = world.actors();
+
+        for actor in actors.iter() {
+            if let carla::client::ActorKind::Vehicle(vehicle) = actor.into_kinds() {
+                // Check if this is our target vehicle
+                let matches = if let Some(ref name) = opts.vehicle_name {
+                    // Match by role_name
+                    vehicle
+                        .attributes()
+                        .iter()
+                        .find(|attr| attr.id() == "role_name")
+                        .map(|attr| attr.value_string() == *name)
+                        .unwrap_or(false)
+                } else if let Some(id) = opts.vehicle_id {
+                    // Match by actor ID
+                    vehicle.id() == id
+                } else {
+                    false
+                };
+
+                if matches {
+                    log::info!("Found target vehicle: ID={}", vehicle.id());
+                    return Ok(vehicle);
+                }
+            }
+        }
+
+        // Check timeout
+        if start_time.elapsed() >= timeout {
+            return Err(BridgeError::CarlaIssue(
+                "Timeout waiting for target vehicle to appear",
+            ));
+        }
+
+        // Log progress every 5 seconds
+        if start_time.elapsed().as_secs().is_multiple_of(5) && start_time.elapsed().as_secs() > 0 {
+            log::info!(
+                "Still waiting for target vehicle... ({} seconds elapsed)",
+                start_time.elapsed().as_secs()
+            );
+        }
+
+        // Wait a bit before polling again
+        std::thread::sleep(Duration::from_secs(1));
+    }
 }
 
 fn main() -> Result<()> {
     pretty_env_logger::init();
 
-    let Opts {
-        carla_address,
-        carla_port,
-        tick,
-        slowdown,
-    } = Opts::parse();
+    let opts = Opts::parse();
+
+    // Validate that either vehicle_name or vehicle_id is provided
+    if opts.vehicle_name.is_none() && opts.vehicle_id.is_none() {
+        return Err(BridgeError::CarlaIssue(
+            "Either --vehicle-name or --vehicle-id must be specified",
+        ));
+    }
 
     // Flag for graceful shutdown when Ctrl-C is pressed
     let running = Arc::new(AtomicBool::new(true));
@@ -69,43 +133,105 @@ fn main() -> Result<()> {
     })
     .expect("Failed to set Ctrl-C handler");
 
-    log::info!("Running Carla Autoware ROS 2 bridge...");
+    log::info!("Running Carla Autoware ROS 2 bridge (1-to-1 mode)...");
+    if let Some(ref name) = opts.vehicle_name {
+        log::info!("Target vehicle: role_name = '{}'", name);
+    } else if let Some(id) = opts.vehicle_id {
+        log::info!("Target vehicle: actor ID = {}", id);
+    }
 
     // Initialize ROS 2 context and executor
     let ctx = rclrs::Context::new(std::env::args(), rclrs::InitOptions::default())?;
     let executor = ctx.create_basic_executor();
     let node = executor.create_node("autoware_carla_bridge")?;
 
-    // Carla
-    let client = Client::connect(&carla_address, carla_port, None);
-    let mut world = client.world();
-    // Carla settings (synchronous)
-    let mut carla_settings = world.settings();
-    carla_settings.synchronous_mode = true; // Need to tick by ourselves
-    carla_settings.fixed_delta_seconds = Some(tick as f64 * 0.001); // Interval between ticks
-    world.apply_settings(&carla_settings, Duration::from_millis(1000));
+    // Connect to CARLA (passive mode - do NOT configure synchronous mode)
+    let client = Client::connect(&opts.carla_address, opts.carla_port, None);
+    let world = client.world();
 
-    // Create bridge list
-    let mut bridge_list: HashMap<ActorId, Box<dyn ActorBridge>> = HashMap::new();
+    // Find target ego vehicle
+    log::info!("Searching for target vehicle...");
+    let ego_vehicle = find_target_vehicle(&client, &opts, opts.vehicle_wait_timeout)?;
+    let ego_vehicle_id = ego_vehicle.id();
+
+    // Create single Autoware instance (root namespace)
+    let mut autoware = autoware::Autoware::new();
 
     // Create clock publisher
-    // Node is Arc so we can clone it
     let simulator_clock =
         SimulatorClock::new(node.clone()).expect("Unable to create simulator clock!");
 
-    // Create thread for ticking
-    let client_for_tick = Client::connect(&carla_address, carla_port, None);
-    thread::spawn(move || loop {
-        let mut world = client_for_tick.world();
-        world.tick();
-        let sec = world.snapshot().timestamp().elapsed_seconds;
-        simulator_clock
-            .publish_clock(Some(sec))
-            .expect("Unable to publish clock");
-        thread::sleep(Duration::from_millis(tick * slowdown as u64));
-    });
+    // Discover sensors attached to ego vehicle and register them with Autoware
+    log::info!("Discovering sensors attached to ego vehicle...");
+    let mut sensor_info = Vec::new();
 
-    let mut autoware_list: HashMap<String, autoware::Autoware> = HashMap::new();
+    for actor in world.actors().iter() {
+        let actor_id = actor.id(); // Save ID before consuming actor
+        if let carla::client::ActorKind::Sensor(sensor) = actor.into_kinds() {
+            // Check if this sensor belongs to our ego vehicle
+            if let Some(parent) = sensor.parent() {
+                if parent.id() == ego_vehicle_id {
+                    // This sensor belongs to our ego vehicle
+                    match bridge::actor_bridge::get_bridge_type(carla::client::ActorKind::Sensor(
+                        sensor.clone(),
+                    )) {
+                        Ok(BridgeType::Sensor(sensor_type, sensor_name)) => {
+                            log::info!("Found sensor: {} (type: {:?})", sensor_name, sensor_type);
+                            // Add sensor to autoware to register topics
+                            autoware.add_sensors(sensor_type, sensor_name.clone());
+                            sensor_info.push((actor_id, sensor.clone(), sensor_type, sensor_name));
+                        }
+                        Ok(_) => {
+                            log::debug!("Ignoring non-sensor actor");
+                        }
+                        Err(BridgeError::OwnerlessSensor { sensor_id }) => {
+                            log::debug!(
+                                "Sensor {} is ownerless (should not happen for our ego vehicle)",
+                                sensor_id
+                            );
+                        }
+                        Err(err) => {
+                            log::error!("Unexpected error processing sensor: {err:?}");
+                            return Err(err);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Create vehicle bridge
+    log::info!(
+        "Creating bridge for ego vehicle (ID: {})...",
+        ego_vehicle_id
+    );
+    let vehicle_bridge = bridge::actor_bridge::create_bridge(
+        node.clone(),
+        carla::client::ActorKind::Vehicle(ego_vehicle.clone()),
+        BridgeType::Vehicle,
+        &autoware,
+    )?;
+
+    // Create sensor bridges (now that Autoware has all sensor topics registered)
+    let mut ego_bridges = EgoBridges {
+        vehicle: vehicle_bridge,
+        sensors: HashMap::new(),
+    };
+
+    for (sensor_id, sensor, sensor_type, sensor_name) in sensor_info {
+        let sensor_bridge = bridge::actor_bridge::create_bridge(
+            node.clone(),
+            carla::client::ActorKind::Sensor(sensor),
+            BridgeType::Sensor(sensor_type, sensor_name),
+            &autoware,
+        )?;
+        ego_bridges.sensors.insert(sensor_id, sensor_bridge);
+    }
+
+    log::info!(
+        "Bridge initialization complete. Ego vehicle has {} sensors.",
+        ego_bridges.sensors.len()
+    );
 
     // Track consecutive timeouts to detect CARLA connection issues
     let mut consecutive_timeouts = 0;
@@ -114,84 +240,7 @@ fn main() -> Result<()> {
     // === Main loop ===
     // Keep running until Ctrl-C is pressed
     while running.load(Ordering::SeqCst) {
-        {
-            let mut actor_list: HashMap<ActorId, _> = world
-                .actors()
-                .iter()
-                .map(|actor| (actor.id(), actor))
-                .collect();
-            let prev_actor_ids: HashSet<u32> = bridge_list.keys().cloned().collect();
-            let cur_actor_ids: HashSet<u32> = actor_list.keys().cloned().collect();
-            let added_ids = &cur_actor_ids - &prev_actor_ids;
-            let deleted_ids = &prev_actor_ids - &cur_actor_ids;
-
-            for id in added_ids {
-                let actor = actor_list.remove(&id).expect("ID should be in the list!");
-                let bridge = match bridge::actor_bridge::get_bridge_type(actor.clone()) {
-                    Ok(BridgeType::Vehicle(vehicle_name)) => {
-                        let aw = autoware_list
-                            .entry(vehicle_name.clone())
-                            .or_insert_with(|| autoware::Autoware::new(vehicle_name.clone()));
-                        bridge::actor_bridge::create_bridge(
-                            node.clone(), // Node is Arc, cheap to clone
-                            actor,
-                            BridgeType::Vehicle(vehicle_name),
-                            aw,
-                        )?
-                    }
-                    Ok(BridgeType::Sensor(vehicle_name, sensor_type, sensor_name)) => {
-                        let aw = autoware_list
-                            .entry(vehicle_name.clone())
-                            .or_insert_with(|| autoware::Autoware::new(vehicle_name.clone()));
-                        aw.add_sensors(sensor_type, sensor_name.clone());
-                        bridge::actor_bridge::create_bridge(
-                            node.clone(), // Node is Arc, cheap to clone
-                            actor,
-                            BridgeType::Sensor(vehicle_name, sensor_type, sensor_name),
-                            aw,
-                        )?
-                    }
-                    Ok(_) => {
-                        log::debug!("Ignore type which are not vehicle and sensor.");
-                        continue;
-                    }
-                    Err(BridgeError::OwnerlessSensor { sensor_id }) => {
-                        log::debug!(
-                            "Ignore the sensor with ID {sensor_id} is not attached to any vehicle."
-                        );
-                        continue;
-                    }
-                    Err(BridgeError::Npc { npc_role_name }) => {
-                        log::debug!("Ignore NPC vehicle {npc_role_name}.");
-                        continue;
-                    }
-                    Err(err) => {
-                        log::error!("Unexpected error: {err:?}");
-                        return Err(err);
-                    }
-                };
-                bridge_list.insert(id, bridge);
-                log::info!("Actor {id} created");
-            }
-
-            let mut is_actor_removed = false;
-            for id in deleted_ids {
-                bridge_list.remove(&id).expect("ID should be in the list!");
-                log::info!("Actor {id} deleted");
-                is_actor_removed = true;
-            }
-            // If there is actors removed, reget all the actor's list. This can avoid getting non-existed vehicles.
-            if is_actor_removed {
-                continue;
-            }
-        }
-
-        let sec = world.snapshot().timestamp().elapsed_seconds;
-        bridge_list
-            .values_mut()
-            .try_for_each(|bridge| bridge.step(sec))?;
-
-        // Wait for next CARLA tick, checking for timeout errors
+        // Wait for next CARLA tick
         match world.wait_for_tick() {
             Ok(_) => {
                 // Successfully waited for tick, reset timeout counter
@@ -209,8 +258,22 @@ fn main() -> Result<()> {
                     );
                     break;
                 }
+                continue;
             }
         }
+
+        // Get current simulation time
+        let sec = world.snapshot().timestamp().elapsed_seconds;
+
+        // Publish clock
+        simulator_clock
+            .publish_clock(Some(sec))
+            .expect("Unable to publish clock");
+
+        // Step ego vehicle bridge
+        ego_bridges.vehicle.step(sec)?;
+
+        // Sensors use callbacks, no explicit step needed
     }
 
     log::info!("Bridge shutting down gracefully");

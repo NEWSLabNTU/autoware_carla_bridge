@@ -11,8 +11,8 @@ pub struct SimulatorClock {
 
 impl SimulatorClock {
     pub fn new(node: rclrs::Node) -> Result<SimulatorClock> {
-        // Use default QoS for clock topic
-        let publisher_clock = node.create_publisher("/clock")?;
+        // Use default QoS for clock topic (no prefix for namespace flexibility)
+        let publisher_clock = node.create_publisher("clock")?;
 
         Ok(SimulatorClock {
             publisher_clock: Arc::new(publisher_clock),
