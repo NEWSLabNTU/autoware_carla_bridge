@@ -25,7 +25,16 @@ build-ros2-rust: ## Build ros2_rust packages (Rust generator, runtime, and rclrs
 build-interface: ## Build message packages (generates Rust crates)
 	. src/ros2_rust/install/setup.sh && \
 	cd src/interface && \
-	colcon build $(COLCON_BUILD_FLAGS)
+	colcon build $(COLCON_BUILD_FLAGS) \
+		--packages-select \
+		builtin_interfaces \
+		std_msgs \
+		geometry_msgs \
+		sensor_msgs \
+		tf2_msgs \
+		autoware_vehicle_msgs \
+		tier4_vehicle_msgs \
+		tier4_control_msgs
 
 .PHONY: build-bridge
 build-bridge: ## Build autoware_carla_bridge package
