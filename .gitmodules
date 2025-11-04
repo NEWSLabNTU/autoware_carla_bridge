@@ -35,3 +35,6 @@
 [submodule "src/interface/test_interface_files"]
 	path = src/interface/test_interface_files
 	url = https://github.com/ros2/test_interface_files.git
+[submodule "src/interface/geometry2"]
+	path = src/interface/geometry2
+	url = https://github.com/ros2/geometry2.git
