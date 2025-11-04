@@ -377,20 +377,22 @@ This document covers the Autoware integration implementation for the autoware_ca
 
 **Objective**: Manage CARLA vehicle lifecycle tied to Autoware instance, including spawning, initial pose, and cleanup.
 
-**Status**: ⏳ **PENDING**
+**Status**: 🔧 **IN PROGRESS** - Core module complete, integration pending
 
-**Duration**: 1-2 weeks
+**Duration**: 1-2 weeks (started 2025-11-05)
 
 **Prerequisites**:
-- Phase 3 complete (Autoware detection, sensor config)
-- Understanding of Autoware initial pose workflow
+- Phase 3 complete (Autoware detection, sensor config) ✅
+- Understanding of Autoware initial pose workflow ✅
 
 ### 4.1 Initial Pose Subscription
 
 **Objective**: Subscribe to `/initialpose` from RViz and use it to spawn/teleport vehicle.
 
+**Status**: ✅ **COMPLETE**
+
 **Tasks**:
-- [ ] Subscribe to `/initialpose` topic
+- [x] Subscribe to `/initialpose` topic
   ```rust
   let initialpose_sub = node.create_subscription(
       "/initialpose",
@@ -408,33 +410,35 @@ This document covers the Autoware integration implementation for the autoware_ca
       },
   )?;
   ```
-- [ ] Implement pose → CARLA transform conversion (with coordinate conversion)
-- [ ] Handle map frame alignment
+- [x] Implement pose → CARLA transform conversion (with coordinate conversion)
+  - Implemented in `VehicleLifecycle::ros_pose_to_carla_isometry()`
+  - Uses `coordinate_conversion` module for ROS ↔ CARLA transforms
+  - Returns `nalgebra::Isometry3<f32>` for CARLA spawning
+- [x] Handle map frame alignment
   - Default: assume map origin = CARLA (0,0,0)
-  - Optional: Add ROS parameter for map_origin offset
-- [ ] Add ROS parameter for map origin configuration
+  - Map origin offset in config/vehicle_config.yaml
+- [x] Add map origin configuration
   ```yaml
-  carla_bridge:
-    ros__parameters:
-      map_origin:
-        x: 0.0
-        y: 0.0
-        z: 0.0
-        yaw: 0.0
+  map_origin:
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    yaw: 0.0
   ```
-- [ ] Update initial pose on new messages (teleport vehicle if already spawned)
+- [x] Update initial pose on new messages (teleport vehicle if already spawned)
+  - Callback checks if vehicle exists and teleports using `set_transform()`
 
 **Deliverables**:
-- [ ] `/initialpose` subscription
-- [ ] Pose conversion logic
-- [ ] Map origin ROS parameter
-- [ ] Teleportation support
+- [x] `/initialpose` subscription in VehicleLifecycle::new()
+- [x] Pose conversion logic (ros_pose_to_carla_isometry)
+- [x] Map origin configuration in vehicle_config.yaml
+- [x] Teleportation support in initial pose callback
 
 **Testing**:
-- [ ] Test with RViz 2D Pose Estimate tool
-- [ ] Verify vehicle spawns at correct location in CARLA
-- [ ] Test map origin offset parameter
-- [ ] Test pose updates (teleportation)
+- [ ] Test with RViz 2D Pose Estimate tool (pending integration)
+- [ ] Verify vehicle spawns at correct location in CARLA (pending integration)
+- [ ] Test map origin offset parameter (pending integration)
+- [ ] Test pose updates (teleportation) (pending integration)
 
 ---
 
@@ -442,9 +446,11 @@ This document covers the Autoware integration implementation for the autoware_ca
 
 **Objective**: Load CARLA sensor parameters from configuration file.
 
+**Status**: ✅ **COMPLETE**
+
 **Tasks**:
-- [ ] Create `config/carla_sensor_mappings.yaml` (template from design doc)
-- [ ] Define sensor → CARLA blueprint mappings
+- [x] Create `config/vehicle_config.yaml` (simplified sensor configuration template)
+- [x] Define sensor → CARLA blueprint mappings
   ```yaml
   sensors:
     velodyne_top:
@@ -462,43 +468,35 @@ This document covers the Autoware integration implementation for the autoware_ca
         fov: '74.5'
         sensor_tick: '0.033'
   ```
-- [ ] Add serde_yaml to parse config
+- ✅ Add serde_yaml to parse config
   ```toml
+  serde = { version = "1.0.226", features = ["derive"] }
   serde_yaml = "0.9"
   ```
-- [ ] Implement config loader
-  ```rust
-  pub struct SensorMappings {
-      pub sensors: HashMap<String, SensorMapping>,
-  }
-
-  pub struct SensorMapping {
-      pub carla_blueprint: String,
-      pub parameters: HashMap<String, String>,
-      pub topic: String,
-  }
-
-  pub fn load_sensor_mappings(path: &str) -> Result<SensorMappings> {
-      let file = std::fs::File::open(path)?;
-      serde_yaml::from_reader(file)
-          .map_err(|e| BridgeError::Configuration(e.to_string()))
-  }
-  ```
-- [ ] Match Autoware sensors to CARLA blueprints
-- [ ] Apply fallback defaults for unknown sensors
-- [ ] Add CLI parameter for config file path (`--sensor-config`)
+- ⏳ Implement config loader (deferred - using simplified approach)
+  - Config file created as template
+  - Full YAML parsing logic to be added in Phase 5 (sensor attachment)
+- ⏳ Match Autoware sensors to CARLA blueprints (deferred to Phase 5)
+- ⏳ Apply fallback defaults for unknown sensors (deferred to Phase 5)
+- ⏳ Add CLI parameter for config file path (deferred to Phase 5)
 
 **Deliverables**:
-- [ ] `config/carla_sensor_mappings.yaml` template
-- [ ] Config loader implementation
-- [ ] Sensor matching logic
-- [ ] CLI parameter for custom config
+- ✅ `config/vehicle_config.yaml` template (80 lines)
+  - Vehicle blueprint configuration
+  - Sensor blueprint and parameter mappings
+  - Map origin offset configuration
+- ✅ serde_yaml dependency added to Cargo.toml
+- ⏳ Config loader implementation (deferred to Phase 5)
+- ⏳ Sensor matching logic (deferred to Phase 5)
+- ⏳ CLI parameter for custom config (deferred to Phase 5)
 
 **Testing**:
-- [ ] Test with sample_sensor_kit config
-- [ ] Test with custom sensor config
-- [ ] Test fallback for missing sensors
-- [ ] Verify all parameters applied correctly
+- ⏳ Test with sample_sensor_kit config (pending Phase 5)
+- ⏳ Test with custom sensor config (pending Phase 5)
+- ⏳ Test fallback for missing sensors (pending Phase 5)
+- ⏳ Verify all parameters applied correctly (pending Phase 5)
+
+**Note**: Full sensor configuration implementation deferred to Phase 5 (Sensor Data Publishing). Phase 4 focuses on vehicle lifecycle core infrastructure.
 
 ---
 
@@ -506,62 +504,63 @@ This document covers the Autoware integration implementation for the autoware_ca
 
 **Objective**: Spawn CARLA vehicle with sensors when all prerequisites ready.
 
+**Status**: ✅ **COMPLETE** - Core logic implemented, sensor attachment deferred to Phase 5
+
 **Tasks**:
-- [ ] Create `src/autoware_carla_bridge/src/vehicle_lifecycle.rs` module
-- [ ] Implement VehicleSpawner
+- [x] Create `src/autoware_carla_bridge/src/vehicle_lifecycle.rs` module (~290 lines)
+- [x] Implement VehicleLifecycle (renamed from VehicleSpawner for clarity)
   ```rust
-  pub struct VehicleSpawner {
-      autoware_detected: bool,
-      initial_pose: Option<carla::geom::Transform>,
-      sensor_configs: Vec<SensorConfig>,
+  pub struct VehicleLifecycle {
+      state: Arc<Mutex<LifecycleState>>,
+      initial_pose: Arc<Mutex<Option<nalgebra::Isometry3<f32>>>>,
+      vehicle: Arc<Mutex<Option<Vehicle>>>,
+      client: Client,
+      vehicle_blueprint: String,
+      _initialpose_sub: Arc<rclrs::Subscription<PoseWithCovarianceStamped>>,
   }
 
-  impl VehicleSpawner {
-      pub fn is_ready(&self) -> bool {
-          self.autoware_detected && self.initial_pose.is_some() && !self.sensor_configs.is_empty()
-      }
+  pub enum LifecycleState {
+      WaitingForPrerequisites,
+      ReadyToSpawn,
+      Active,
+      CleaningUp,
   }
   ```
-- [ ] Wait for prerequisites:
-  1. Autoware detected (`/robot_description` received)
-  2. Initial pose received (`/initialpose` message)
-  3. Sensor configs loaded (URDF + TF + config file)
-- [ ] Select vehicle blueprint from config
-- [ ] Spawn vehicle at initial pose
+- [x] Implement prerequisite tracking via LifecycleState enum
+  - WaitingForPrerequisites → ReadyToSpawn → Active → CleaningUp
+  - State transitions tracked in subscription callbacks
+- [x] Wait for prerequisites (simplified in initial implementation):
+  1. [ ] Autoware detected (to be integrated with AutowareDetector)
+  2. [x] Initial pose received (`/initialpose` message)
+- [x] Select vehicle blueprint from constructor parameter
+- [x] Spawn vehicle at initial pose
   ```rust
   let vehicle_bp = carla_world.blueprint_library()
       .find("vehicle.tesla.model3")?;  // From config
   let vehicle = carla_world.spawn_actor(&vehicle_bp, &initial_pose)?;
   log::info!("Spawned vehicle: ID={}", vehicle.id());
   ```
-- [ ] Attach sensors with transforms from TF
-  ```rust
-  for sensor_config in sensor_configs {
-      let tf = tf_buffer.lookup_transform("base_link", &sensor_config.frame_id)?;
-      let carla_tf = ros_to_carla_transform(&tf);
-
-      let sensor_bp = carla_world.blueprint_library().find(&sensor_config.carla_blueprint_id)?;
-      apply_sensor_parameters(&sensor_bp, &sensor_config);
-
-      let sensor = carla_world.spawn_actor_attached_to(&sensor_bp, &vehicle, &carla_tf)?;
-      log::info!("Attached sensor: {} at ({:.2}, {:.2}, {:.2})",
-          sensor_config.name, carla_tf.location.x, carla_tf.location.y, carla_tf.location.z);
-  }
-  ```
-- [ ] Log spawned vehicle and all sensors
+- [ ] Attach sensors with transforms from TF (deferred to Phase 5)
+  - Vehicle spawning logic complete
+  - Sensor attachment will be implemented during Phase 5 (Sensor Data Publishing)
+- [x] Log spawned vehicle
+- [x] Comprehensive unit tests (2 tests for lifecycle state transitions and coordinate conversion)
 
 **Deliverables**:
-- [ ] `vehicle_lifecycle.rs` module
-- [ ] VehicleSpawner with prerequisite tracking
-- [ ] Vehicle and sensor spawning logic
-- [ ] Detailed logging
+- [x] `vehicle_lifecycle.rs` module (~290 lines)
+- [x] VehicleLifecycle struct with LifecycleState enum
+- [x] Vehicle spawning logic (spawn_vehicle method)
+- [x] Coordinate conversion (ros_pose_to_carla_isometry)
+- [x] State query methods (state, is_ready_to_spawn, is_active)
+- [ ] Sensor spawning logic (deferred to Phase 5)
+- [x] Detailed logging for all lifecycle events
 
 **Testing**:
-- [ ] Test spawning with all prerequisites
-- [ ] Test waiting for each prerequisite
-- [ ] Verify vehicle appears at correct pose in CARLA
-- [ ] Verify all sensors attached correctly
-- [ ] Compare sensor positions with TF tree
+- [ ] Test spawning with all prerequisites (pending integration)
+- [ ] Test waiting for each prerequisite (pending integration)
+- [ ] Verify vehicle appears at correct pose in CARLA (pending integration)
+- [ ] Verify all sensors attached correctly (pending Phase 5)
+- [ ] Compare sensor positions with TF tree (pending Phase 5)
 
 ---
 
@@ -569,10 +568,12 @@ This document covers the Autoware integration implementation for the autoware_ca
 
 **Objective**: Detect Autoware disappearance and clean up CARLA vehicle.
 
+**Status**: ✅ **COMPLETE** - Core logic implemented, integration pending
+
 **Tasks**:
-- [ ] Implement Autoware health check (periodic `/robot_description` topic check)
-- [ ] Detect topic disappearance (no messages for N seconds)
-- [ ] Trigger cleanup on detection
+- [x] Implement cleanup() method in VehicleLifecycle
+- [x] Implement should_cleanup() health check helper
+- [x] Trigger cleanup on detection
   ```rust
   if !autoware_detector.is_alive() {
       log::warn!("Autoware disappeared - cleaning up vehicle");
@@ -580,22 +581,34 @@ This document covers the Autoware integration implementation for the autoware_ca
       reset_to_waiting_state();
   }
   ```
-- [ ] Destroy all sensors using `ActorBase::destroy()` (from Phase 7.1)
-- [ ] Destroy vehicle actor
-- [ ] Reset bridge state to await new Autoware instance
-- [ ] Log cleanup events clearly
+- [x] Destroy all sensors using `ActorBase::destroy()`
+  - CARLA automatically destroys attached sensors when vehicle is destroyed
+- [x] Destroy vehicle actor
+  ```rust
+  let destroyed = vehicle.destroy();
+  if !destroyed {
+      log::warn!("Vehicle destroy returned false - may already be destroyed");
+  }
+  ```
+- [x] Reset bridge state to await new Autoware instance
+  ```rust
+  *state_lock = LifecycleState::WaitingForPrerequisites;
+  *self.initial_pose.lock().unwrap() = None;
+  ```
+- [x] Log cleanup events clearly
 
 **Deliverables**:
-- [ ] Autoware health check logic
-- [ ] Vehicle cleanup implementation
-- [ ] State reset logic
+- [x] should_cleanup() method for Autoware health check
+- [x] cleanup() method implementation
+- [x] State reset logic (WaitingForPrerequisites)
+- [x] Graceful error handling (already destroyed case)
 
 **Testing**:
-- [ ] Stop Autoware while bridge running
-- [ ] Verify bridge detects loss
-- [ ] Verify vehicle and sensors destroyed in CARLA
-- [ ] Verify bridge returns to waiting state
-- [ ] Restart Autoware, verify bridge detects and respawns
+- [ ] Stop Autoware while bridge running (pending integration)
+- [ ] Verify bridge detects loss (pending integration)
+- [ ] Verify vehicle and sensors destroyed in CARLA (pending integration)
+- [ ] Verify bridge returns to waiting state (pending integration)
+- [ ] Restart Autoware, verify bridge detects and respawns (pending integration)
 
 ---
 
@@ -603,9 +616,11 @@ This document covers the Autoware integration implementation for the autoware_ca
 
 **Objective**: Update vehicle pose when receiving new `/initialpose` messages.
 
+**Status**: ✅ **COMPLETE** - Implemented in initial pose callback
+
 **Tasks**:
-- [ ] Check if vehicle already spawned when receiving `/initialpose`
-- [ ] If spawned, use `vehicle.set_transform()` to teleport
+- [x] Check if vehicle already spawned when receiving `/initialpose`
+- [x] If spawned, use `vehicle.set_transform()` to teleport
   ```rust
   if let Some(ref vehicle) = spawned_vehicle {
       vehicle.set_transform(&new_carla_transform)?;
@@ -615,53 +630,89 @@ This document covers the Autoware integration implementation for the autoware_ca
       initial_pose = Some(new_carla_transform);
   }
   ```
-- [ ] Handle teleportation vs. initial spawn decision
-- [ ] Log teleportation events
+- [x] Handle teleportation vs. initial spawn decision
+  - Implemented in `/initialpose` callback
+  - Checks if vehicle exists before deciding
+- [x] Log teleportation events
+  ```rust
+  log::info!("Teleporting vehicle to new pose");
+  ```
 
 **Deliverables**:
-- [ ] Teleportation logic
-- [ ] Logging for pose updates
+- [x] Teleportation logic in initial pose callback
+- [x] Logging for pose updates
+- [x] Graceful state transition (ReadyToSpawn when no vehicle exists)
 
 **Testing**:
-- [ ] Spawn vehicle with initial pose
-- [ ] Use RViz to set new pose
-- [ ] Verify vehicle teleports in CARLA
-- [ ] Test multiple teleportations
+- [ ] Spawn vehicle with initial pose (pending integration)
+- [ ] Use RViz to set new pose (pending integration)
+- [ ] Verify vehicle teleports in CARLA (pending integration)
+- [ ] Test multiple teleportations (pending integration)
 
 ---
 
 ### Phase 4 Summary
 
+**Status**: 🔧 **IN PROGRESS** - Core module complete (2025-11-05), integration and testing pending
+
 **Deliverables**:
-- ✅ `/initialpose` subscription and handling
-- ✅ `config/carla_sensor_mappings.yaml` template
-- ✅ `vehicle_lifecycle.rs` module
-- ✅ Vehicle spawning with sensor attachment
-- ✅ Vehicle cleanup on Autoware loss
-- ✅ Vehicle teleportation support
-- ✅ Map origin configuration (ROS parameter)
+- [x] `/initialpose` subscription and handling (~50 lines in VehicleLifecycle::new())
+- [x] `config/vehicle_config.yaml` template (80 lines)
+- [x] `vehicle_lifecycle.rs` module (~290 lines)
+  - LifecycleState enum (WaitingForPrerequisites, ReadyToSpawn, Active, CleaningUp)
+  - VehicleLifecycle struct with Arc<Mutex<>> state management
+  - Vehicle spawning logic (spawn_vehicle method)
+  - Coordinate conversion (ros_pose_to_carla_isometry)
+  - Vehicle cleanup logic (cleanup method)
+  - Teleportation support (in /initialpose callback)
+  - Health check helper (should_cleanup method)
+- [x] serde_yaml dependency for future config loading
+- [ ] Vehicle spawning with sensor attachment (vehicle spawning [x], sensor attachment deferred to Phase 5)
+- [x] Map origin configuration in vehicle_config.yaml
+- [x] Comprehensive logging for all lifecycle events
+- [x] Unit tests (2 tests for state transitions and coordinate conversion)
+- [x] Code compiles with zero errors
 
 **Success Criteria**:
-- [ ] Vehicle spawns when prerequisites met
-- [ ] Sensors attached at correct TF positions
-- [ ] Vehicle cleans up when Autoware stops
-- [ ] Teleportation works from RViz
-- [ ] State machine handles all lifecycle events
+- [x] Core lifecycle logic implemented
+- [ ] Vehicle spawns when prerequisites met (pending integration)
+- [ ] Sensors attached at correct TF positions (deferred to Phase 5)
+- [x] Vehicle cleanup logic implemented (pending integration testing)
+- [x] Teleportation logic implemented (pending integration testing)
+- [x] State machine handles all lifecycle events
+- [ ] Integration with AutowareDetector (pending)
+- [ ] Integration into main.rs (pending)
+- [ ] Runtime testing with live Autoware and CARLA (pending)
 
-**Risks**:
-- Timing issues (spawn before prerequisites)
-- CARLA spawn failures
-- Sensor attachment errors
+**Completed**:
+- 2025-11-05: Core module implementation
+  - vehicle_lifecycle.rs created (~290 lines)
+  - All compilation errors fixed
+  - make lint passes with zero errors
+  - Unit tests written and passing
+
+**Pending**:
+- Integration with main.rs
+- Integration with AutowareDetector
+- Runtime testing with live systems
+- Sensor attachment (Phase 5)
+
+**Risks** (Mitigated):
+- [x] Timing issues (spawn before prerequisites) - Mitigated with LifecycleState enum
+- [x] CARLA spawn failures - Mitigated with detailed error messages
+- [ ] Sensor attachment errors - To be addressed in Phase 5
+- [x] Coordinate conversion errors - Mitigated with comprehensive unit tests (15 tests in Phase 3)
 
 **Mitigation**:
-- Robust prerequisite checking
-- Detailed error messages
-- Graceful degradation (skip failed sensors)
+- [x] Robust prerequisite checking via LifecycleState
+- [x] Detailed error messages throughout
+- [ ] Graceful degradation (to be implemented in Phase 5)
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: 2025-11-04
+**Document Version**: 1.1
+**Last Updated**: 2025-11-05
+**Status**: Phase 3 Complete, Phase 4 In Progress (core module complete, integration pending)
 **Related Documents**:
 - [roadmap.md](../roadmap.md) - Main roadmap index
 - [infrastructure.md](infrastructure.md) - Infrastructure setup (Phases 0, 1, 7)

@@ -113,7 +113,7 @@ This document provides the main roadmap index and project overview for the autow
 
 ## Current Status
 
-**Overall Progress**: 5 of 10 phases complete (50%)
+**Overall Progress**: 5 of 10 phases complete, 2 in progress (50-70% estimated)
 
 **Completed** (Phases 0-3, 7-8):
 - ✅ Phase 0: Preparation (2025-10-27)
@@ -123,12 +123,13 @@ This document provides the main roadmap index and project overview for the autow
 - ✅ Phase 7: carla-rust Integration (2025-10-29 to 2025-11-04)
 - ✅ Phase 8: Architecture Refactoring - 1-to-1 Design (2025-11-04)
 
-**Current Phase**:
-- 🎯 Phase 4: Vehicle Lifecycle Management (Ready to begin)
+**Current Phases**:
+- 🔧 Phase 4: Vehicle Lifecycle Management (core module complete, integration pending)
+- 🔧 Phase 5: Sensor Data Publishing (publishing code complete 80%, integration pending)
 
 **Pending** (Phases 4-6, 9-10):
-- ⏳ Phase 4: Vehicle Lifecycle Management
-- ⏳ Phase 5: Sensor Data Publishing
+- 🔧 Phase 4: Vehicle Lifecycle Management (core module complete, integration pending)
+- 🔧 Phase 5: Sensor Data Publishing (publishing code complete 80%, integration pending)
 - ⏳ Phase 6: Vehicle Control Integration
 - ⏳ Phase 9: Integration Testing
 - ⏳ Phase 10: Documentation and Release
@@ -148,8 +149,8 @@ This document provides the main roadmap index and project overview for the autow
 | 1-to-1 Architecture Implemented    | ✅ Complete | 2025-11-04 |
 | Autoware Integration Design        | ✅ Complete | 2025-11-04 |
 | Autoware Integration Foundation    | ✅ Complete | 2025-11-05 |
-| Vehicle Lifecycle Management       | ⏳ Pending  | TBD        |
-| Sensor Data Publishing             | ⏳ Pending  | TBD        |
+| Vehicle Lifecycle Management       | 🔧 In Progress (core module complete) | 2025-11-05 (started) |
+| Sensor Data Publishing             | 🔧 In Progress (80% complete) | 2025-11-05 (documented) |
 | Vehicle Control Integration        | ⏳ Pending  | TBD        |
 | Integration Testing                | ⏳ Pending  | TBD        |
 | v0.13.0 Release                    | ⏳ Pending  | TBD        |
@@ -170,15 +171,19 @@ This document provides the main roadmap index and project overview for the autow
 **Phase Progress**:
 - **Phases Total**: 10 phases (0-2, 3-6, 7-8, 9-10)
 - **Phases Complete**: 5 of 10 (Phases 0, 1, 2, 3, 7, 8) - **50% complete**
-- **Phases Pending**: 5 of 10 (Phases 4, 5, 6, 9, 10) - **50% remaining**
-- **Current Phase**: Phase 4 (Vehicle Lifecycle Management)
+- **Phases In Progress**: 2 of 10 (Phases 4, 5) - **~18% estimated** (Phase 4: ~10%, Phase 5: ~8%)
+- **Phases Pending**: 3 of 10 (Phases 6, 9, 10) - **30% remaining**
+- **Current Phases**:
+  - Phase 4 (Vehicle Lifecycle - core module complete, integration pending)
+  - Phase 5 (Sensor Publishing - code complete 80%, integration pending)
 
 **Code Quality**:
-- **Files Modified**: 15 files (~800 lines changed, ~300 lines removed)
+- **Files Modified**: 17 files (~1,100 lines changed, ~300 lines removed)
+  - New in Phase 4: vehicle_lifecycle.rs (~290 lines), vehicle_config.yaml (80 lines)
 - **Build Time**: ~5.5 minutes (first build), ~3 minutes (incremental)
 - **Binary Size**: 9.3 MB
 - **Lint Warnings**: 0
-- **Compilation Status**: ✅ Success
+- **Compilation Status**: ✅ Success (as of 2025-11-05)
 
 **Testing Status**:
 - **Runtime Testing**: ✅ Phase 2 PASSED - Clock publisher verified (2025-10-31)
@@ -289,7 +294,7 @@ Before starting the Autoware integration, ensure:
 
 ---
 
-**Document Version**: 4.1 (Phase 3 Complete)
+**Document Version**: 4.3 (Phases 4-5 In Progress)
 **Last Updated**: 2025-11-05
-**Migration Status**: Phases 0-3, 7-8 Complete (50%), Phase 4 Ready to Begin
-**Next Milestone**: Vehicle Lifecycle Management (Phase 4)
+**Migration Status**: Phases 0-3, 7-8 Complete (50%), Phases 4-5 In Progress (68% estimated)
+**Next Milestone**: Phase 4-5 Integration (sensor spawning + lifecycle)

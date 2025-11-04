@@ -2,7 +2,7 @@
 
 This document covers the data bridge implementation for the autoware_carla_bridge project, including publishers, subscribers, sensor data, and vehicle control.
 
-**Status**: Phase 2, 8 ✅ Complete | Phases 5, 6 ⏳ Pending
+**Status**: Phase 2, 8 ✅ Complete | Phase 5 🔧 In Progress (80%) | Phase 6 ⏳ Pending
 
 ---
 
@@ -219,24 +219,30 @@ File: `src/utils.rs`
 
 **Objective**: Implement sensor data publishing for Camera, LiDAR, IMU, and GNSS sensors.
 
-**Status**: ⏳ **PENDING**
+**Status**: 🔧 **IN PROGRESS** - Publishing code complete (Phase 1), integration pending
 
-**Duration**: 2-3 weeks
+**Duration**: 1-2 weeks remaining (core publishing already migrated in Phase 1)
 
-**Prerequisites**: Phase 3 (Autoware Integration Foundation), Phase 4 (Vehicle Lifecycle Management)
+**Prerequisites**:
+- ✅ Phase 3 (Autoware Integration Foundation) - Complete
+- 🔧 Phase 4 (Vehicle Lifecycle Management) - In Progress
+
+**Note**: Sensor publishing code was migrated to rclrs in Phase 1. Remaining work is integration with VehicleLifecycle for sensor spawning.
 
 ### 5.1 Camera Sensors
 
 **Objective**: Publish camera sensor data to ROS topics
 
+**Status**: ✅ **COMPLETE** - Migrated in Phase 1, frame IDs need updating
+
 **Topics**:
-- `/sensing/camera/traffic_light/image_raw` (sensor_msgs/Image)
-- `/sensing/camera/traffic_light/camera_info` (sensor_msgs/CameraInfo)
+- `/sensing/camera/traffic_light/image_raw` (sensor_msgs/Image) ✅
+- `/sensing/camera/traffic_light/camera_info` (sensor_msgs/CameraInfo) ✅
 
 **Tasks**:
-- [ ] Create camera publisher in SensorBridge
-- [ ] Configure camera QoS (sensor_data_qos)
-- [ ] Implement CARLA callback → ROS Image conversion:
+- [x] Create camera publisher in SensorBridge (`sensor_bridge.rs:165-233`)
+- [x] Configure camera QoS (sensor_data_qos)
+- [x] Implement CARLA callback → ROS Image conversion:
   ```rust
   fn on_camera_data(&self, image: carla::sensor::Image) {
       let mut ros_image = sensor_msgs::msg::Image::default();
@@ -252,27 +258,30 @@ File: `src/utils.rs`
       self.image_publisher.publish(&ros_image)?;
   }
   ```
-- [ ] Publish CameraInfo with camera intrinsics
-- [ ] Test with CARLA RGB camera
-- [ ] Verify image data in RViz
+- [x] Publish CameraInfo with camera intrinsics
+- [ ] Test with CARLA RGB camera (requires sensor spawning integration)
+- [ ] Verify image data in RViz (requires sensor spawning integration)
+- [ ] Update hardcoded frame_id ("camera4/camera_link") to use TF data
 
 **Success Criteria**:
-- Camera images visible in RViz
-- Correct timestamp and frame_id
-- Image encoding matches expectations
-- Publish rate matches CARLA sensor frequency
+- [x] Camera images publish correctly (code complete)
+- [ ] Correct frame_id (currently hardcoded)
+- [x] Image encoding matches expectations (bgra8)
+- [ ] Publish rate verification (pending integration testing)
 
 ### 5.2 LiDAR Sensors
 
 **Objective**: Publish LiDAR point cloud data to ROS topics
 
+**Status**: ✅ **COMPLETE** - Migrated in Phase 1, frame IDs need updating
+
 **Topics**:
-- `/sensing/lidar/top/pointcloud` (sensor_msgs/PointCloud2)
+- `/sensing/lidar/top/pointcloud` (sensor_msgs/PointCloud2) ✅
 
 **Tasks**:
-- [ ] Create LiDAR publisher in SensorBridge
-- [ ] Configure LiDAR QoS (sensor_data_qos)
-- [ ] Implement CARLA callback → ROS PointCloud2 conversion:
+- [x] Create LiDAR publisher in SensorBridge (`sensor_bridge.rs:235-302`)
+- [x] Configure LiDAR QoS (sensor_data_qos)
+- [x] Implement CARLA callback → ROS PointCloud2 conversion:
   ```rust
   fn on_lidar_data(&self, scan: carla::sensor::LidarMeasurement) {
       let mut cloud = sensor_msgs::msg::PointCloud2::default();
@@ -299,27 +308,30 @@ File: `src/utils.rs`
       self.pointcloud_publisher.publish(&cloud)?;
   }
   ```
-- [ ] Handle coordinate system conversion (CARLA → ROS)
-- [ ] Test with CARLA ray_cast LiDAR sensor
-- [ ] Verify point cloud in RViz
+- [x] Handle coordinate system conversion (CARLA → ROS)
+- [ ] Test with CARLA ray_cast LiDAR sensor (requires sensor spawning)
+- [ ] Verify point cloud in RViz (requires sensor spawning)
+- [ ] Update hardcoded frame_id ("velodyne_top_base_link") to use TF data
 
 **Success Criteria**:
-- Point cloud visible in RViz
-- Correct coordinate transformation
-- Intensity values present
-- Publish rate matches CARLA sensor frequency
+- [x] Point cloud publishing code complete
+- [x] Correct coordinate transformation implemented
+- [x] Intensity values included
+- [ ] Publish rate verification (pending integration testing)
 
 ### 5.3 IMU Sensor
 
 **Objective**: Publish IMU data to ROS topics
 
+**Status**: ✅ **COMPLETE** - Migrated in Phase 1
+
 **Topics**:
-- `/sensing/imu/tamagawa/imu_raw` (sensor_msgs/Imu)
+- `/sensing/imu/tamagawa/imu_raw` (sensor_msgs/Imu) ✅
 
 **Tasks**:
-- [ ] Create IMU publisher in SensorBridge
-- [ ] Configure IMU QoS (sensor_data_qos)
-- [ ] Implement CARLA callback → ROS Imu conversion:
+- [x] Create IMU publisher in SensorBridge (`sensor_bridge.rs:356-424`)
+- [x] Configure IMU QoS (sensor_data_qos)
+- [x] Implement CARLA callback → ROS Imu conversion:
   ```rust
   fn on_imu_data(&self, imu: carla::sensor::ImuMeasurement) {
       let mut ros_imu = sensor_msgs::msg::Imu::default();
@@ -346,27 +358,29 @@ File: `src/utils.rs`
       self.imu_publisher.publish(&ros_imu)?;
   }
   ```
-- [ ] Handle coordinate system conversion
-- [ ] Test with CARLA IMU sensor
-- [ ] Verify IMU data in RViz
+- [x] Handle coordinate system conversion (Y-axis flip, deg → rad)
+- [ ] Test with CARLA IMU sensor (requires sensor spawning)
+- [ ] Verify IMU data in RViz (requires sensor spawning)
 
 **Success Criteria**:
-- IMU data published correctly
-- Coordinate transformations correct
-- Orientation quaternion valid
-- Publish rate matches CARLA sensor frequency
+- [x] IMU data publishing code complete
+- [x] Coordinate transformations implemented
+- [x] Orientation quaternion conversion included
+- [ ] Publish rate verification (pending integration testing)
 
 ### 5.4 GNSS Sensor
 
 **Objective**: Publish GNSS data to ROS topics
 
+**Status**: ✅ **COMPLETE** - Migrated in Phase 1
+
 **Topics**:
-- `/sensing/gnss/ublox/nav_sat_fix` (sensor_msgs/NavSatFix)
+- `/sensing/gnss/ublox/nav_sat_fix` (sensor_msgs/NavSatFix) ✅
 
 **Tasks**:
-- [ ] Create GNSS publisher in SensorBridge
-- [ ] Configure GNSS QoS (sensor_data_qos)
-- [ ] Implement CARLA callback → ROS NavSatFix conversion:
+- [x] Create GNSS publisher in SensorBridge (`sensor_bridge.rs:426-463`)
+- [x] Configure GNSS QoS (sensor_data_qos)
+- [x] Implement CARLA callback → ROS NavSatFix conversion:
   ```rust
   fn on_gnss_data(&self, gnss: carla::sensor::GnssMeasurement) {
       let mut nav_sat_fix = sensor_msgs::msg::NavSatFix::default();
@@ -386,44 +400,94 @@ File: `src/utils.rs`
       self.gnss_publisher.publish(&nav_sat_fix)?;
   }
   ```
-- [ ] Test with CARLA GNSS sensor
-- [ ] Verify GNSS data in RViz
+- [ ] Test with CARLA GNSS sensor (requires sensor spawning)
+- [ ] Verify GNSS data in RViz (requires sensor spawning)
 
 **Success Criteria**:
-- GNSS coordinates published correctly
-- Fix status and service type set
-- Publish rate matches CARLA sensor frequency
+- [x] GNSS coordinates publishing code complete
+- [x] Fix status and service type implemented
+- [ ] Publish rate verification (pending integration testing)
 
 ### 5.5 Data Verification
 
 **Objective**: Verify sensor data accuracy and consistency
 
+**Status**: ⏳ **PENDING** - Requires full integration
+
 **Tasks**:
 - [ ] Create verification script in `scripts/verify_sensors.py`
 - [ ] Compare CARLA sensor data with ROS topic data
 - [ ] Check timestamp synchronization across sensors
-- [ ] Verify coordinate transformations:
+- [x] Coordinate transformations implemented:
   - CARLA (left-handed) → ROS (right-handed)
-  - Y-axis flip
-  - Rotation sign adjustments
+  - Y-axis flip for IMU
+  - Rotation conversions (deg → rad)
 - [ ] Performance testing:
   - Measure publish latency
   - Check CPU usage
   - Monitor memory usage
 - [ ] Integration test:
   - Start CARLA
-  - Start bridge
+  - Start bridge with spawned vehicle + sensors
   - Start Autoware
   - Set initial pose
   - Verify all sensor topics publish
   - Check sensor data in Autoware
 
 **Success Criteria**:
-- All sensor types publish correctly
-- Data matches CARLA output (accounting for coordinate conversion)
-- Timestamps synchronized within acceptable tolerance (<10ms)
-- Performance acceptable for real-time operation
-- Autoware receives and processes sensor data
+- [x] All sensor types have publishing code
+- [x] Coordinate conversion logic implemented
+- [ ] Data verification against CARLA (pending integration)
+- [ ] Timestamp synchronization testing (pending)
+- [ ] Performance benchmarks (pending)
+- [ ] Autoware integration validation (pending)
+
+### Phase 5 Summary
+
+**Status**: 🔧 **IN PROGRESS** - Core publishing complete (80%), integration work remaining (20%)
+
+**Completed** (Phase 1 migration):
+- [x] All sensor publishing code migrated to rclrs (~635 lines in sensor_bridge.rs)
+- [x] Camera: Image + CameraInfo publishing
+- [x] LiDAR: PointCloud2 with intensity
+- [x] IMU: Linear acceleration, angular velocity, orientation
+- [x] GNSS: NavSatFix with status
+- [x] Proper QoS profiles (sensor_data_qos)
+- [x] CARLA callback → ROS message conversions
+- [x] Coordinate system transformations
+
+**Remaining Work**:
+- [ ] **Sensor Spawning Integration** (Critical - requires VehicleLifecycle)
+  - Load vehicle_config.yaml sensor configuration
+  - Parse URDF sensor data from Autoware
+  - Use TF transforms for sensor positioning
+  - Spawn sensors attached to vehicle in CARLA
+  - Connect sensor bridges to spawned sensors
+- [ ] **Dynamic Frame IDs** (Important - quality issue)
+  - Replace hardcoded frame_ids with TF-based lookup
+  - Ensure sensors use correct Autoware frame names
+- [ ] **Testing & Verification** (Important - validation)
+  - Data accuracy verification
+  - Timestamp synchronization checks
+  - Performance benchmarks
+  - Full Autoware integration testing
+
+**Dependencies**:
+- **Phase 4** (Vehicle Lifecycle) must be integrated first
+- Sensor spawning requires VehicleLifecycle.spawn_vehicle() extension
+- Frame ID updates require TFBuffer integration
+
+**Estimated Remaining Effort**: 1-2 weeks
+- Sensor spawning logic: 3-5 days
+- Frame ID updates: 1-2 days
+- Testing & verification: 3-5 days
+
+**Next Steps**:
+1. Complete Phase 4 integration (VehicleLifecycle → main.rs)
+2. Extend VehicleLifecycle.spawn_vehicle() to attach sensors
+3. Load sensor config from vehicle_config.yaml
+4. Update sensor bridge frame IDs to use TF data
+5. Test with live CARLA + Autoware
 
 ---
 
@@ -573,8 +637,9 @@ File: `src/utils.rs`
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: 2025-11-04
+**Document Version**: 1.1
+**Last Updated**: 2025-11-05
+**Status**: Phase 2, 8 Complete | Phase 5 In Progress (80%) | Phase 6 Pending
 **Related Documents**:
 - [roadmap.md](../roadmap.md) - Main roadmap index
 - [infrastructure.md](infrastructure.md) - Infrastructure setup (Phases 0, 1, 7)
