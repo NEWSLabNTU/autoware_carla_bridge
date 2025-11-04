@@ -36,6 +36,10 @@ struct Opts {
     #[clap(long, default_value = "2000")]
     pub carla_port: u16,
 
+    /// CARLA map to load (e.g., "Town01", "Town10HD"). If not specified, uses current map.
+    #[clap(long)]
+    pub map_name: Option<String>,
+
     /// Vehicle role_name to bridge (e.g., "ego_vehicle")
     #[clap(long, conflicts_with = "vehicle_id")]
     pub vehicle_name: Option<String>,
@@ -147,7 +151,14 @@ fn main() -> Result<()> {
 
     // Connect to CARLA (passive mode - do NOT configure synchronous mode)
     let client = Client::connect(&opts.carla_address, opts.carla_port, None);
-    let world = client.world();
+
+    // Load map if specified, otherwise use current map
+    let world = if let Some(ref map_name) = opts.map_name {
+        utils::load_world_smart(&client, map_name)
+    } else {
+        log::info!("Using current map");
+        client.world()
+    };
 
     // Find target ego vehicle
     log::info!("Searching for target vehicle...");
