@@ -1,6 +1,12 @@
 use autoware_carla_bridge::{
-    autoware_detection::AutowareDetector, urdf_parser::parse_urdf_sensors,
+    autoware_detection::AutowareDetector,
+    coordinate_conversion::{
+        carla_to_ros_position, euler_to_quaternion, quaternion_to_euler, ros_to_carla_position,
+    },
+    tf_bridge::TFBuffer,
+    urdf_parser::parse_urdf_sensors,
 };
+use nalgebra::Vector3;
 use rclrs::{CreateBasicExecutor, SpinOptions};
 use std::time::{Duration, Instant};
 
@@ -110,7 +116,112 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         log::info!("  Time since last update: {:?}", elapsed);
     }
 
-    log::info!("Test complete!");
+    // Test TF2 Buffer
+    log::info!("\n=== Testing TF2 Buffer ===");
+    match TFBuffer::new(node.clone()) {
+        Ok(tf_buffer) => {
+            log::info!("TF Buffer created successfully");
+
+            // Give it a moment to receive transforms
+            std::thread::sleep(Duration::from_secs(2));
+
+            log::info!("TF Buffer has {} transforms", tf_buffer.len());
+
+            if !tf_buffer.is_empty() {
+                log::info!("Available frames:");
+                for frame in tf_buffer.get_all_frames() {
+                    log::info!("  - {}", frame);
+                }
+
+                // Try to get a specific transform if available
+                let frames = tf_buffer.get_all_frames();
+                if frames.len() >= 2 {
+                    let target = &frames[0];
+                    let source = &frames[1];
+                    log::info!(
+                        "Attempting to lookup transform from '{}' to '{}'...",
+                        source,
+                        target
+                    );
+                    match tf_buffer.lookup_transform(target, source) {
+                        Ok(transform) => {
+                            log::info!("  ✓ Transform found!");
+                            log::info!(
+                                "    Translation: [{:.3}, {:.3}, {:.3}]",
+                                transform.transform.translation.x,
+                                transform.transform.translation.y,
+                                transform.transform.translation.z
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!("  Could not lookup transform: {:?}", e);
+                        }
+                    }
+                }
+            } else {
+                log::warn!("No transforms received yet");
+            }
+        }
+        Err(e) => {
+            log::error!("Failed to create TF Buffer: {:?}", e);
+        }
+    }
+
+    // Test Coordinate Conversion
+    log::info!("\n=== Testing Coordinate Conversion ===");
+
+    // Test position conversion
+    log::info!("Position conversion:");
+    let ros_pos = Vector3::new(1.0, 2.0, 0.5);
+    log::info!(
+        "  ROS position (m, right-handed):  [{:.2}, {:.2}, {:.2}]",
+        ros_pos.x,
+        ros_pos.y,
+        ros_pos.z
+    );
+    let carla_pos = ros_to_carla_position(&ros_pos);
+    log::info!(
+        "  CARLA position (cm, left-handed): [{:.2}, {:.2}, {:.2}]",
+        carla_pos.x,
+        carla_pos.y,
+        carla_pos.z
+    );
+    let ros_pos_back = carla_to_ros_position(&carla_pos);
+    log::info!(
+        "  Round-trip back to ROS:          [{:.2}, {:.2}, {:.2}]",
+        ros_pos_back.x,
+        ros_pos_back.y,
+        ros_pos_back.z
+    );
+
+    // Test rotation conversion
+    log::info!("\nRotation conversion:");
+    let (roll, pitch, yaw) = (0.0, 0.0, std::f64::consts::FRAC_PI_2); // 90° yaw
+    log::info!(
+        "  ROS Euler (rad):  roll={:.3}, pitch={:.3}, yaw={:.3}",
+        roll,
+        pitch,
+        yaw
+    );
+
+    let q = euler_to_quaternion(roll, pitch, yaw);
+    log::info!(
+        "  Quaternion:       x={:.3}, y={:.3}, z={:.3}, w={:.3}",
+        q.i,
+        q.j,
+        q.k,
+        q.w
+    );
+
+    let (r2, p2, y2) = quaternion_to_euler(&q);
+    log::info!(
+        "  Back to Euler:    roll={:.3}, pitch={:.3}, yaw={:.3}",
+        r2,
+        p2,
+        y2
+    );
+
+    log::info!("\n=== Test Complete ===");
 
     Ok(())
 }

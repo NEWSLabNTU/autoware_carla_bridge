@@ -1,0 +1,458 @@
+/// Coordinate system conversion between ROS and CARLA
+///
+/// # Coordinate System Differences
+///
+/// ## ROS (REP 103/105) - Right-handed
+/// - **X-axis**: Forward (red)
+/// - **Y-axis**: Left (green)
+/// - **Z-axis**: Up (blue)
+/// - **Units**: meters
+/// - **Rotation**: Radians
+///
+/// ## CARLA - Left-handed (Unreal Engine)
+/// - **X-axis**: Forward
+/// - **Y-axis**: Right
+/// - **Z-axis**: Up
+/// - **Units**: centimeters
+/// - **Rotation**: Degrees
+///
+/// ## Key Transformations
+///
+/// ### Position (ROS → CARLA)
+/// ```text
+/// CARLA_x = ROS_x * 100.0      // meters to centimeters
+/// CARLA_y = -ROS_y * 100.0     // left-handed conversion + scale
+/// CARLA_z = ROS_z * 100.0      // meters to centimeters
+/// ```
+///
+/// ### Position (CARLA → ROS)
+/// ```text
+/// ROS_x = CARLA_x / 100.0      // centimeters to meters
+/// ROS_y = -CARLA_y / 100.0     // left-handed conversion + scale
+/// ROS_z = CARLA_z / 100.0      // centimeters to meters
+/// ```
+///
+/// ### Rotation (ROS → CARLA)
+/// ```text
+/// CARLA_roll = -ROS_roll * 180.0 / π   // radians to degrees, sign flip
+/// CARLA_pitch = ROS_pitch * 180.0 / π  // radians to degrees
+/// CARLA_yaw = -ROS_yaw * 180.0 / π     // radians to degrees, sign flip
+/// ```
+///
+/// ### Rotation (CARLA → ROS)
+/// ```text
+/// ROS_roll = -CARLA_roll * π / 180.0   // degrees to radians, sign flip
+/// ROS_pitch = CARLA_pitch * π / 180.0  // degrees to radians
+/// ROS_yaw = -CARLA_yaw * π / 180.0     // degrees to radians, sign flip
+/// ```
+use nalgebra::{Quaternion, UnitQuaternion, Vector3};
+use std::f64::consts::PI;
+
+/// Convert position from ROS (meters, right-handed) to CARLA (cm, left-handed)
+///
+/// # Arguments
+/// * `ros_position` - Position in ROS coordinate system (meters)
+///
+/// # Returns
+/// Position in CARLA coordinate system (centimeters)
+///
+/// # Example
+/// ```
+/// use autoware_carla_bridge::coordinate_conversion::ros_to_carla_position;
+/// use nalgebra::Vector3;
+///
+/// let ros_pos = Vector3::new(1.0, 2.0, 3.0); // 1m forward, 2m left, 3m up
+/// let carla_pos = ros_to_carla_position(&ros_pos);
+/// assert_eq!(carla_pos.x, 100.0); // 1m = 100cm
+/// assert_eq!(carla_pos.y, -200.0); // 2m left → -200cm right (Y-axis flip)
+/// assert_eq!(carla_pos.z, 300.0); // 3m = 300cm
+/// ```
+pub fn ros_to_carla_position(ros_position: &Vector3<f64>) -> Vector3<f64> {
+    Vector3::new(
+        ros_position.x * 100.0,  // Forward: meters to cm
+        -ros_position.y * 100.0, // Left → Right: Y-axis flip + scale
+        ros_position.z * 100.0,  // Up: meters to cm
+    )
+}
+
+/// Convert position from CARLA (cm, left-handed) to ROS (meters, right-handed)
+///
+/// # Arguments
+/// * `carla_position` - Position in CARLA coordinate system (centimeters)
+///
+/// # Returns
+/// Position in ROS coordinate system (meters)
+///
+/// # Example
+/// ```
+/// use autoware_carla_bridge::coordinate_conversion::carla_to_ros_position;
+/// use nalgebra::Vector3;
+///
+/// let carla_pos = Vector3::new(100.0, -200.0, 300.0);
+/// let ros_pos = carla_to_ros_position(&carla_pos);
+/// assert_eq!(ros_pos.x, 1.0); // 100cm = 1m
+/// assert_eq!(ros_pos.y, 2.0); // -200cm right → 2m left (Y-axis flip)
+/// assert_eq!(ros_pos.z, 3.0); // 300cm = 3m
+/// ```
+pub fn carla_to_ros_position(carla_position: &Vector3<f64>) -> Vector3<f64> {
+    Vector3::new(
+        carla_position.x / 100.0,  // Forward: cm to meters
+        -carla_position.y / 100.0, // Right → Left: Y-axis flip + scale
+        carla_position.z / 100.0,  // Up: cm to meters
+    )
+}
+
+/// Convert rotation from ROS Euler angles (radians) to CARLA Euler angles (degrees)
+///
+/// # Arguments
+/// * `roll` - Roll angle in radians
+/// * `pitch` - Pitch angle in radians
+/// * `yaw` - Yaw angle in radians
+///
+/// # Returns
+/// Tuple of (roll, pitch, yaw) in degrees for CARLA
+///
+/// # Example
+/// ```
+/// use autoware_carla_bridge::coordinate_conversion::ros_to_carla_rotation;
+/// use std::f64::consts::PI;
+///
+/// let (carla_roll, carla_pitch, carla_yaw) = ros_to_carla_rotation(0.0, 0.0, PI / 2.0);
+/// assert!((carla_roll - 0.0).abs() < 1e-10);
+/// assert!((carla_pitch - 0.0).abs() < 1e-10);
+/// assert!((carla_yaw - (-90.0)).abs() < 1e-6); // 90° counterclockwise → -90° in CARLA
+/// ```
+pub fn ros_to_carla_rotation(roll: f64, pitch: f64, yaw: f64) -> (f64, f64, f64) {
+    (
+        -roll * 180.0 / PI, // Sign flip for left-handed system
+        pitch * 180.0 / PI,
+        -yaw * 180.0 / PI, // Sign flip for left-handed system
+    )
+}
+
+/// Convert rotation from CARLA Euler angles (degrees) to ROS Euler angles (radians)
+///
+/// # Arguments
+/// * `roll` - Roll angle in degrees
+/// * `pitch` - Pitch angle in degrees
+/// * `yaw` - Yaw angle in degrees
+///
+/// # Returns
+/// Tuple of (roll, pitch, yaw) in radians for ROS
+///
+/// # Example
+/// ```
+/// use autoware_carla_bridge::coordinate_conversion::carla_to_ros_rotation;
+/// use std::f64::consts::PI;
+///
+/// let (ros_roll, ros_pitch, ros_yaw) = carla_to_ros_rotation(0.0, 0.0, -90.0);
+/// assert!((ros_roll - 0.0).abs() < 1e-10);
+/// assert!((ros_pitch - 0.0).abs() < 1e-10);
+/// assert!((ros_yaw - PI / 2.0).abs() < 1e-6); // -90° in CARLA → 90° counterclockwise
+/// ```
+pub fn carla_to_ros_rotation(roll: f64, pitch: f64, yaw: f64) -> (f64, f64, f64) {
+    (
+        -roll * PI / 180.0, // Sign flip for right-handed system
+        pitch * PI / 180.0,
+        -yaw * PI / 180.0, // Sign flip for right-handed system
+    )
+}
+
+/// Convert ROS quaternion to CARLA Euler angles (degrees)
+///
+/// # Arguments
+/// * `quaternion` - Rotation as quaternion (x, y, z, w)
+///
+/// # Returns
+/// Tuple of (roll, pitch, yaw) in degrees for CARLA
+pub fn ros_quaternion_to_carla_euler(quaternion: &Quaternion<f64>) -> (f64, f64, f64) {
+    let (roll, pitch, yaw) = quaternion_to_euler(quaternion);
+    ros_to_carla_rotation(roll, pitch, yaw)
+}
+
+/// Convert CARLA Euler angles (degrees) to ROS quaternion
+///
+/// # Arguments
+/// * `roll` - Roll angle in degrees
+/// * `pitch` - Pitch angle in degrees
+/// * `yaw` - Yaw angle in degrees
+///
+/// # Returns
+/// Rotation as quaternion (x, y, z, w)
+pub fn carla_euler_to_ros_quaternion(roll: f64, pitch: f64, yaw: f64) -> Quaternion<f64> {
+    let (ros_roll, ros_pitch, ros_yaw) = carla_to_ros_rotation(roll, pitch, yaw);
+    euler_to_quaternion(ros_roll, ros_pitch, ros_yaw)
+}
+
+/// Convert quaternion to Euler angles (roll, pitch, yaw) in radians
+///
+/// Uses the ZYX (yaw-pitch-roll) convention, which is standard in ROS.
+///
+/// # Arguments
+/// * `q` - Quaternion (x, y, z, w)
+///
+/// # Returns
+/// Tuple of (roll, pitch, yaw) in radians
+///
+/// # Example
+/// ```
+/// use autoware_carla_bridge::coordinate_conversion::quaternion_to_euler;
+/// use nalgebra::Quaternion;
+///
+/// // Identity quaternion (no rotation)
+/// let q = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+/// let (roll, pitch, yaw) = quaternion_to_euler(&q);
+/// assert!((roll - 0.0).abs() < 1e-10);
+/// assert!((pitch - 0.0).abs() < 1e-10);
+/// assert!((yaw - 0.0).abs() < 1e-10);
+/// ```
+pub fn quaternion_to_euler(q: &Quaternion<f64>) -> (f64, f64, f64) {
+    // Extract quaternion components
+    let (w, x, y, z) = (q.w, q.i, q.j, q.k);
+
+    // Roll (x-axis rotation)
+    let sinr_cosp = 2.0 * (w * x + y * z);
+    let cosr_cosp = 1.0 - 2.0 * (x * x + y * y);
+    let roll = sinr_cosp.atan2(cosr_cosp);
+
+    // Pitch (y-axis rotation)
+    let sinp = 2.0 * (w * y - z * x);
+    let pitch = if sinp.abs() >= 1.0 {
+        sinp.signum() * PI / 2.0 // Use 90 degrees if out of range
+    } else {
+        sinp.asin()
+    };
+
+    // Yaw (z-axis rotation)
+    let siny_cosp = 2.0 * (w * z + x * y);
+    let cosy_cosp = 1.0 - 2.0 * (y * y + z * z);
+    let yaw = siny_cosp.atan2(cosy_cosp);
+
+    (roll, pitch, yaw)
+}
+
+/// Convert Euler angles (roll, pitch, yaw) to quaternion
+///
+/// Uses the ZYX (yaw-pitch-roll) convention, which is standard in ROS.
+///
+/// # Arguments
+/// * `roll` - Roll angle in radians
+/// * `pitch` - Pitch angle in radians
+/// * `yaw` - Yaw angle in radians
+///
+/// # Returns
+/// Quaternion (x, y, z, w)
+///
+/// # Example
+/// ```
+/// use autoware_carla_bridge::coordinate_conversion::{euler_to_quaternion, quaternion_to_euler};
+///
+/// // Test round-trip conversion
+/// let (roll, pitch, yaw) = (0.1, 0.2, 0.3);
+/// let q = euler_to_quaternion(roll, pitch, yaw);
+/// let (r2, p2, y2) = quaternion_to_euler(&q);
+/// assert!((roll - r2).abs() < 1e-10);
+/// assert!((pitch - p2).abs() < 1e-10);
+/// assert!((yaw - y2).abs() < 1e-10);
+/// ```
+pub fn euler_to_quaternion(roll: f64, pitch: f64, yaw: f64) -> Quaternion<f64> {
+    // Using Tait-Bryan angles (ZYX convention)
+    let cy = (yaw * 0.5).cos();
+    let sy = (yaw * 0.5).sin();
+    let cp = (pitch * 0.5).cos();
+    let sp = (pitch * 0.5).sin();
+    let cr = (roll * 0.5).cos();
+    let sr = (roll * 0.5).sin();
+
+    Quaternion::new(
+        cr * cp * cy + sr * sp * sy, // w
+        sr * cp * cy - cr * sp * sy, // x
+        cr * sp * cy + sr * cp * sy, // y
+        cr * cp * sy - sr * sp * cy, // z
+    )
+}
+
+/// Normalize angle to range [-π, π]
+pub fn normalize_angle(angle: f64) -> f64 {
+    let mut a = angle % (2.0 * PI);
+    if a > PI {
+        a -= 2.0 * PI;
+    } else if a < -PI {
+        a += 2.0 * PI;
+    }
+    a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f64::consts::FRAC_PI_2;
+
+    #[test]
+    fn test_ros_to_carla_position() {
+        // Test forward, left, up
+        let ros_pos = Vector3::new(1.0, 2.0, 3.0);
+        let carla_pos = ros_to_carla_position(&ros_pos);
+        assert_eq!(carla_pos.x, 100.0);
+        assert_eq!(carla_pos.y, -200.0); // Y-axis flip
+        assert_eq!(carla_pos.z, 300.0);
+    }
+
+    #[test]
+    fn test_carla_to_ros_position() {
+        let carla_pos = Vector3::new(100.0, -200.0, 300.0);
+        let ros_pos = carla_to_ros_position(&carla_pos);
+        assert_eq!(ros_pos.x, 1.0);
+        assert_eq!(ros_pos.y, 2.0); // Y-axis flip back
+        assert_eq!(ros_pos.z, 3.0);
+    }
+
+    #[test]
+    fn test_position_round_trip() {
+        let original = Vector3::new(1.5, -3.2, 0.7);
+        let carla = ros_to_carla_position(&original);
+        let back = carla_to_ros_position(&carla);
+        assert!((original - back).norm() < 1e-10);
+    }
+
+    #[test]
+    fn test_ros_to_carla_rotation_90deg_yaw() {
+        let (roll, pitch, yaw) = ros_to_carla_rotation(0.0, 0.0, FRAC_PI_2);
+        assert!((roll - 0.0).abs() < 1e-10);
+        assert!((pitch - 0.0).abs() < 1e-10);
+        assert!((yaw - (-90.0)).abs() < 1e-6); // 90° CCW → -90° in CARLA
+    }
+
+    #[test]
+    fn test_carla_to_ros_rotation_90deg_yaw() {
+        let (roll, pitch, yaw) = carla_to_ros_rotation(0.0, 0.0, -90.0);
+        assert!((roll - 0.0).abs() < 1e-10);
+        assert!((pitch - 0.0).abs() < 1e-10);
+        assert!((yaw - FRAC_PI_2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_rotation_round_trip() {
+        let (roll, pitch, yaw) = (0.1, 0.2, 0.3);
+        let (cr, cp, cy) = ros_to_carla_rotation(roll, pitch, yaw);
+        let (r2, p2, y2) = carla_to_ros_rotation(cr, cp, cy);
+        assert!((roll - r2).abs() < 1e-10);
+        assert!((pitch - p2).abs() < 1e-10);
+        assert!((yaw - y2).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_euler_to_quaternion_identity() {
+        let q = euler_to_quaternion(0.0, 0.0, 0.0);
+        assert!((q.w - 1.0).abs() < 1e-10);
+        assert!(q.i.abs() < 1e-10);
+        assert!(q.j.abs() < 1e-10);
+        assert!(q.k.abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_euler_to_quaternion_90deg_yaw() {
+        let q = euler_to_quaternion(0.0, 0.0, FRAC_PI_2);
+        // 90° yaw rotation quaternion: [0, 0, sin(45°), cos(45°)]
+        assert!(q.i.abs() < 1e-10);
+        assert!(q.j.abs() < 1e-10);
+        assert!((q.k - 0.70710678118).abs() < 1e-6);
+        assert!((q.w - 0.70710678118).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_quaternion_to_euler_identity() {
+        let q = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let (roll, pitch, yaw) = quaternion_to_euler(&q);
+        assert!((roll - 0.0).abs() < 1e-10);
+        assert!((pitch - 0.0).abs() < 1e-10);
+        assert!((yaw - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_quaternion_to_euler_90deg_yaw() {
+        let q = Quaternion::new(0.70710678118, 0.0, 0.0, 0.70710678118);
+        let (roll, pitch, yaw) = quaternion_to_euler(&q);
+        assert!(roll.abs() < 1e-10);
+        assert!(pitch.abs() < 1e-10);
+        assert!((yaw - FRAC_PI_2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_euler_quaternion_round_trip() {
+        let (roll, pitch, yaw) = (0.1, 0.2, 0.3);
+        let q = euler_to_quaternion(roll, pitch, yaw);
+        let (r2, p2, y2) = quaternion_to_euler(&q);
+        assert!((roll - r2).abs() < 1e-10);
+        assert!((pitch - p2).abs() < 1e-10);
+        assert!((yaw - y2).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_euler_quaternion_round_trip_various_angles() {
+        let test_cases = vec![
+            (0.0, 0.0, 0.0),
+            (FRAC_PI_2, 0.0, 0.0),
+            (0.0, FRAC_PI_2, 0.0),
+            (0.0, 0.0, FRAC_PI_2),
+            (0.5, 0.3, 1.2),
+            (-0.5, -0.3, -1.2),
+        ];
+
+        for (roll, pitch, yaw) in test_cases {
+            let q = euler_to_quaternion(roll, pitch, yaw);
+            let (r2, p2, y2) = quaternion_to_euler(&q);
+            assert!(
+                (roll - r2).abs() < 1e-9,
+                "Roll mismatch for ({}, {}, {})",
+                roll,
+                pitch,
+                yaw
+            );
+            assert!(
+                (pitch - p2).abs() < 1e-9,
+                "Pitch mismatch for ({}, {}, {})",
+                roll,
+                pitch,
+                yaw
+            );
+            assert!(
+                (yaw - y2).abs() < 1e-9,
+                "Yaw mismatch for ({}, {}, {})",
+                roll,
+                pitch,
+                yaw
+            );
+        }
+    }
+
+    #[test]
+    fn test_normalize_angle() {
+        assert!((normalize_angle(0.0) - 0.0).abs() < 1e-10);
+        assert!((normalize_angle(PI) - PI).abs() < 1e-10);
+        assert!((normalize_angle(-PI) - (-PI)).abs() < 1e-10);
+        assert!((normalize_angle(2.0 * PI) - 0.0).abs() < 1e-10);
+        assert!((normalize_angle(3.0 * PI) - PI).abs() < 1e-10);
+        assert!((normalize_angle(-2.0 * PI) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_ros_quaternion_to_carla_euler() {
+        // 90° yaw rotation in ROS
+        let q = euler_to_quaternion(0.0, 0.0, FRAC_PI_2);
+        let (roll, pitch, yaw) = ros_quaternion_to_carla_euler(&q);
+        assert!((roll - 0.0).abs() < 1e-6);
+        assert!((pitch - 0.0).abs() < 1e-6);
+        assert!((yaw - (-90.0)).abs() < 1e-3); // Should be -90° in CARLA
+    }
+
+    #[test]
+    fn test_carla_euler_to_ros_quaternion() {
+        // -90° yaw in CARLA → 90° yaw in ROS
+        let q = carla_euler_to_ros_quaternion(0.0, 0.0, -90.0);
+        let (roll, pitch, yaw) = quaternion_to_euler(&q);
+        assert!((roll - 0.0).abs() < 1e-6);
+        assert!((pitch - 0.0).abs() < 1e-6);
+        assert!((yaw - FRAC_PI_2).abs() < 1e-6);
+    }
+}

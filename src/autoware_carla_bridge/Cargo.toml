@@ -30,13 +30,14 @@ std_msgs = "*"
 builtin_interfaces = "*"
 geometry_msgs = "*"
 sensor_msgs = "*"
+tf2_msgs = "*"
 autoware_vehicle_msgs = "*"
 tier4_vehicle_msgs = "*"
 tier4_control_msgs = "*"
 
 # CARLA and utilities
 # Using local carla-rust for latest APIs and multi-version support
-carla = { version = "0.12.0", path = "../../../carla-rust/carla" }
+carla = { version = "0.12.0", path = "../external/carla-rust/carla" }
 atomic_float = "1.1.0"
 arc-swap = "1.6.0"
 clap = { version = "4.5.48", features = ["derive"] }
