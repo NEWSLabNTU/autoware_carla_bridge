@@ -140,6 +140,28 @@ impl ActorBridge for SensorBridge {
     }
 }
 
+impl Drop for SensorBridge {
+    fn drop(&mut self) {
+        log::info!(
+            "Cleaning up sensor bridge: {} (type: {:?})",
+            self._sensor_name,
+            self._sensor_type
+        );
+        if self._actor.destroy() {
+            log::info!(
+                "Destroyed sensor actor: {} (type: {:?})",
+                self._sensor_name,
+                self._sensor_type
+            );
+        } else {
+            log::warn!(
+                "Failed to destroy sensor actor: {} (may have already been destroyed)",
+                self._sensor_name
+            );
+        }
+    }
+}
+
 fn register_camera_rgb(
     node: Arc<rclrs::Node>,
     actor: &Sensor,

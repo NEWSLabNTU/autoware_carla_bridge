@@ -439,6 +439,14 @@ impl ActorBridge for VehicleBridge {
 
 impl Drop for VehicleBridge {
     fn drop(&mut self) {
-        log::info!("Remove vehicle name {}", self.vehicle_name());
+        log::info!("Cleaning up vehicle bridge: {}", self.vehicle_name());
+        if self.actor.destroy() {
+            log::info!("Destroyed vehicle actor: {}", self.vehicle_name());
+        } else {
+            log::warn!(
+                "Failed to destroy vehicle actor: {} (may have already been destroyed)",
+                self.vehicle_name()
+            );
+        }
     }
 }
