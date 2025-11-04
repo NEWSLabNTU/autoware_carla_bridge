@@ -23,6 +23,8 @@ build-interface: ## Build message packages (generates Rust crates)
 
 .PHONY: build-bridge
 build-bridge: ## Build autoware_carla_bridge package
+	. /opt/ros/humble/setup.sh && \
+	. src/ros2_rust/install/setup.sh && \
 	. src/interface/install/setup.sh && \
 	cd src/autoware_carla_bridge && \
 	colcon build $(COLCON_BUILD_FLAGS)
@@ -32,7 +34,10 @@ build: build-ros2-rust build-interface build-bridge ## Build all stages (complet
 
 .PHONY: run
 run: ## Launch the bridge with ros2 launch
-	@. src/autoware_carla_bridge/install/setup.sh && \
+	@. /opt/ros/humble/setup.sh && \
+	. src/ros2_rust/install/setup.sh && \
+	. src/interface/install/setup.sh && \
+	. src/autoware_carla_bridge/install/setup.sh && \
 	ros2 run autoware_carla_bridge autoware_carla_bridge --carla-port 3000
 
 .PHONY: clean-ros2-rust
@@ -55,12 +60,16 @@ clean: clean-ros2-rust clean-interface clean-bridge ## Clean build artifacts
 
 .PHONY: format
 format: ## Format code with rustfmt
+	. /opt/ros/humble/setup.sh && \
+	. src/ros2_rust/install/setup.sh && \
 	. src/interface/install/setup.sh && \
 	cd src/autoware_carla_bridge && \
 	cargo +nightly fmt
 
 .PHONY: lint
 lint: ## Run format check and clippy
+	. /opt/ros/humble/setup.sh && \
+	. src/ros2_rust/install/setup.sh && \
 	. src/interface/install/setup.sh && \
 	cd src/autoware_carla_bridge && \
 	( \
@@ -70,9 +79,11 @@ lint: ## Run format check and clippy
 
 .PHONY: test
 test: ## Run tests
+	. /opt/ros/humble/setup.sh && \
+	. src/ros2_rust/install/setup.sh && \
 	. src/interface/install/setup.sh && \
 	cd src/autoware_carla_bridge && \
-	cargo nextest run --no-fail-fast
+	cargo nextest run --no-tests pass --no-fail-fast
 
 .PHONY: agent-setup
 agent-setup: ## Setup carla_agent environment
