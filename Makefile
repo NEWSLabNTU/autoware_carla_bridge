@@ -1,6 +1,12 @@
 .DEFAULT_GOAL := help
 COLCON_BUILD_FLAGS := --symlink-install --cargo-args --release
 
+# CARLA Version Selection
+# Supported versions: 0.9.14, 0.9.15, 0.9.16
+# The carla-rust build system uses this to select appropriate bindings
+CARLA_VERSION ?= 0.9.16
+export CARLA_VERSION
+
 .PHONY: help
 help: ## Display available targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
