@@ -16,34 +16,34 @@ This document covers the core infrastructure work for the autoware_carla_bridge 
 
 ### Tasks
 
-- [x] ✅ Study Zenoh API usage in current codebase
-- [x] ✅ Study rclrs API and examples
-- [x] ✅ Document API differences and migration strategy
-- [x] ✅ Set up Autoware environment
+- [x] Study Zenoh API usage in current codebase
+- [x] Study rclrs API and examples
+- [x] Document API differences and migration strategy
+- [x] Set up Autoware environment
   - Symlink created: `src/external/autoware` → `/home/aeon/repos/autoware/2025.02-ws`
   - Autoware workspace configured and accessible
-- [x] ✅ Review and understand all bridge types:
-  - [x] ✅ `sensor_bridge.rs` (Camera, LiDAR, IMU, GNSS)
-  - [x] ✅ `vehicle_bridge.rs` (Control, status, velocity)
-  - [x] ✅ `trafficlight_bridge.rs`
-  - [x] ✅ `trafficsign_bridge.rs`
-  - [x] ✅ `other_bridge.rs`
-- [x] ✅ Set up colcon workspace and three-stage build system
-- [x] ✅ Create package.xml and launch file for ROS 2 integration
+- [x] Review and understand all bridge types:
+  - [x] `sensor_bridge.rs` (Camera, LiDAR, IMU, GNSS)
+  - [x] `vehicle_bridge.rs` (Control, status, velocity)
+  - [x] `trafficlight_bridge.rs`
+  - [x] `trafficsign_bridge.rs`
+  - [x] `other_bridge.rs`
+- [x] Set up colcon workspace and three-stage build system
+- [x] Create package.xml and launch file for ROS 2 integration
 
 **Deliverables**:
-- [x] ✅ `docs/zenoh-to-rclrs-api-comparison.md`
-- [x] ✅ `docs/roadmap.md` (now split into multiple files)
-- [x] ✅ `docs/message-type-migration.md`
-- [x] ✅ `docs/carla-rust-integration.md`
-- [x] ✅ Autoware environment configured (symlink created)
-- [x] ✅ Colcon workspace structure created
-- [x] ✅ Three-stage build system implemented
+- [x] `docs/zenoh-to-rclrs-api-comparison.md`
+- [x] `docs/roadmap.md` (now split into multiple files)
+- [x] `docs/message-type-migration.md`
+- [x] `docs/carla-rust-integration.md`
+- [x] Autoware environment configured (symlink created)
+- [x] Colcon workspace structure created
+- [x] Three-stage build system implemented
 
 **Success Criteria**:
-- ✅ All team members understand migration approach
-- ✅ Build system configured and working
-- ✅ Autoware workspace accessible
+- [x] All team members understand migration approach
+- [x] Build system configured and working
+- [x] Autoware workspace accessible
 
 ---
 
@@ -59,13 +59,13 @@ This document covers the core infrastructure work for the autoware_carla_bridge 
 
 **Reference**: See `docs/message-type-migration.md` for comprehensive guide on migrating from zenoh-ros-type to rclrs interface packages.
 
-- [x] ✅ Study how rclrs provides ROS message types:
-  - ✅ rclrs generates `.cargo/config.toml` to link ROS interface packages
-  - ✅ Message types (sensor_msgs, std_msgs, etc.) are sourced from colcon workspace
-  - ✅ Three-stage build system implemented with rosidl_generator_rs
-  - ✅ direnv configured for automatic environment sourcing
+- [x] Study how rclrs provides ROS message types:
+  - rclrs generates `.cargo/config.toml` to link ROS interface packages
+  - Message types (sensor_msgs, std_msgs, etc.) are sourced from colcon workspace
+  - Three-stage build system implemented with rosidl_generator_rs
+  - direnv configured for automatic environment sourcing
 
-- [x] ✅ Verify ROS message availability:
+- [x] Verify ROS message availability:
   ```bash
   # Source Autoware environment
   source external/autoware/install/setup.bash
@@ -79,64 +79,64 @@ This document covers the core infrastructure work for the autoware_carla_bridge 
   ros2 interface show sensor_msgs/msg/Image
   ros2 interface show autoware_vehicle_msgs/msg/VelocityReport
   ```
-  ✅ Message availability verified through colcon build system
+  Message availability verified through colcon build system
 
-- [x] ✅ Test rclrs message type access:
-  - ✅ Created `examples/test_message_types.rs` for verification
-  - ✅ Three-stage build generates all required message crates
+- [x] Test rclrs message type access:
+  - Created `examples/test_message_types.rs` for verification
+  - Three-stage build generates all required message crates
 
-- [x] ✅ Examine generated `.cargo/config.toml`:
-  - ✅ Generated at project root with ROS message patches
-  - ✅ Contains paths to all required message crates (50+ packages)
-  - ✅ Verified patches include: std_msgs, sensor_msgs, geometry_msgs, autoware_vehicle_msgs, tier4_vehicle_msgs
+- [x] Examine generated `.cargo/config.toml`:
+  - Generated at project root with ROS message patches
+  - Contains paths to all required message crates (50+ packages)
+  - Verified patches include: std_msgs, sensor_msgs, geometry_msgs, autoware_vehicle_msgs, tier4_vehicle_msgs
 
 ### 1.2 Update Dependencies
 
-- [x] ✅ Update `Cargo.toml`:
-  - ✅ Removed all zenoh dependencies (zenoh, zenoh-ros-type)
-  - ✅ Added rclrs with wildcard version
-  - ✅ Added ROS 2 message package dependencies (wildcards resolved via .cargo/config.toml)
-  - ✅ Updated carla to 0.12.0 with local path dependency: `{ version = "0.12.0", path = "../../../carla-rust/carla" }`
-  - ✅ Kept all utility crates (arc-swap, atomic_float, clap, etc.)
+- [x] Update `Cargo.toml`:
+  - Removed all zenoh dependencies (zenoh, zenoh-ros-type)
+  - Added rclrs with wildcard version
+  - Added ROS 2 message package dependencies (wildcards resolved via .cargo/config.toml)
+  - Updated carla to 0.12.0 with local path dependency: `{ version = "0.12.0", path = "../../../carla-rust/carla" }`
+  - Kept all utility crates (arc-swap, atomic_float, clap, etc.)
 
-- [x] ✅ Remove Zenoh-specific crates from dependencies
-  - ✅ All zenoh and zenoh-ros-type references removed
-  - ✅ Only repository URL contains "zenoh" (harmless)
+- [x] Remove Zenoh-specific crates from dependencies
+  - All zenoh and zenoh-ros-type references removed
+  - Only repository URL contains "zenoh" (harmless)
 
-- [x] ✅ Build with colcon build system:
-  - ✅ Three-stage build implemented in Makefile
-  - ✅ direnv configured for automatic environment
-  - ✅ Successfully built on 2025-10-29
+- [x] Build with colcon build system:
+  - Three-stage build implemented in Makefile
+  - direnv configured for automatic environment
+  - Successfully built on 2025-10-29
 
-- [x] ✅ Verify `.cargo/config.toml` is generated with ROS message paths
-  - ✅ Generated with 50+ message package patches
-  - ✅ All required message types accessible
+- [x] Verify `.cargo/config.toml` is generated with ROS message paths
+  - Generated with 50+ message package patches
+  - All required message types accessible
 
 ### 1.3 Update Main Entry Point
 
 File: `src/main.rs`
 
-- [x] ✅ Remove Zenoh imports:
-  - ✅ All `zenoh::` imports removed
-  - ✅ Replaced with `use rclrs::CreateBasicExecutor;`
+- [x] Remove Zenoh imports:
+  - All `zenoh::` imports removed
+  - Replaced with `use rclrs::CreateBasicExecutor;`
 
-- [x] ✅ Add rclrs imports:
-  - ✅ `use rclrs::CreateBasicExecutor;`
-  - ✅ Standard Arc and threading imports retained
+- [x] Add rclrs imports:
+  - `use rclrs::CreateBasicExecutor;`
+  - Standard Arc and threading imports retained
 
-- [x] ✅ Remove `Mode` enum - no longer needed
-  - ✅ Mode enum completely removed
-  - ✅ No mode-specific logic remains
+- [x] Remove `Mode` enum - no longer needed
+  - Mode enum completely removed
+  - No mode-specific logic remains
 
-- [x] ✅ Remove Zenoh config and listen endpoints from CLI arguments
-  - ✅ Removed: `zenoh_listen`, `mode`, `zenoh_config`
-  - ✅ Kept: `carla_address`, `carla_port`, `tick`, `slowdown`
+- [x] Remove Zenoh config and listen endpoints from CLI arguments
+  - Removed: `zenoh_listen`, `mode`, `zenoh_config`
+  - Kept: `carla_address`, `carla_port`, `tick`, `slowdown`
 
-- [x] ✅ Update `Opts` struct:
-  - ✅ Simplified to CARLA-only parameters
-  - ✅ Clean CLI interface with no Zenoh references
+- [x] Update `Opts` struct:
+  - Simplified to CARLA-only parameters
+  - Clean CLI interface with no Zenoh references
 
-- [x] ✅ Replace Zenoh session initialization with rclrs:
+- [x] Replace Zenoh session initialization with rclrs:
   ```rust
   // Implemented:
   let ctx = rclrs::Context::new(std::env::args(), rclrs::InitOptions::default())?;
@@ -144,68 +144,68 @@ File: `src/main.rs`
   let node = executor.create_node("autoware_carla_bridge")?;
   ```
 
-- [x] ✅ Update function signatures to pass `rclrs::Node` (not Arc - Node is Arc internally)
+- [x] Update function signatures to pass `rclrs::Node` (not Arc - Node is Arc internally)
 
-- [x] ✅ Add ROS 2 executor:
-  - ✅ Basic executor created with `create_basic_executor()`
-  - ✅ Node created from executor
+- [x] Add ROS 2 executor:
+  - Basic executor created with `create_basic_executor()`
+  - Node created from executor
 
 ### 1.4 Update Bridge Infrastructure
 
 Files: `src/bridge/actor_bridge.rs`, `src/bridge/mod.rs`
 
-- [x] ✅ Update `create_bridge()` signature to accept `rclrs::Node`
-  - ✅ Changed from `Arc<Session>` to `rclrs::Node`
-  - ✅ Node is `Arc<NodeState>` internally, cheap to clone
+- [x] Update `create_bridge()` signature to accept `rclrs::Node`
+  - Changed from `Arc<Session>` to `rclrs::Node`
+  - Node is `Arc<NodeState>` internally, cheap to clone
 
-- [x] ✅ Update all bridge constructors to accept `rclrs::Node`:
-  - ✅ SensorBridge::new()
-  - ✅ VehicleBridge::new()
-  - ✅ TrafficLightBridge::new()
-  - ✅ TrafficSignBridge::new()
-  - ✅ OtherActorBridge::new()
+- [x] Update all bridge constructors to accept `rclrs::Node`:
+  - SensorBridge::new()
+  - VehicleBridge::new()
+  - TrafficLightBridge::new()
+  - TrafficSignBridge::new()
+  - OtherActorBridge::new()
 
-- [x] ✅ Remove `mode` parameter from all bridge-related functions
-  - ✅ No mode parameter anywhere in codebase
-  - ✅ Simplified bridge creation logic
+- [x] Remove `mode` parameter from all bridge-related functions
+  - No mode parameter anywhere in codebase
+  - Simplified bridge creation logic
 
-- [x] ✅ Update `ActorBridge` trait:
-  - ✅ Trait interfaces updated for rclrs
-  - ✅ No breaking changes to external API
+- [x] Update `ActorBridge` trait:
+  - Trait interfaces updated for rclrs
+  - No breaking changes to external API
 
 ### 1.5 Remove Mode-Specific Logic
 
 Files: `src/autoware.rs`, `src/utils.rs`
 
-- [x] ✅ Delete `Mode` enum - completely removed
-- [x] ✅ Remove `setup_topics()` function - deleted
-- [x] ✅ Remove `declare_node_liveliness()` - deleted
-- [x] ✅ Remove `declare_topic_liveliness()` - deleted
-- [x] ✅ Remove `undeclare_all_liveliness()` - deleted
-- [x] ✅ Remove `format_topic_key()` - replaced with simple string concatenation
-- [x] ✅ Remove `generate_attachment()` function - deleted
-- [x] ✅ Remove `put_with_attachment!` macro - deleted
+- [x] Delete `Mode` enum - completely removed
+- [x] Remove `setup_topics()` function - deleted
+- [x] Remove `declare_node_liveliness()` - deleted
+- [x] Remove `declare_topic_liveliness()` - deleted
+- [x] Remove `undeclare_all_liveliness()` - deleted
+- [x] Remove `format_topic_key()` - replaced with simple string concatenation
+- [x] Remove `generate_attachment()` function - deleted
+- [x] Remove `put_with_attachment!` macro - deleted
 
 **Code Reduction**:
-- ✅ autoware.rs: 336 → 134 lines (-60% reduction)
-- ✅ sensor_bridge.rs: 773 → 629 lines (-19% reduction)
-- ✅ ~300 lines removed, ~500 lines modified
-- ✅ All Zenoh complexity eliminated
+- autoware.rs: 336 → 134 lines (-60% reduction)
+- sensor_bridge.rs: 773 → 629 lines (-19% reduction)
+- ~300 lines removed, ~500 lines modified
+- All Zenoh complexity eliminated
 
 **Deliverables**:
-- [x] ✅ Understanding of rclrs ROS message type provision mechanism
-- [x] ✅ Updated `Cargo.toml` with rclrs dependencies
-- [x] ✅ Updated `main.rs` with rclrs initialization
-- [x] ✅ Cleaned up mode-specific logic
-- [x] ✅ Generated `.cargo/config.toml` with ROS message paths
-- [x] ✅ Code compiles and passes lint checks
+- [x] Understanding of rclrs ROS message type provision mechanism
+- [x] Updated `Cargo.toml` with rclrs dependencies
+- [x] Updated `main.rs` with rclrs initialization
+- [x] Cleaned up mode-specific logic
+- [x] Generated `.cargo/config.toml` with ROS message paths
+- [x] Code compiles and passes lint checks
 
 **Success Criteria**:
-- ✅ `make build` succeeds with direnv environment
-- ✅ No Zenoh dependencies remain (only in repo URL)
-- ✅ rclrs node created successfully
-- ✅ ROS message types accessible from colcon workspace
-- ✅ Binary built: 9.3 MB at `install/autoware_carla_bridge/lib/`
+- [x] `make build` succeeds with direnv environment
+- [x] No Zenoh dependencies remain (only in repo URL)
+- [x] rclrs node created successfully
+- [x] ROS message types accessible from colcon workspace
+- [x] Binary built: 9.3 MB at `install/autoware_carla_bridge/lib/`
 
 ---
 
@@ -219,13 +219,13 @@ Files: `src/autoware.rs`, `src/utils.rs`
 
 ### 7.1 Local Repository Integration - ✅ COMPLETE
 
-- [x] ✅ Configure local path dependency in `Cargo.toml`:
+- [x] Configure local path dependency in `Cargo.toml`:
   ```toml
   carla = { version = "0.12.0", path = "../../../carla-rust/carla" }
   ```
-- [x] ✅ Verify build succeeds with local dependency
-- [x] ✅ Test with carla-rust multi-version support (CARLA_VERSION env var)
-- [x] ✅ Document integration in `docs/carla-rust-integration.md`
+- [x] Verify build succeeds with local dependency
+- [x] Test with carla-rust multi-version support (CARLA_VERSION env var)
+- [x] Document integration in `docs/carla-rust-integration.md`
 
 **Benefits**:
 - Access to latest carla-rust APIs (not yet on crates.io)
@@ -235,10 +235,10 @@ Files: `src/autoware.rs`, `src/utils.rs`
 
 ### 7.2 Build System Configuration - ✅ COMPLETE
 
-- [x] ✅ Configure direnv for automatic environment setup
-- [x] ✅ Update `.envrc` with CARLA_VERSION and paths
-- [x] ✅ Simplify Makefile (remove manual sourcing)
-- [x] ✅ Test build process:
+- [x] Configure direnv for automatic environment setup
+- [x] Update `.envrc` with CARLA_VERSION and paths
+- [x] Simplify Makefile (remove manual sourcing)
+- [x] Test build process:
   ```bash
   # Stage 1: Build ros2_rust (rosidl_generator_rs)
   make build-ros2-rust
@@ -274,15 +274,15 @@ Files: `src/autoware.rs`, `src/utils.rs`
 
 ### 7.4 Documentation - ✅ COMPLETE
 
-- [x] ✅ Create `docs/carla-rust-integration.md` (386 lines)
+- [x] Create `docs/carla-rust-integration.md` (386 lines)
   - Integration setup instructions
   - Multi-version CARLA support guide
   - Environment configuration
   - Build troubleshooting
   - API usage examples
 
-- [x] ✅ Update roadmap with Phase 7 tasks
-- [x] ✅ Mark Phase 2 as runtime verified in roadmap
+- [x] Update roadmap with Phase 7 tasks
+- [x] Mark Phase 2 as runtime verified in roadmap
 
 ### 7.5 Advanced Features - ⚠️ DEFERRED TO FUTURE
 
