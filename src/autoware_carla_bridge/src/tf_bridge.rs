@@ -98,12 +98,107 @@ impl TFBuffer {
             }
         }
 
+        // Walk up from source to target through the TF tree
+        let mut current_frame = source_frame.to_string();
+        let mut chain: Vec<TransformStamped> = Vec::new();
+        let max_depth = 20; // Prevent infinite loops
+
+        for _ in 0..max_depth {
+            if current_frame == target_frame {
+                // Reached target - compose all transforms in the chain
+                return self.compose_transform_chain(&chain, target_frame, source_frame);
+            }
+
+            // Get transform for current frame (parent → current)
+            if let Some(tf) = tf_map.get(&current_frame) {
+                let parent = tf.header.frame_id.clone();
+                chain.push(tf.clone());
+                current_frame = parent;
+            } else {
+                break; // No parent found
+            }
+        }
+
         // For complex hierarchies, we'd need to implement graph traversal
         // For now, just report the error
         Err(BridgeError::AutowareIssue(format!(
-            "Transform from '{}' to '{}' not found in TF buffer",
-            source_frame, target_frame
+            "Transform from '{}' to '{}' not found in TF buffer (tried walking {} frames)",
+            source_frame,
+            target_frame,
+            chain.len()
         )))
+    }
+
+    /// Compose a chain of transforms into a single transform
+    fn compose_transform_chain(
+        &self,
+        chain: &[TransformStamped],
+        _target_frame: &str,
+        source_frame: &str,
+    ) -> Result<TransformStamped> {
+        if chain.is_empty() {
+            return Err(BridgeError::AutowareIssue(
+                "Empty transform chain".to_string(),
+            ));
+        }
+
+        // Start with the first transform
+        let mut result = chain[0].clone();
+
+        // Compose each subsequent transform
+        for tf in &chain[1..] {
+            result = self.multiply_transforms(&result, tf)?;
+        }
+
+        // Update the child_frame_id to be the source
+        result.child_frame_id = source_frame.to_string();
+
+        Ok(result)
+    }
+
+    /// Multiply two transforms (compose them)
+    fn multiply_transforms(
+        &self,
+        t1: &TransformStamped,
+        t2: &TransformStamped,
+    ) -> Result<TransformStamped> {
+        // Convert to nalgebra for easier composition
+        let trans1 = &t1.transform.translation;
+        let rot1 = &t1.transform.rotation;
+        let trans2 = &t2.transform.translation;
+        let rot2 = &t2.transform.rotation;
+
+        // Create nalgebra types
+        let iso1 = nalgebra::Isometry3::from_parts(
+            nalgebra::Translation3::new(trans1.x, trans1.y, trans1.z),
+            nalgebra::UnitQuaternion::new_normalize(nalgebra::Quaternion::new(
+                rot1.w, rot1.x, rot1.y, rot1.z,
+            )),
+        );
+
+        let iso2 = nalgebra::Isometry3::from_parts(
+            nalgebra::Translation3::new(trans2.x, trans2.y, trans2.z),
+            nalgebra::UnitQuaternion::new_normalize(nalgebra::Quaternion::new(
+                rot2.w, rot2.x, rot2.y, rot2.z,
+            )),
+        );
+
+        // Compose: result = t2 * t1 (apply t1 first, then t2)
+        let result_iso = iso2 * iso1;
+
+        // Convert back to ROS message
+        let mut result = t2.clone();
+        result.transform.translation.x = result_iso.translation.x;
+        result.transform.translation.y = result_iso.translation.y;
+        result.transform.translation.z = result_iso.translation.z;
+        result.transform.rotation.w = result_iso.rotation.w;
+        result.transform.rotation.x = result_iso.rotation.i;
+        result.transform.rotation.y = result_iso.rotation.j;
+        result.transform.rotation.z = result_iso.rotation.k;
+        result.header.frame_id = t2.header.frame_id.clone();
+        result.child_frame_id = t1.child_frame_id.clone();
+
+        Ok(result)
     }
 
     /// Get transform for a specific frame (relative to its parent)

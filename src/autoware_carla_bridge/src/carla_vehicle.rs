@@ -42,7 +42,7 @@ impl CarlaVehicle {
         vehicle_blueprint: &str,
         initial_pose: &nalgebra::Isometry3<f32>,
         sensor_configs: &[SensorConfig],
-        _tf_buffer: &TFBuffer,
+        tf_buffer: &TFBuffer,
     ) -> Result<Self> {
         tracing::info!(
             "Spawning vehicle at ({:.2}, {:.2}, {:.2})",
@@ -58,7 +58,15 @@ impl CarlaVehicle {
 
         // Spawn sensors
         tracing::info!("Spawning {} sensors...", sensor_configs.len());
-        let sensors = Self::spawn_sensors(world, &vehicle, sensor_configs)?;
+
+        // Debug: Show available TF frames
+        let available_frames = tf_buffer.get_all_frames();
+        tracing::info!("Available TF frames ({} total):", available_frames.len());
+        for frame in &available_frames {
+            tracing::debug!("  - {}", frame);
+        }
+
+        let sensors = Self::spawn_sensors(world, &vehicle, sensor_configs, tf_buffer)?;
 
         tracing::info!("All sensors spawned successfully");
 
@@ -101,6 +109,7 @@ impl CarlaVehicle {
         world: &mut World,
         vehicle: &Vehicle,
         sensor_configs: &[SensorConfig],
+        tf_buffer: &TFBuffer,
     ) -> Result<HashMap<String, Sensor>> {
         let blueprint_library = world.blueprint_library();
         let mut spawned_sensors = HashMap::new();
@@ -126,20 +135,73 @@ impl CarlaVehicle {
                 BridgeError::AutowareIssue(format!("Sensor blueprint '{}' not found", blueprint_id))
             })?;
 
-            // Create transform from URDF/TF (nalgebra)
-            let na_transform = nalgebra::Isometry3::from_parts(
-                nalgebra::Translation3::new(
-                    config.position.x as f32,
-                    config.position.y as f32,
-                    config.position.z as f32,
-                ),
-                nalgebra::UnitQuaternion::new_normalize(nalgebra::Quaternion::new(
-                    config.orientation.w as f32,
-                    config.orientation.i as f32,
-                    config.orientation.j as f32,
-                    config.orientation.k as f32,
-                )),
+            // Try to get transform from TF buffer (base_link → sensor)
+            tracing::info!(
+                "Looking up TF transform: base_link → '{}'",
+                config.link_name
             );
+            let na_transform = match tf_buffer.lookup_transform("base_link", &config.link_name) {
+                Ok(tf) => {
+                    // Use TF transform
+                    let trans = &tf.transform.translation;
+                    let rot = &tf.transform.rotation;
+
+                    tracing::info!(
+                        "✓ Found TF for '{}': pos=({:.3}, {:.3}, {:.3}) parent='{}'",
+                        config.link_name,
+                        trans.x,
+                        trans.y,
+                        trans.z,
+                        tf.header.frame_id
+                    );
+
+                    nalgebra::Isometry3::from_parts(
+                        nalgebra::Translation3::new(trans.x as f32, trans.y as f32, trans.z as f32),
+                        nalgebra::UnitQuaternion::new_normalize(nalgebra::Quaternion::new(
+                            rot.w as f32,
+                            rot.x as f32,
+                            rot.y as f32,
+                            rot.z as f32,
+                        )),
+                    )
+                }
+                Err(e) => {
+                    // Fall back to URDF data
+                    tracing::error!(
+                        "✗ TF lookup failed for '{}': {} - Using URDF data: pos=({:.3}, {:.3}, {:.3})",
+                        config.link_name,
+                        e,
+                        config.position.x,
+                        config.position.y,
+                        config.position.z
+                    );
+
+                    // If both TF and URDF have zero position, this will fail in CARLA
+                    if config.position.x.abs() < 0.001
+                        && config.position.y.abs() < 0.001
+                        && config.position.z.abs() < 0.001
+                    {
+                        tracing::error!(
+                            "URDF position is also (0,0,0) for '{}' - CARLA will reject this!",
+                            config.link_name
+                        );
+                    }
+
+                    nalgebra::Isometry3::from_parts(
+                        nalgebra::Translation3::new(
+                            config.position.x as f32,
+                            config.position.y as f32,
+                            config.position.z as f32,
+                        ),
+                        nalgebra::UnitQuaternion::new_normalize(nalgebra::Quaternion::new(
+                            config.orientation.w as f32,
+                            config.orientation.i as f32,
+                            config.orientation.j as f32,
+                            config.orientation.k as f32,
+                        )),
+                    )
+                }
+            };
 
             // Convert to CARLA Transform
             let carla_transform = Transform::from_na(&na_transform);
