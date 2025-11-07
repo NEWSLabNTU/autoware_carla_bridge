@@ -259,11 +259,16 @@ fn main() -> Result<()> {
         let velocity = vehicle.velocity();
         let angular_velocity = vehicle.angular_velocity();
 
+        // Convert CARLA geom types to nalgebra for coordinate conversion
+        let na_transform = transform.to_na();
+        let na_velocity = velocity.to_na();
+        let na_angular_velocity = angular_velocity.to_na();
+
         // Convert CARLA coordinates to ROS coordinates
         let position = coordinate_conversion::carla_to_ros_position(&nalgebra::Vector3::new(
-            transform.translation.x as f64,
-            transform.translation.y as f64,
-            transform.translation.z as f64,
+            na_transform.translation.x as f64,
+            na_transform.translation.y as f64,
+            na_transform.translation.z as f64,
         ));
 
         // Convert CARLA rotation (quaternion) to ROS quaternion
@@ -273,10 +278,10 @@ fn main() -> Result<()> {
         // 4. Apply coordinate flip (roll and yaw signs)
         // 5. Convert back to quaternion
         let carla_quat = nalgebra::Quaternion::new(
-            transform.rotation.w as f64,
-            transform.rotation.i as f64,
-            transform.rotation.j as f64,
-            transform.rotation.k as f64,
+            na_transform.rotation.w as f64,
+            na_transform.rotation.i as f64,
+            na_transform.rotation.j as f64,
+            na_transform.rotation.k as f64,
         );
         let (roll, pitch, yaw) = coordinate_conversion::quaternion_to_euler(&carla_quat);
         let orientation = coordinate_conversion::euler_to_quaternion(
@@ -285,16 +290,16 @@ fn main() -> Result<()> {
         );
 
         let linear_vel = coordinate_conversion::carla_to_ros_velocity(&nalgebra::Vector3::new(
-            velocity.x as f64,
-            velocity.y as f64,
-            velocity.z as f64,
+            na_velocity.x as f64,
+            na_velocity.y as f64,
+            na_velocity.z as f64,
         ));
 
         let angular_vel =
             coordinate_conversion::carla_to_ros_angular_velocity(&nalgebra::Vector3::new(
-                angular_velocity.x as f64,
-                angular_velocity.y as f64,
-                angular_velocity.z as f64,
+                na_angular_velocity.x as f64,
+                na_angular_velocity.y as f64,
+                na_angular_velocity.z as f64,
             ));
 
         // Create ROS timestamp

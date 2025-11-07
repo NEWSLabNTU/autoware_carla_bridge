@@ -9,6 +9,7 @@ use crate::{
 };
 use carla::{
     client::{ActorBase, Sensor, Vehicle, World},
+    geom::Transform,
     rpc::AttachmentType,
 };
 use std::collections::HashMap;
@@ -79,9 +80,12 @@ impl CarlaVehicle {
             ))
         })?;
 
+        // Convert nalgebra Isometry3 to CARLA Transform
+        let carla_transform = Transform::from_na(initial_pose);
+
         // Spawn vehicle
         let actor = world
-            .spawn_actor(&vehicle_bp, initial_pose)
+            .spawn_actor(&vehicle_bp, &carla_transform)
             .map_err(|e| BridgeError::AutowareIssue(format!("Failed to spawn vehicle: {}", e)))?;
 
         let vehicle = match actor.into_kinds() {
@@ -122,8 +126,8 @@ impl CarlaVehicle {
                 BridgeError::AutowareIssue(format!("Sensor blueprint '{}' not found", blueprint_id))
             })?;
 
-            // Create transform from URDF/TF
-            let transform = nalgebra::Isometry3::from_parts(
+            // Create transform from URDF/TF (nalgebra)
+            let na_transform = nalgebra::Isometry3::from_parts(
                 nalgebra::Translation3::new(
                     config.position.x as f32,
                     config.position.y as f32,
@@ -137,9 +141,17 @@ impl CarlaVehicle {
                 )),
             );
 
+            // Convert to CARLA Transform
+            let carla_transform = Transform::from_na(&na_transform);
+
             // Spawn sensor attached to vehicle
             let sensor_actor = world
-                .spawn_actor_opt(&sensor_bp, &transform, Some(vehicle), AttachmentType::Rigid)
+                .spawn_actor_opt(
+                    &sensor_bp,
+                    &carla_transform,
+                    Some(vehicle),
+                    AttachmentType::Rigid,
+                )
                 .map_err(|e| {
                     BridgeError::AutowareIssue(format!(
                         "Failed to spawn sensor '{}': {}",
