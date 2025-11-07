@@ -37,7 +37,7 @@ impl TFBuffer {
                     let mut tf_map = transforms_cb.lock().unwrap();
 
                     for transform in &msg.transforms {
-                        log::debug!(
+                        tracing::debug!(
                             "TF: {} → {} [{:.3}, {:.3}, {:.3}]",
                             transform.header.frame_id,
                             transform.child_frame_id,
@@ -49,14 +49,14 @@ impl TFBuffer {
                         tf_map.insert(transform.child_frame_id.clone(), transform.clone());
                     }
 
-                    log::info!("TF Buffer updated: {} transforms", tf_map.len());
+                    tracing::info!("TF Buffer updated: {} transforms", tf_map.len());
                 },
             )
             .map_err(|e| {
                 BridgeError::AutowareIssue(format!("Failed to subscribe to /tf_static: {}", e))
             })?;
 
-        log::info!("TFBuffer initialized, subscribing to /tf_static");
+        tracing::info!("TFBuffer initialized, subscribing to /tf_static");
 
         Ok(Self {
             transforms,

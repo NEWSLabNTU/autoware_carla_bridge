@@ -216,7 +216,7 @@ impl VehicleBridge {
             },
         };
 
-        log::debug!(
+        tracing::debug!(
             "Carla => Autoware: accel_status={:.3}, brake_status={:.3}, steer_status={:.3}",
             control.throttle,
             control.brake,
@@ -247,7 +247,7 @@ impl VehicleBridge {
                 .to_radians(),
         };
 
-        log::debug!(
+        tracing::debug!(
             "Carla => Autoware: current velocity: {}",
             velocity_msg.longitudinal_velocity
         );
@@ -363,7 +363,7 @@ impl VehicleBridge {
             ..
         } = **self.current_actuation_cmd.load();
 
-        log::debug!(
+        tracing::debug!(
             "Autoware => Bridge: accel_cmd={accel_cmd:.3}, brake_cmd={brake_cmd:.3}, steer_cmd={steer_cmd:.3}",
         );
 
@@ -408,7 +408,7 @@ impl VehicleBridge {
             gear: 0,
         });
 
-        log::debug!(
+        tracing::debug!(
             "Bridge => Carla: throttle={:.3}, steer={:.3}, brake={:.3}, hand_brake={}, reverse={}",
             accel_cmd as f32,
             steer,
@@ -439,11 +439,11 @@ impl ActorBridge for VehicleBridge {
 
 impl Drop for VehicleBridge {
     fn drop(&mut self) {
-        log::info!("Cleaning up vehicle bridge: {}", self.vehicle_name());
+        tracing::info!("Cleaning up vehicle bridge: {}", self.vehicle_name());
         if self.actor.destroy() {
-            log::info!("Destroyed vehicle actor: {}", self.vehicle_name());
+            tracing::info!("Destroyed vehicle actor: {}", self.vehicle_name());
         } else {
-            log::warn!(
+            tracing::warn!(
                 "Failed to destroy vehicle actor: {} (may have already been destroyed)",
                 self.vehicle_name()
             );

@@ -12,17 +12,17 @@ pub fn is_bigendian() -> bool {
 /// if the map is actually different, saving 5-10 seconds on redundant loads.
 /// For older versions, falls back to standard `load_world()`.
 pub fn load_world_smart(client: &Client, map_name: &str) -> World {
-    log::info!("Loading map: {}", map_name);
+    tracing::info!("Loading map: {}", map_name);
 
     #[cfg(carla_0916)]
     {
-        log::debug!("Using efficient load_world_if_different (CARLA 0.9.16+)");
+        tracing::debug!("Using efficient load_world_if_different (CARLA 0.9.16+)");
         client.load_world_if_different(map_name)
     }
 
     #[cfg(not(carla_0916))]
     {
-        log::debug!("Using standard load_world (CARLA < 0.9.16)");
+        tracing::debug!("Using standard load_world (CARLA < 0.9.16)");
         client.load_world(map_name)
     }
 }

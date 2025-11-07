@@ -96,7 +96,7 @@ impl AutowareDetector {
                     let was_detected = *current_state == AutowareState::Detected;
 
                     if !was_detected {
-                        log::info!(
+                        tracing::info!(
                             "Autoware detected: robot_description received ({} bytes)",
                             urdf_size
                         );
@@ -115,7 +115,7 @@ impl AutowareDetector {
                 ))
             })?;
 
-        log::info!(
+        tracing::info!(
             "AutowareDetector initialized (detection_timeout: {:?}, health_timeout: {:?})",
             detection_timeout,
             health_timeout
@@ -158,7 +158,7 @@ impl AutowareDetector {
     pub fn wait_for_detection(&self) -> Result<()> {
         let start = Instant::now();
 
-        log::info!("Waiting for Autoware detection...");
+        tracing::info!("Waiting for Autoware detection...");
 
         while !self.robot_desc_received.load(Ordering::SeqCst) {
             if start.elapsed() > self.detection_timeout {
@@ -172,7 +172,7 @@ impl AutowareDetector {
             std::thread::sleep(Duration::from_millis(100));
         }
 
-        log::info!("Autoware detected successfully");
+        tracing::info!("Autoware detected successfully");
         Ok(())
     }
 
@@ -190,9 +190,9 @@ impl AutowareDetector {
             .any(|name| name.name.contains("robot_state_publisher"));
 
         if found {
-            log::debug!("robot_state_publisher node found");
+            tracing::debug!("robot_state_publisher node found");
         } else {
-            log::debug!("robot_state_publisher node not found");
+            tracing::debug!("robot_state_publisher node not found");
         }
 
         Ok(found)
@@ -210,9 +210,9 @@ impl AutowareDetector {
         let found = topics.iter().any(|(name, _)| name == "/tf_static");
 
         if found {
-            log::debug!("/tf_static topic found");
+            tracing::debug!("/tf_static topic found");
         } else {
-            log::debug!("/tf_static topic not found");
+            tracing::debug!("/tf_static topic not found");
         }
 
         Ok(found)
@@ -232,11 +232,11 @@ impl AutowareDetector {
 
                 if let Some(last_time) = *last_update {
                     if last_time.elapsed() > self.health_timeout {
-                        log::warn!(
+                        tracing::warn!(
                             "Autoware health check failed: no updates for {:?}",
                             last_time.elapsed()
                         );
-                        log::warn!("Autoware marked as Lost");
+                        tracing::warn!("Autoware marked as Lost");
                         *current_state = AutowareState::Lost;
                     }
                 }
@@ -249,7 +249,7 @@ impl AutowareDetector {
                 if received {
                     if let Some(last_time) = *last_update {
                         if last_time.elapsed() < self.health_timeout {
-                            log::info!("Autoware has recovered");
+                            tracing::info!("Autoware has recovered");
                             *current_state = AutowareState::Detected;
                         }
                     }
@@ -258,7 +258,7 @@ impl AutowareDetector {
             AutowareState::NotDetected => {
                 // Check if we've been detected
                 if self.robot_desc_received.load(Ordering::SeqCst) {
-                    log::info!("Autoware detected during health check");
+                    tracing::info!("Autoware detected during health check");
                     *current_state = AutowareState::Detected;
                 }
             }

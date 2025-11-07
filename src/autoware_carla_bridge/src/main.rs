@@ -60,7 +60,16 @@ struct Opts {
 }
 
 fn main() -> Result<()> {
-    pretty_env_logger::init();
+    // Install color-eyre for better error reporting
+    color_eyre::install().expect("Failed to install color-eyre");
+
+    // Initialize tracing subscriber with env filter
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     let opts = Opts::parse();
 
@@ -69,24 +78,24 @@ fn main() -> Result<()> {
     {
         let running = running.clone();
         ctrlc::set_handler(move || {
-            log::info!("Ctrl-C received, shutting down...");
+            tracing::info!("Ctrl-C received, shutting down...");
             running.store(false, Ordering::SeqCst);
         })
         .expect("Failed to set Ctrl-C handler");
     }
 
-    log::info!("=== Autoware-CARLA Bridge (Autoware-centric) ===");
-    log::info!("Vehicle blueprint: {}", opts.vehicle_blueprint);
+    tracing::info!("=== Autoware-CARLA Bridge (Autoware-centric) ===");
+    tracing::info!("Vehicle blueprint: {}", opts.vehicle_blueprint);
 
     // === Step 1: Initialize ROS 2 ===
-    log::info!("Initializing ROS 2...");
+    tracing::info!("Initializing ROS 2...");
     let ctx = rclrs::Context::new(std::env::args(), rclrs::InitOptions::default())?;
     let executor = ctx.create_basic_executor();
     let node = executor.create_node("autoware_carla_bridge")?;
-    log::info!("ROS 2 node created: autoware_carla_bridge");
+    tracing::info!("ROS 2 node created: autoware_carla_bridge");
 
     // === Step 2: Connect to CARLA ===
-    log::info!(
+    tracing::info!(
         "Connecting to CARLA at {}:{}...",
         opts.carla_address,
         opts.carla_port
@@ -95,24 +104,24 @@ fn main() -> Result<()> {
 
     // Load map if specified, otherwise use current map
     let mut world = if let Some(ref map_name) = opts.map_name {
-        log::info!("Loading CARLA map: {}", map_name);
+        tracing::info!("Loading CARLA map: {}", map_name);
         utils::load_world_smart(&client, map_name)
     } else {
-        log::info!("Using current CARLA map");
+        tracing::info!("Using current CARLA map");
         client.world()
     };
 
-    log::info!("Connected to CARLA successfully");
+    tracing::info!("Connected to CARLA successfully");
 
     // Create clock publisher
     let simulator_clock = SimulatorClock::new(node.clone())?;
 
     // === Step 3: Create Autoware coordinator and wait for Autoware ===
-    log::info!("Creating Autoware coordinator...");
+    tracing::info!("Creating Autoware coordinator...");
     let mut autoware = autoware::Autoware::new(node.clone())?;
 
-    log::info!("Waiting for Autoware to start...");
-    log::info!("(Start Autoware planning simulator with sample_sensor_kit)");
+    tracing::info!("Waiting for Autoware to start...");
+    tracing::info!("(Start Autoware planning simulator with sample_sensor_kit)");
 
     let autoware_timeout = if opts.autoware_timeout == 0 {
         None
@@ -138,16 +147,16 @@ fn main() -> Result<()> {
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    log::info!("Autoware detected!");
+    tracing::info!("Autoware detected!");
 
     // === Step 4: Parse URDF to get sensor configurations ===
-    log::info!("Parsing URDF from Autoware...");
+    tracing::info!("Parsing URDF from Autoware...");
     autoware.parse_sensors()?;
 
     let sensor_configs = autoware.sensor_configs();
-    log::info!("Found {} sensors in URDF:", sensor_configs.len());
+    tracing::info!("Found {} sensors in URDF:", sensor_configs.len());
     for config in sensor_configs {
-        log::info!(
+        tracing::info!(
             "  - {} (type: {:?}, parent: {})",
             config.link_name,
             config.sensor_type,
@@ -156,8 +165,8 @@ fn main() -> Result<()> {
     }
 
     // === Step 5: Wait for initial pose from RViz ===
-    log::info!("Waiting for initial pose from RViz...");
-    log::info!("(Use '2D Pose Estimate' tool in RViz to set vehicle position)");
+    tracing::info!("Waiting for initial pose from RViz...");
+    tracing::info!("(Use '2D Pose Estimate' tool in RViz to set vehicle position)");
 
     let pose_timeout = if opts.pose_timeout == 0 {
         None
@@ -171,7 +180,7 @@ fn main() -> Result<()> {
     let initial_pose = autoware.take_initial_pose()?;
 
     // === Step 6: Spawn vehicle and sensors in CARLA ===
-    log::info!("Spawning vehicle and sensors in CARLA...");
+    tracing::info!("Spawning vehicle and sensors in CARLA...");
     let mut carla_vehicle = CarlaVehicle::new(
         &mut world,
         &opts.vehicle_blueprint,
@@ -182,8 +191,8 @@ fn main() -> Result<()> {
 
     let vehicle = carla_vehicle.get_vehicle();
 
-    log::info!("Vehicle and sensors spawned successfully!");
-    log::info!("=== Bridge running ===");
+    tracing::info!("Vehicle and sensors spawned successfully!");
+    tracing::info!("=== Bridge running ===");
 
     // Track consecutive timeouts to detect CARLA connection issues
     let mut consecutive_timeouts = 0;
@@ -194,26 +203,26 @@ fn main() -> Result<()> {
         // Check Autoware health
         autoware.health_check();
         if !autoware.is_alive() {
-            log::warn!("Autoware connection lost! Cleaning up...");
+            tracing::warn!("Autoware connection lost! Cleaning up...");
             carla_vehicle.cleanup()?;
-            log::info!("Cleanup complete. Waiting for Autoware to restart...");
+            tracing::info!("Cleanup complete. Waiting for Autoware to restart...");
 
             // Wait for Autoware to come back
             loop {
                 if autoware.is_alive() {
-                    log::info!("Autoware reconnected!");
+                    tracing::info!("Autoware reconnected!");
                     break;
                 }
                 if !running.load(Ordering::SeqCst) {
-                    log::info!("Shutdown requested during Autoware wait");
+                    tracing::info!("Shutdown requested during Autoware wait");
                     return Ok(());
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
 
             // TODO: Re-spawn vehicle and sensors
-            log::warn!("Autoware reconnected, but vehicle respawn not yet implemented");
-            log::warn!("Please restart the bridge");
+            tracing::warn!("Autoware reconnected, but vehicle respawn not yet implemented");
+            tracing::warn!("Please restart the bridge");
             break;
         }
 
@@ -223,11 +232,11 @@ fn main() -> Result<()> {
                 consecutive_timeouts = 0;
             }
             Err(e) => {
-                log::warn!("Failed to wait for CARLA tick: {e:?}");
+                tracing::warn!("Failed to wait for CARLA tick: {e:?}");
                 consecutive_timeouts += 1;
 
                 if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS {
-                    log::error!(
+                    tracing::error!(
                         "Reached {} consecutive timeouts. CARLA may be unresponsive.",
                         MAX_CONSECUTIVE_TIMEOUTS
                     );
@@ -308,9 +317,9 @@ fn main() -> Result<()> {
         // Apply throttle/brake/steering to vehicle
     }
 
-    log::info!("Cleaning up...");
+    tracing::info!("Cleaning up...");
     carla_vehicle.cleanup()?;
-    log::info!("Bridge shutdown complete");
+    tracing::info!("Bridge shutdown complete");
 
     Ok(())
 }

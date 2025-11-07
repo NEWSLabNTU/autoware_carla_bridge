@@ -43,7 +43,7 @@ impl CarlaVehicle {
         sensor_configs: &[SensorConfig],
         _tf_buffer: &TFBuffer,
     ) -> Result<Self> {
-        log::info!(
+        tracing::info!(
             "Spawning vehicle at ({:.2}, {:.2}, {:.2})",
             initial_pose.translation.x,
             initial_pose.translation.y,
@@ -53,13 +53,13 @@ impl CarlaVehicle {
         // Spawn vehicle
         let vehicle = Self::spawn_vehicle(world, vehicle_blueprint, initial_pose)?;
 
-        log::info!("Vehicle spawned successfully: ID={}", vehicle.id());
+        tracing::info!("Vehicle spawned successfully: ID={}", vehicle.id());
 
         // Spawn sensors
-        log::info!("Spawning {} sensors...", sensor_configs.len());
+        tracing::info!("Spawning {} sensors...", sensor_configs.len());
         let sensors = Self::spawn_sensors(world, &vehicle, sensor_configs)?;
 
-        log::info!("All sensors spawned successfully");
+        tracing::info!("All sensors spawned successfully");
 
         Ok(Self { vehicle, sensors })
     }
@@ -112,7 +112,7 @@ impl CarlaVehicle {
                 crate::bridge::sensor_bridge::SensorType::Imu => "sensor.other.imu",
                 crate::bridge::sensor_bridge::SensorType::Gnss => "sensor.other.gnss",
                 _ => {
-                    log::warn!("Skipping unsupported sensor type: {:?}", config.sensor_type);
+                    tracing::warn!("Skipping unsupported sensor type: {:?}", config.sensor_type);
                     continue;
                 }
             };
@@ -152,7 +152,7 @@ impl CarlaVehicle {
                 _ => return Err(BridgeError::CarlaIssue("Spawned actor is not a sensor")),
             };
 
-            log::info!(
+            tracing::info!(
                 "Spawned sensor '{}' (type: {:?}, ID: {})",
                 config.link_name,
                 config.sensor_type,
@@ -181,10 +181,10 @@ impl CarlaVehicle {
     pub fn cleanup(&mut self) -> Result<()> {
         // Destroy all sensors first
         for (name, sensor) in self.sensors.drain() {
-            log::info!("Destroying sensor '{}' (ID: {})", name, sensor.id());
+            tracing::info!("Destroying sensor '{}' (ID: {})", name, sensor.id());
             let destroyed = sensor.destroy();
             if !destroyed {
-                log::warn!(
+                tracing::warn!(
                     "Sensor '{}' destroy returned false - may already be destroyed",
                     name
                 );
@@ -192,12 +192,12 @@ impl CarlaVehicle {
         }
 
         // Destroy vehicle
-        log::info!("Destroying vehicle: ID={}", self.vehicle.id());
+        tracing::info!("Destroying vehicle: ID={}", self.vehicle.id());
         let destroyed = self.vehicle.destroy();
         if !destroyed {
-            log::warn!("Vehicle destroy returned false - may already be destroyed");
+            tracing::warn!("Vehicle destroy returned false - may already be destroyed");
         } else {
-            log::info!("Vehicle destroyed successfully");
+            tracing::info!("Vehicle destroyed successfully");
         }
 
         Ok(())

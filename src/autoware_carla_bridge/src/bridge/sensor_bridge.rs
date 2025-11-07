@@ -82,7 +82,7 @@ impl SensorBridge {
             "Unable to recognize sensor type",
         )))?;
 
-        log::info!("Detected sensor '{sensor_name}' (type: {:?})", sensor_type);
+        tracing::info!("Detected sensor '{sensor_name}' (type: {:?})", sensor_type);
         Ok(BridgeType::Sensor(sensor_type, sensor_name))
     }
 
@@ -118,10 +118,10 @@ impl SensorBridge {
                 register_gnss(node.clone(), &actor, key_list)?;
             }
             SensorType::Collision => {
-                log::warn!("Collision sensor is not supported yet");
+                tracing::warn!("Collision sensor is not supported yet");
             }
             SensorType::NotSupport => {
-                log::warn!("Unsupported sensor type '{}'", actor.type_id());
+                tracing::warn!("Unsupported sensor type '{}'", actor.type_id());
             }
         }
 
@@ -142,19 +142,19 @@ impl ActorBridge for SensorBridge {
 
 impl Drop for SensorBridge {
     fn drop(&mut self) {
-        log::info!(
+        tracing::info!(
             "Cleaning up sensor bridge: {} (type: {:?})",
             self._sensor_name,
             self._sensor_type
         );
         if self._actor.destroy() {
-            log::info!(
+            tracing::info!(
                 "Destroyed sensor actor: {} (type: {:?})",
                 self._sensor_name,
                 self._sensor_type
             );
         } else {
-            log::warn!(
+            tracing::warn!(
                 "Failed to destroy sensor actor: {} (may have already been destroyed)",
                 self._sensor_name
             );
@@ -217,15 +217,15 @@ fn register_camera_rgb(
         if let Ok(carla_image) = data.try_into() {
             // Publish image
             if let Err(e) = publish_camera_image(&image_publisher, header.clone(), carla_image) {
-                log::error!("Failed to publish camera image: {e:?}");
+                tracing::error!("Failed to publish camera image: {e:?}");
             }
 
             // Publish camera info
             if let Err(e) = publish_camera_info(&info_publisher, header, width, height, fov) {
-                log::error!("Failed to publish camera info: {e:?}");
+                tracing::error!("Failed to publish camera info: {e:?}");
             }
         } else {
-            log::error!("Failed to transform camera image");
+            tracing::error!("Failed to transform camera image");
         }
     });
 
@@ -250,10 +250,10 @@ fn register_lidar_raycast(
 
         if let Ok(measure) = data.try_into() {
             if let Err(e) = publish_lidar(&publisher, header, measure) {
-                log::error!("Failed to publish lidar data: {e:?}");
+                tracing::error!("Failed to publish lidar data: {e:?}");
             }
         } else {
-            log::error!("Failed to transform lidar data");
+            tracing::error!("Failed to transform lidar data");
         }
     });
 
@@ -278,10 +278,10 @@ fn register_lidar_raycast_semantic(
 
         if let Ok(measure) = data.try_into() {
             if let Err(e) = publish_semantic_lidar(&publisher, header, measure) {
-                log::error!("Failed to publish semantic lidar data: {e:?}");
+                tracing::error!("Failed to publish semantic lidar data: {e:?}");
             }
         } else {
-            log::error!("Failed to transform semantic lidar data");
+            tracing::error!("Failed to transform semantic lidar data");
         }
     });
 
@@ -304,10 +304,10 @@ fn register_imu(
 
         if let Ok(measure) = data.try_into() {
             if let Err(e) = publish_imu(&publisher, header, measure) {
-                log::error!("Failed to publish IMU data: {e:?}");
+                tracing::error!("Failed to publish IMU data: {e:?}");
             }
         } else {
-            log::error!("Failed to transform IMU data");
+            tracing::error!("Failed to transform IMU data");
         }
     });
 
@@ -330,10 +330,10 @@ fn register_gnss(
 
         if let Ok(measure) = data.try_into() {
             if let Err(e) = publish_gnss(&publisher, header, measure) {
-                log::error!("Failed to publish GNSS data: {e:?}");
+                tracing::error!("Failed to publish GNSS data: {e:?}");
             }
         } else {
-            log::error!("Failed to transform GNSS data");
+            tracing::error!("Failed to transform GNSS data");
         }
     });
 

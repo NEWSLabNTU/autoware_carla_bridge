@@ -35,8 +35,8 @@ pub fn parse_urdf_sensors(urdf_xml: &str) -> Result<Vec<SensorConfig>> {
     let robot = urdf_rs::read_from_string(urdf_xml)
         .map_err(|e| BridgeError::AutowareIssue(format!("Failed to parse URDF: {}", e)))?;
 
-    log::info!("Parsed URDF for robot: {}", robot.name);
-    log::debug!(
+    tracing::info!("Parsed URDF for robot: {}", robot.name);
+    tracing::debug!(
         "URDF has {} links and {} joints",
         robot.links.len(),
         robot.joints.len()
@@ -48,7 +48,7 @@ pub fn parse_urdf_sensors(urdf_xml: &str) -> Result<Vec<SensorConfig>> {
     for link in &robot.links {
         // Try to classify sensor type from link name
         if let Some(sensor_type) = classify_sensor_type(&link.name) {
-            log::debug!("Found sensor link: {} (type: {:?})", link.name, sensor_type);
+            tracing::debug!("Found sensor link: {} (type: {:?})", link.name, sensor_type);
 
             // Find joint connecting this link to its parent
             let joint = robot.joints.iter().find(|j| j.child.link == link.name);
@@ -70,7 +70,7 @@ pub fn parse_urdf_sensors(urdf_xml: &str) -> Result<Vec<SensorConfig>> {
                     parent_frame: joint.parent.link.clone(),
                 });
 
-                log::info!(
+                tracing::info!(
                     "Sensor '{}' configured: type={:?}, parent={}, pos=[{:.3}, {:.3}, {:.3}]",
                     link.name,
                     sensor_type,
@@ -80,7 +80,7 @@ pub fn parse_urdf_sensors(urdf_xml: &str) -> Result<Vec<SensorConfig>> {
                     position.z
                 );
             } else {
-                log::warn!(
+                tracing::warn!(
                     "Sensor link '{}' has no joint connecting to parent, skipping",
                     link.name
                 );
@@ -89,9 +89,9 @@ pub fn parse_urdf_sensors(urdf_xml: &str) -> Result<Vec<SensorConfig>> {
     }
 
     if sensors.is_empty() {
-        log::warn!("No sensors found in URDF");
+        tracing::warn!("No sensors found in URDF");
     } else {
-        log::info!("Found {} sensors in URDF", sensors.len());
+        tracing::info!("Found {} sensors in URDF", sensors.len());
     }
 
     Ok(sensors)

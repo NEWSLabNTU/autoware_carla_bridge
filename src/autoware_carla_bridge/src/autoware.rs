@@ -109,7 +109,7 @@ impl Autoware {
     /// # Returns
     /// Result containing Autoware instance or error
     pub fn new(node: rclrs::Node) -> Result<Self> {
-        log::info!("Initializing Autoware coordinator...");
+        tracing::info!("Initializing Autoware coordinator...");
 
         // Create AutowareDetector (monitors /robot_description)
         let detector = AutowareDetector::new(node.clone(), None, None)?;
@@ -242,7 +242,7 @@ impl Autoware {
             node.create_subscription::<geometry_msgs::msg::PoseWithCovarianceStamped, _>(
                 "/initialpose".reliable().keep_last(1),
                 move |msg: geometry_msgs::msg::PoseWithCovarianceStamped| {
-                    log::info!(
+                    tracing::info!(
                         "Initial pose received: ({:.2}, {:.2}, {:.2}) in frame '{}'",
                         msg.pose.pose.position.x,
                         msg.pose.pose.position.y,
@@ -258,7 +258,7 @@ impl Autoware {
             )?,
         );
 
-        log::info!("Autoware coordinator initialized");
+        tracing::info!("Autoware coordinator initialized");
 
         Ok(Autoware {
             // === ROS Infrastructure ===
@@ -409,9 +409,9 @@ impl Autoware {
     /// # Returns
     /// Result indicating success or timeout error
     pub fn wait_for_detection(&self) -> Result<()> {
-        log::info!("Waiting for Autoware detection...");
+        tracing::info!("Waiting for Autoware detection...");
         self.detector.wait_for_detection()?;
-        log::info!("Autoware detected successfully!");
+        tracing::info!("Autoware detected successfully!");
         Ok(())
     }
 
@@ -443,7 +443,7 @@ impl Autoware {
     /// # Returns
     /// Result indicating success or parsing error
     pub fn parse_sensors(&mut self) -> Result<()> {
-        log::info!("Parsing URDF for sensor configurations...");
+        tracing::info!("Parsing URDF for sensor configurations...");
 
         let urdf = self.get_urdf().ok_or_else(|| {
             crate::error::BridgeError::AutowareIssue(
@@ -454,7 +454,7 @@ impl Autoware {
         // Parse URDF to extract sensor configurations
         self.sensor_configs = parse_urdf_sensors(&urdf)?;
 
-        log::info!("Found {} sensors in URDF", self.sensor_configs.len());
+        tracing::info!("Found {} sensors in URDF", self.sensor_configs.len());
 
         // Register sensor topics for each discovered sensor
         // Clone configs to avoid borrow checker issues
@@ -465,7 +465,7 @@ impl Autoware {
             .collect();
 
         for (sensor_type, link_name) in configs_to_register {
-            log::debug!(
+            tracing::debug!(
                 "Registering sensor: {} (type: {:?})",
                 link_name,
                 sensor_type
@@ -535,14 +535,14 @@ impl Autoware {
     /// # Returns
     /// Result indicating success or timeout error
     pub fn wait_for_initial_pose(&self, timeout: Option<std::time::Duration>) -> Result<()> {
-        log::info!("Waiting for initial pose from RViz...");
-        log::info!("(Use '2D Pose Estimate' tool in RViz to set vehicle position)");
+        tracing::info!("Waiting for initial pose from RViz...");
+        tracing::info!("(Use '2D Pose Estimate' tool in RViz to set vehicle position)");
 
         let start = std::time::Instant::now();
 
         loop {
             if self.has_initial_pose() {
-                log::info!("Initial pose received!");
+                tracing::info!("Initial pose received!");
                 return Ok(());
             }
 
