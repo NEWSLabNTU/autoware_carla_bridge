@@ -3,7 +3,6 @@ use crate::{
     error::{BridgeError, Result},
 };
 use nalgebra::{Quaternion, Vector3};
-use std::str::FromStr;
 
 /// Sensor configuration extracted from URDF
 #[derive(Debug, Clone)]

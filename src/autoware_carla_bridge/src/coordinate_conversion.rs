@@ -45,7 +45,7 @@
 /// ROS_pitch = CARLA_pitch * π / 180.0  // degrees to radians
 /// ROS_yaw = -CARLA_yaw * π / 180.0     // degrees to radians, sign flip
 /// ```
-use nalgebra::{Quaternion, UnitQuaternion, Vector3};
+use nalgebra::{Quaternion, Vector3};
 use std::f64::consts::PI;
 
 /// Convert position from ROS (meters, right-handed) to CARLA (cm, left-handed)
@@ -270,6 +270,85 @@ pub fn euler_to_quaternion(roll: f64, pitch: f64, yaw: f64) -> Quaternion<f64> {
         cr * sp * cy + sr * cp * sy, // y
         cr * cp * sy - sr * sp * cy, // z
     )
+}
+
+/// Convert linear velocity from CARLA (m/s, left-handed) to ROS (m/s, right-handed)
+///
+/// CARLA velocities are already in m/s, so we only need to flip the Y-axis
+///
+/// # Arguments
+/// * `carla_velocity` - Linear velocity in CARLA coordinate system (m/s)
+///
+/// # Returns
+/// Linear velocity in ROS coordinate system (m/s)
+pub fn carla_to_ros_velocity(carla_velocity: &Vector3<f64>) -> Vector3<f64> {
+    Vector3::new(
+        carla_velocity.x,  // Forward: no change
+        -carla_velocity.y, // Right → Left: Y-axis flip
+        carla_velocity.z,  // Up: no change
+    )
+}
+
+/// Convert angular velocity from CARLA (rad/s, left-handed) to ROS (rad/s, right-handed)
+///
+/// # Arguments
+/// * `carla_angular_velocity` - Angular velocity in CARLA coordinate system (rad/s)
+///
+/// # Returns
+/// Angular velocity in ROS coordinate system (rad/s)
+pub fn carla_to_ros_angular_velocity(carla_angular_velocity: &Vector3<f64>) -> Vector3<f64> {
+    Vector3::new(
+        -carla_angular_velocity.x, // Roll: sign flip for right-handed system
+        carla_angular_velocity.y,  // Pitch: no change
+        -carla_angular_velocity.z, // Yaw: sign flip for right-handed system
+    )
+}
+
+/// Convert ROS Pose to CARLA Isometry (for spawning)
+///
+/// Converts a ROS geometry_msgs Pose to a CARLA nalgebra::Isometry3<f32>
+/// for spawning vehicles and sensors.
+///
+/// # Arguments
+/// * `pose` - ROS Pose message
+///
+/// # Returns
+/// CARLA transform as Isometry3<f32>
+pub fn ros_pose_to_carla_isometry(pose: &geometry_msgs::msg::Pose) -> nalgebra::Isometry3<f32> {
+    // Convert position (meters → centimeters, Y-axis flip)
+    let ros_position = Vector3::new(pose.position.x, pose.position.y, pose.position.z);
+    let carla_position = ros_to_carla_position(&ros_position);
+
+    // Convert ROS quaternion to nalgebra quaternion (f64)
+    let q_f64 = nalgebra::Quaternion::new(
+        pose.orientation.w,
+        pose.orientation.x,
+        pose.orientation.y,
+        pose.orientation.z,
+    );
+
+    // Convert to Euler, apply coordinate system transform, back to quaternion (f32)
+    let (roll, pitch, yaw) = quaternion_to_euler(&q_f64);
+    let carla_quat = euler_to_quaternion(
+        -roll, // Roll sign flip for left-handed
+        pitch, -yaw, // Yaw sign flip for left-handed
+    );
+
+    // Create nalgebra Isometry3<f32>
+    let translation = nalgebra::Translation3::new(
+        carla_position.x as f32,
+        carla_position.y as f32,
+        carla_position.z as f32,
+    );
+
+    let rotation = nalgebra::UnitQuaternion::new_normalize(nalgebra::Quaternion::new(
+        carla_quat.w as f32,
+        carla_quat.i as f32,
+        carla_quat.j as f32,
+        carla_quat.k as f32,
+    ));
+
+    nalgebra::Isometry3::from_parts(translation, rotation)
 }
 
 /// Normalize angle to range [-π, π]

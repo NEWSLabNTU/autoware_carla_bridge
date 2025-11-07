@@ -1,6 +1,7 @@
 mod autoware;
 mod autoware_detection;
 mod bridge;
+mod carla_vehicle;
 mod clock;
 mod coordinate_conversion;
 mod error;
@@ -8,10 +9,8 @@ mod tf_bridge;
 mod types;
 mod urdf_parser;
 mod utils;
-mod vehicle_lifecycle;
 
 use std::{
-    collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -19,25 +18,27 @@ use std::{
     time::Duration,
 };
 
-use bridge::actor_bridge::{ActorBridge, BridgeType};
-use carla::{
-    client::{ActorBase, Client, Vehicle},
-    rpc::ActorId,
-};
+use carla::client::{ActorBase, Client};
+use carla_vehicle::CarlaVehicle;
 use clap::Parser;
 use clock::SimulatorClock;
 use error::{BridgeError, Result};
 use rclrs::CreateBasicExecutor;
 
-/// ROS 2 Carla bridge for Autoware
+/// ROS 2 CARLA bridge for Autoware (Autoware-centric architecture)
+///
+/// This bridge waits for Autoware to start, then spawns a vehicle in CARLA
+/// based on the initial pose set in RViz. It forwards vehicle state from
+/// CARLA to Autoware for localization, and applies control commands from
+/// Autoware to the CARLA vehicle.
 #[derive(Debug, Clone, Parser)]
 #[clap(version, about)]
 struct Opts {
-    /// Carla simulator address.
+    /// CARLA simulator address
     #[clap(long, default_value = "127.0.0.1")]
     pub carla_address: String,
 
-    /// Carla simulator port.
+    /// CARLA simulator port
     #[clap(long, default_value = "2000")]
     pub carla_port: u16,
 
@@ -45,81 +46,17 @@ struct Opts {
     #[clap(long)]
     pub map_name: Option<String>,
 
-    /// Vehicle role_name to bridge (e.g., "ego_vehicle")
-    #[clap(long, conflicts_with = "vehicle_id")]
-    pub vehicle_name: Option<String>,
+    /// Vehicle blueprint to spawn (CARLA blueprint ID)
+    #[clap(long, default_value = "vehicle.tesla.model3")]
+    pub vehicle_blueprint: String,
 
-    /// Vehicle actor ID to bridge
-    #[clap(long, conflicts_with = "vehicle_name")]
-    pub vehicle_id: Option<u32>,
+    /// Timeout in seconds to wait for Autoware detection (0 = wait forever)
+    #[clap(long, default_value_t = 60)]
+    pub autoware_timeout: u64,
 
-    /// Timeout in seconds to wait for vehicle (0 = wait forever)
-    #[clap(long, default_value_t = 30)]
-    pub vehicle_wait_timeout: u64,
-}
-
-/// Structure to hold ego vehicle and its sensors
-struct EgoBridges {
-    vehicle: Box<dyn ActorBridge>,
-    sensors: HashMap<ActorId, Box<dyn ActorBridge>>,
-}
-
-/// Find the target vehicle by name or ID
-fn find_target_vehicle(client: &Client, opts: &Opts, timeout_secs: u64) -> Result<Vehicle> {
-    let start_time = std::time::Instant::now();
-    let timeout = if timeout_secs == 0 {
-        Duration::MAX
-    } else {
-        Duration::from_secs(timeout_secs)
-    };
-
-    loop {
-        let world = client.world();
-        let actors = world.actors();
-
-        for actor in actors.iter() {
-            if let carla::client::ActorKind::Vehicle(vehicle) = actor.into_kinds() {
-                // Check if this is our target vehicle
-                let matches = if let Some(ref name) = opts.vehicle_name {
-                    // Match by role_name
-                    vehicle
-                        .attributes()
-                        .iter()
-                        .find(|attr| attr.id() == "role_name")
-                        .map(|attr| attr.value_string() == *name)
-                        .unwrap_or(false)
-                } else if let Some(id) = opts.vehicle_id {
-                    // Match by actor ID
-                    vehicle.id() == id
-                } else {
-                    false
-                };
-
-                if matches {
-                    log::info!("Found target vehicle: ID={}", vehicle.id());
-                    return Ok(vehicle);
-                }
-            }
-        }
-
-        // Check timeout
-        if start_time.elapsed() >= timeout {
-            return Err(BridgeError::CarlaIssue(
-                "Timeout waiting for target vehicle to appear",
-            ));
-        }
-
-        // Log progress every 5 seconds
-        if start_time.elapsed().as_secs().is_multiple_of(5) && start_time.elapsed().as_secs() > 0 {
-            log::info!(
-                "Still waiting for target vehicle... ({} seconds elapsed)",
-                start_time.elapsed().as_secs()
-            );
-        }
-
-        // Wait a bit before polling again
-        std::thread::sleep(Duration::from_secs(1));
-    }
+    /// Timeout in seconds to wait for initial pose from RViz (0 = wait forever)
+    #[clap(long, default_value_t = 60)]
+    pub pose_timeout: u64,
 }
 
 fn main() -> Result<()> {
@@ -127,149 +64,171 @@ fn main() -> Result<()> {
 
     let opts = Opts::parse();
 
-    // Validate that either vehicle_name or vehicle_id is provided
-    if opts.vehicle_name.is_none() && opts.vehicle_id.is_none() {
-        return Err(BridgeError::CarlaIssue(
-            "Either --vehicle-name or --vehicle-id must be specified",
-        ));
-    }
-
     // Flag for graceful shutdown when Ctrl-C is pressed
     let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::SeqCst);
-    })
-    .expect("Failed to set Ctrl-C handler");
-
-    log::info!("Running Carla Autoware ROS 2 bridge (1-to-1 mode)...");
-    if let Some(ref name) = opts.vehicle_name {
-        log::info!("Target vehicle: role_name = '{}'", name);
-    } else if let Some(id) = opts.vehicle_id {
-        log::info!("Target vehicle: actor ID = {}", id);
+    {
+        let running = running.clone();
+        ctrlc::set_handler(move || {
+            log::info!("Ctrl-C received, shutting down...");
+            running.store(false, Ordering::SeqCst);
+        })
+        .expect("Failed to set Ctrl-C handler");
     }
 
-    // Initialize ROS 2 context and executor
+    log::info!("=== Autoware-CARLA Bridge (Autoware-centric) ===");
+    log::info!("Vehicle blueprint: {}", opts.vehicle_blueprint);
+
+    // === Step 1: Initialize ROS 2 ===
+    log::info!("Initializing ROS 2...");
     let ctx = rclrs::Context::new(std::env::args(), rclrs::InitOptions::default())?;
     let executor = ctx.create_basic_executor();
     let node = executor.create_node("autoware_carla_bridge")?;
+    log::info!("ROS 2 node created: autoware_carla_bridge");
 
-    // Connect to CARLA (passive mode - do NOT configure synchronous mode)
+    // === Step 2: Connect to CARLA ===
+    log::info!(
+        "Connecting to CARLA at {}:{}...",
+        opts.carla_address,
+        opts.carla_port
+    );
     let client = Client::connect(&opts.carla_address, opts.carla_port, None);
 
     // Load map if specified, otherwise use current map
-    let world = if let Some(ref map_name) = opts.map_name {
+    let mut world = if let Some(ref map_name) = opts.map_name {
+        log::info!("Loading CARLA map: {}", map_name);
         utils::load_world_smart(&client, map_name)
     } else {
-        log::info!("Using current map");
+        log::info!("Using current CARLA map");
         client.world()
     };
 
-    // Find target ego vehicle
-    log::info!("Searching for target vehicle...");
-    let ego_vehicle = find_target_vehicle(&client, &opts, opts.vehicle_wait_timeout)?;
-    let ego_vehicle_id = ego_vehicle.id();
-
-    // Create single Autoware instance (root namespace)
-    let mut autoware = autoware::Autoware::new();
+    log::info!("Connected to CARLA successfully");
 
     // Create clock publisher
-    let simulator_clock =
-        SimulatorClock::new(node.clone()).expect("Unable to create simulator clock!");
+    let simulator_clock = SimulatorClock::new(node.clone())?;
 
-    // Discover sensors attached to ego vehicle and register them with Autoware
-    log::info!("Discovering sensors attached to ego vehicle...");
-    let mut sensor_info = Vec::new();
+    // === Step 3: Create Autoware coordinator and wait for Autoware ===
+    log::info!("Creating Autoware coordinator...");
+    let mut autoware = autoware::Autoware::new(node.clone())?;
 
-    for actor in world.actors().iter() {
-        let actor_id = actor.id(); // Save ID before consuming actor
-        if let carla::client::ActorKind::Sensor(sensor) = actor.into_kinds() {
-            // Check if this sensor belongs to our ego vehicle
-            if let Some(parent) = sensor.parent() {
-                if parent.id() == ego_vehicle_id {
-                    // This sensor belongs to our ego vehicle
-                    match bridge::actor_bridge::get_bridge_type(carla::client::ActorKind::Sensor(
-                        sensor.clone(),
-                    )) {
-                        Ok(BridgeType::Sensor(sensor_type, sensor_name)) => {
-                            log::info!("Found sensor: {} (type: {:?})", sensor_name, sensor_type);
-                            // Add sensor to autoware to register topics
-                            autoware.add_sensors(sensor_type, sensor_name.clone());
-                            sensor_info.push((actor_id, sensor.clone(), sensor_type, sensor_name));
-                        }
-                        Ok(_) => {
-                            log::debug!("Ignoring non-sensor actor");
-                        }
-                        Err(BridgeError::OwnerlessSensor { sensor_id }) => {
-                            log::debug!(
-                                "Sensor {} is ownerless (should not happen for our ego vehicle)",
-                                sensor_id
-                            );
-                        }
-                        Err(err) => {
-                            log::error!("Unexpected error processing sensor: {err:?}");
-                            return Err(err);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    log::info!("Waiting for Autoware to start...");
+    log::info!("(Start Autoware planning simulator with sample_sensor_kit)");
 
-    // Create vehicle bridge
-    log::info!(
-        "Creating bridge for ego vehicle (ID: {})...",
-        ego_vehicle_id
-    );
-    let vehicle_bridge = bridge::actor_bridge::create_bridge(
-        node.clone(),
-        carla::client::ActorKind::Vehicle(ego_vehicle.clone()),
-        BridgeType::Vehicle,
-        &autoware,
-    )?;
-
-    // Create sensor bridges (now that Autoware has all sensor topics registered)
-    let mut ego_bridges = EgoBridges {
-        vehicle: vehicle_bridge,
-        sensors: HashMap::new(),
+    let autoware_timeout = if opts.autoware_timeout == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(opts.autoware_timeout))
     };
 
-    for (sensor_id, sensor, sensor_type, sensor_name) in sensor_info {
-        let sensor_bridge = bridge::actor_bridge::create_bridge(
-            node.clone(),
-            carla::client::ActorKind::Sensor(sensor),
-            BridgeType::Sensor(sensor_type, sensor_name),
-            &autoware,
-        )?;
-        ego_bridges.sensors.insert(sensor_id, sensor_bridge);
+    // Wait for Autoware with timeout
+    let start_time = std::time::Instant::now();
+    loop {
+        if autoware.is_alive() {
+            break;
+        }
+
+        if let Some(timeout) = autoware_timeout {
+            if start_time.elapsed() >= timeout {
+                return Err(BridgeError::AutowareIssue(
+                    "Timeout waiting for Autoware to start".to_string(),
+                ));
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
     }
 
-    log::info!(
-        "Bridge initialization complete. Ego vehicle has {} sensors.",
-        ego_bridges.sensors.len()
-    );
+    log::info!("Autoware detected!");
+
+    // === Step 4: Parse URDF to get sensor configurations ===
+    log::info!("Parsing URDF from Autoware...");
+    autoware.parse_sensors()?;
+
+    let sensor_configs = autoware.sensor_configs();
+    log::info!("Found {} sensors in URDF:", sensor_configs.len());
+    for config in sensor_configs {
+        log::info!(
+            "  - {} (type: {:?}, parent: {})",
+            config.link_name,
+            config.sensor_type,
+            config.parent_frame
+        );
+    }
+
+    // === Step 5: Wait for initial pose from RViz ===
+    log::info!("Waiting for initial pose from RViz...");
+    log::info!("(Use '2D Pose Estimate' tool in RViz to set vehicle position)");
+
+    let pose_timeout = if opts.pose_timeout == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(opts.pose_timeout))
+    };
+
+    autoware.wait_for_initial_pose(pose_timeout)?;
+
+    // Get initial pose from Autoware
+    let initial_pose = autoware.take_initial_pose()?;
+
+    // === Step 6: Spawn vehicle and sensors in CARLA ===
+    log::info!("Spawning vehicle and sensors in CARLA...");
+    let mut carla_vehicle = CarlaVehicle::new(
+        &mut world,
+        &opts.vehicle_blueprint,
+        &initial_pose,
+        sensor_configs,
+        autoware.get_tf_buffer(),
+    )?;
+
+    let vehicle = carla_vehicle.get_vehicle();
+
+    log::info!("Vehicle and sensors spawned successfully!");
+    log::info!("=== Bridge running ===");
 
     // Track consecutive timeouts to detect CARLA connection issues
     let mut consecutive_timeouts = 0;
     const MAX_CONSECUTIVE_TIMEOUTS: u32 = 5;
 
-    // === Main loop ===
-    // Keep running until Ctrl-C is pressed
+    // === Main Loop ===
     while running.load(Ordering::SeqCst) {
+        // Check Autoware health
+        autoware.health_check();
+        if !autoware.is_alive() {
+            log::warn!("Autoware connection lost! Cleaning up...");
+            carla_vehicle.cleanup()?;
+            log::info!("Cleanup complete. Waiting for Autoware to restart...");
+
+            // Wait for Autoware to come back
+            loop {
+                if autoware.is_alive() {
+                    log::info!("Autoware reconnected!");
+                    break;
+                }
+                if !running.load(Ordering::SeqCst) {
+                    log::info!("Shutdown requested during Autoware wait");
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+
+            // TODO: Re-spawn vehicle and sensors
+            log::warn!("Autoware reconnected, but vehicle respawn not yet implemented");
+            log::warn!("Please restart the bridge");
+            break;
+        }
+
         // Wait for next CARLA tick
         match world.wait_for_tick() {
             Ok(_) => {
-                // Successfully waited for tick, reset timeout counter
                 consecutive_timeouts = 0;
             }
             Err(e) => {
-                // Check if this is a timeout error
                 log::warn!("Failed to wait for CARLA tick: {e:?}");
                 consecutive_timeouts += 1;
 
                 if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS {
                     log::error!(
-                        "Reached {} consecutive timeouts. CARLA may be unresponsive. Stopping bridge.",
+                        "Reached {} consecutive timeouts. CARLA may be unresponsive.",
                         MAX_CONSECUTIVE_TIMEOUTS
                     );
                     break;
@@ -279,19 +238,79 @@ fn main() -> Result<()> {
         }
 
         // Get current simulation time
-        let sec = world.snapshot().timestamp().elapsed_seconds;
+        let snapshot = world.snapshot();
+        let timestamp = snapshot.timestamp();
+        let sec = timestamp.elapsed_seconds;
 
         // Publish clock
-        simulator_clock
-            .publish_clock(Some(sec))
-            .expect("Unable to publish clock");
+        simulator_clock.publish_clock(Some(sec))?;
 
-        // Step ego vehicle bridge
-        ego_bridges.vehicle.step(sec)?;
+        // Get vehicle transform and velocity from CARLA
+        let transform = vehicle.transform();
+        let velocity = vehicle.velocity();
+        let angular_velocity = vehicle.angular_velocity();
 
-        // Sensors use callbacks, no explicit step needed
+        // Convert CARLA coordinates to ROS coordinates
+        let position = coordinate_conversion::carla_to_ros_position(&nalgebra::Vector3::new(
+            transform.translation.x as f64,
+            transform.translation.y as f64,
+            transform.translation.z as f64,
+        ));
+
+        // Convert CARLA rotation (quaternion) to ROS quaternion
+        // 1. Extract quaternion from CARLA transform (UnitQuaternion<f32>)
+        // 2. Convert to f64 for coordinate_conversion functions
+        // 3. Convert to Euler angles to apply coordinate system transform
+        // 4. Apply coordinate flip (roll and yaw signs)
+        // 5. Convert back to quaternion
+        let carla_quat = nalgebra::Quaternion::new(
+            transform.rotation.w as f64,
+            transform.rotation.i as f64,
+            transform.rotation.j as f64,
+            transform.rotation.k as f64,
+        );
+        let (roll, pitch, yaw) = coordinate_conversion::quaternion_to_euler(&carla_quat);
+        let orientation = coordinate_conversion::euler_to_quaternion(
+            -roll, // Roll sign flip for ROS right-handed system
+            pitch, -yaw, // Yaw sign flip for ROS right-handed system
+        );
+
+        let linear_vel = coordinate_conversion::carla_to_ros_velocity(&nalgebra::Vector3::new(
+            velocity.x as f64,
+            velocity.y as f64,
+            velocity.z as f64,
+        ));
+
+        let angular_vel =
+            coordinate_conversion::carla_to_ros_angular_velocity(&nalgebra::Vector3::new(
+                angular_velocity.x as f64,
+                angular_velocity.y as f64,
+                angular_velocity.z as f64,
+            ));
+
+        // Create ROS timestamp
+        let ros_timestamp = builtin_interfaces::msg::Time {
+            sec: sec as i32,
+            nanosec: ((sec - sec.floor()) * 1e9) as u32,
+        };
+
+        // Publish localization
+        autoware.publish_localization(
+            &ros_timestamp,
+            &[position.x, position.y, position.z],
+            &[orientation.w, orientation.i, orientation.j, orientation.k],
+            &[linear_vel.x, linear_vel.y, linear_vel.z],
+            &[angular_vel.x, angular_vel.y, angular_vel.z],
+        )?;
+
+        // TODO: Apply control commands from Autoware to CARLA vehicle
+        // let actuation_cmd = autoware.get_actuation_cmd();
+        // Apply throttle/brake/steering to vehicle
     }
 
-    log::info!("Bridge shutting down gracefully");
+    log::info!("Cleaning up...");
+    carla_vehicle.cleanup()?;
+    log::info!("Bridge shutdown complete");
+
     Ok(())
 }

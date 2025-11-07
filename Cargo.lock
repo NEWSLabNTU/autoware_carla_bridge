@@ -403,6 +403,7 @@ dependencies = [
  "interp",
  "log",
  "nalgebra",
+ "nav_msgs",
  "ndarray 0.16.1",
  "pretty_env_logger",
  "rclrs",
