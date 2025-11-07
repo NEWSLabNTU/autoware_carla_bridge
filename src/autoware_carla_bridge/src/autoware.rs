@@ -538,6 +538,7 @@ impl Autoware {
         &self,
         timeout: Option<std::time::Duration>,
         running: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+        executor: &mut rclrs::Executor,
     ) -> Result<()> {
         tracing::info!("Waiting for initial pose from RViz...");
         tracing::info!("(Use '2D Pose Estimate' tool in RViz to set vehicle position)");
@@ -545,6 +546,11 @@ impl Autoware {
         let start = std::time::Instant::now();
 
         loop {
+            // Spin executor to process ROS callbacks (e.g., /initialpose subscription)
+            executor.spin(
+                rclrs::SpinOptions::spin_once().timeout(std::time::Duration::from_millis(100)),
+            );
+
             if self.has_initial_pose() {
                 tracing::info!("Initial pose received!");
                 return Ok(());
@@ -565,9 +571,6 @@ impl Autoware {
                     ));
                 }
             }
-
-            // Sleep briefly to avoid busy-waiting
-            std::thread::sleep(std::time::Duration::from_millis(100));
         }
     }
 

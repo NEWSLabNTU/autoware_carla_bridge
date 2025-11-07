@@ -90,7 +90,7 @@ fn main() -> Result<()> {
     // === Step 1: Initialize ROS 2 ===
     tracing::info!("Initializing ROS 2...");
     let ctx = rclrs::Context::new(std::env::args(), rclrs::InitOptions::default())?;
-    let executor = ctx.create_basic_executor();
+    let mut executor = ctx.create_basic_executor();
     let node = executor.create_node("autoware_carla_bridge")?;
     tracing::info!("ROS 2 node created: autoware_carla_bridge");
 
@@ -132,6 +132,9 @@ fn main() -> Result<()> {
     // Wait for Autoware with timeout
     let start_time = std::time::Instant::now();
     loop {
+        // Spin executor to process ROS callbacks (e.g., /robot_description subscription)
+        executor.spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(100)));
+
         if autoware.is_alive() {
             break;
         }
@@ -148,8 +151,6 @@ fn main() -> Result<()> {
                 ));
             }
         }
-
-        std::thread::sleep(Duration::from_millis(100));
     }
 
     tracing::info!("Autoware detected!");
@@ -179,7 +180,7 @@ fn main() -> Result<()> {
         Some(Duration::from_secs(opts.pose_timeout))
     };
 
-    autoware.wait_for_initial_pose(pose_timeout, &running)?;
+    autoware.wait_for_initial_pose(pose_timeout, &running, &mut executor)?;
 
     // Get initial pose from Autoware
     let initial_pose = autoware.take_initial_pose()?;
@@ -214,6 +215,9 @@ fn main() -> Result<()> {
 
             // Wait for Autoware to come back
             loop {
+                // Spin executor to process ROS callbacks
+                executor.spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(100)));
+
                 if autoware.is_alive() {
                     tracing::info!("Autoware reconnected!");
                     break;
@@ -222,7 +226,6 @@ fn main() -> Result<()> {
                     tracing::info!("Shutdown requested during Autoware wait");
                     return Ok(());
                 }
-                std::thread::sleep(Duration::from_millis(100));
             }
 
             // TODO: Re-spawn vehicle and sensors
