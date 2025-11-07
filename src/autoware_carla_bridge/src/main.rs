@@ -136,6 +136,11 @@ fn main() -> Result<()> {
             break;
         }
 
+        if !running.load(Ordering::SeqCst) {
+            tracing::info!("Shutdown requested while waiting for Autoware");
+            return Ok(());
+        }
+
         if let Some(timeout) = autoware_timeout {
             if start_time.elapsed() >= timeout {
                 return Err(BridgeError::AutowareIssue(
@@ -174,7 +179,7 @@ fn main() -> Result<()> {
         Some(Duration::from_secs(opts.pose_timeout))
     };
 
-    autoware.wait_for_initial_pose(pose_timeout)?;
+    autoware.wait_for_initial_pose(pose_timeout, &running)?;
 
     // Get initial pose from Autoware
     let initial_pose = autoware.take_initial_pose()?;
@@ -226,13 +231,13 @@ fn main() -> Result<()> {
             break;
         }
 
-        // Wait for next CARLA tick
-        match world.wait_for_tick() {
-            Ok(_) => {
+        // Wait for next CARLA tick with short timeout to allow responsive shutdown
+        match world.wait_for_tick_or_timeout(Duration::from_secs(1)) {
+            Some(_) => {
                 consecutive_timeouts = 0;
             }
-            Err(e) => {
-                tracing::warn!("Failed to wait for CARLA tick: {e:?}");
+            None => {
+                // Timeout - check if we should continue waiting
                 consecutive_timeouts += 1;
 
                 if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS {

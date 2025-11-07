@@ -534,7 +534,11 @@ impl Autoware {
     ///
     /// # Returns
     /// Result indicating success or timeout error
-    pub fn wait_for_initial_pose(&self, timeout: Option<std::time::Duration>) -> Result<()> {
+    pub fn wait_for_initial_pose(
+        &self,
+        timeout: Option<std::time::Duration>,
+        running: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<()> {
         tracing::info!("Waiting for initial pose from RViz...");
         tracing::info!("(Use '2D Pose Estimate' tool in RViz to set vehicle position)");
 
@@ -544,6 +548,13 @@ impl Autoware {
             if self.has_initial_pose() {
                 tracing::info!("Initial pose received!");
                 return Ok(());
+            }
+
+            if !running.load(std::sync::atomic::Ordering::SeqCst) {
+                tracing::info!("Shutdown requested while waiting for initial pose");
+                return Err(crate::error::BridgeError::AutowareIssue(
+                    "Shutdown requested".to_string(),
+                ));
             }
 
             // Check timeout
