@@ -460,6 +460,169 @@ The bridge now follows a clean, linear workflow that matches the natural sequenc
 
 ---
 
+### Session 7: Build System Migration, Dependency Updates, and Map Integration Research (2025-11-07)
+
+**Objective**: Modernize build system, update dependencies, fix carla-rust compatibility, improve shutdown responsiveness, implement TF chain traversal, and research CARLA-Autoware map integration
+
+**Accomplishments**:
+
+**Part 1: Build System Migration to Just**
+- ✅ Replaced Makefile with justfile for cleaner syntax
+- ✅ Updated all documentation (README.md, CLAUDE.md, docs/*.md) to use `just` instead of `make`
+- ✅ Improved recipe structure with better parameter support
+- ✅ Added bash shebang for multi-line recipes
+
+**Part 2: Dependency Migration**
+- ✅ Replaced `log` with `tracing` + `tracing-subscriber` (102 macro replacements across 9 files)
+- ✅ Replaced `anyhow` with `eyre` + `color-eyre` for enhanced error reporting
+- ✅ Updated main.rs initialization with tracing subscriber and color-eyre installation
+- ✅ All code compiles with new dependencies
+
+**Part 3: carla-rust Compatibility Fixes**
+- ✅ Fixed breaking changes from carla-rust commit 838fa24
+- ✅ Updated to use native CARLA geometry types (Transform, Vector3D, Vector2D)
+- ✅ Added `.to_na()` conversions when reading CARLA data
+- ✅ Added `Transform::from_na()` conversions when passing data to CARLA
+- ✅ Fixed Vector2D field access (changed from array indexing to struct fields)
+
+**Part 4: Shutdown Responsiveness**
+- ✅ Fixed unresponsive Ctrl-C shutdown issue
+- ✅ Changed CARLA tick timeout from 60s to 1s
+- ✅ Added shutdown flag checks in all waiting loops (3 locations)
+- ✅ Updated `wait_for_initial_pose()` to accept running flag and executor
+- ✅ Now exits within 100ms of Ctrl-C signal
+
+**Part 5: ROS Executor Spinning**
+- ✅ Fixed Autoware detection issue (executor not spinning)
+- ✅ Made executor mutable in main.rs
+- ✅ Added `executor.spin()` calls in all waiting loops
+- ✅ Used `SpinOptions::spin_once().timeout(Duration::from_millis(100))`
+- ✅ Bridge now properly detects running Autoware instance
+
+**Part 6: TF Chain Traversal Implementation**
+- ✅ Fixed sensor spawn failure with (0,0,0) position
+- ✅ Changed from `get_transform()` to `lookup_transform("base_link", &config.link_name)`
+- ✅ Implemented TF tree walking in tf_bridge.rs:
+  - `lookup_transform()` now walks parent→child chain (max depth: 20)
+  - Added `compose_transform_chain()` to compose multi-hop transforms
+  - Added `multiply_transforms()` for proper transform composition using nalgebra
+- ✅ Added debug logging to show all available TF frames (28 total)
+- ✅ Improved error messages for TF lookup failures
+- ✅ Added warning for (0,0,0) URDF fallback positions
+
+**Part 7: Map Integration Research**
+- ✅ Researched CARLA to Autoware map integration approaches
+- ✅ Created comprehensive documentation: `docs/carla-autoware-map-integration.md`
+- ✅ Documented map format differences (OpenDRIVE vs Lanelet2 + Point Cloud)
+- ✅ Identified pre-converted maps sources (official repo and TUMFTM)
+- ✅ Documented three conversion methods:
+  - assuremappingtools (recommended)
+  - CommonRoad Scenario Designer
+  - Custom Python scripts
+- ✅ Documented point cloud generation workflow
+- ✅ Covered coordinate system alignment requirements
+- ✅ Listed known limitations and workarounds
+- ✅ Provided step-by-step recommended workflow
+
+**Code Statistics**:
+- 13 files modified (including docs)
+- carla_vehicle.rs: Enhanced with TF chain traversal support
+- tf_bridge.rs: +102 lines (tree walking and transform composition)
+- main.rs: Fixed shutdown, executor spinning, carla-rust compatibility
+- autoware.rs: Updated wait_for_initial_pose signature
+- vehicle_bridge.rs: Fixed Vector2D field access
+
+**Key Technical Changes**:
+
+1. **justfile recipe example**:
+   ```just
+   # Launch the bridge with ros2 run
+   run port="2000":
+       #!/usr/bin/env bash
+       source src/autoware_carla_bridge/install/setup.bash
+       ros2 run autoware_carla_bridge autoware_carla_bridge --carla-port {{port}}
+   ```
+
+2. **Tracing initialization**:
+   ```rust
+   // Install color-eyre for better error reporting
+   color_eyre::install().expect("Failed to install color-eyre");
+
+   // Initialize tracing subscriber with env filter
+   tracing_subscriber::fmt()
+       .with_env_filter(
+           tracing_subscriber::EnvFilter::try_from_default_env()
+               .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+       )
+       .init();
+   ```
+
+3. **carla-rust compatibility**:
+   ```rust
+   // Reading from CARLA
+   let na_transform = transform.to_na();
+   let na_velocity = velocity.to_na();
+
+   // Writing to CARLA
+   let carla_transform = Transform::from_na(&na_transform);
+   ```
+
+4. **TF chain traversal**:
+   ```rust
+   // Walk up from source to target through the TF tree
+   let mut current_frame = source_frame.to_string();
+   let mut chain: Vec<TransformStamped> = Vec::new();
+
+   for _ in 0..max_depth {
+       if current_frame == target_frame {
+           return self.compose_transform_chain(&chain, target_frame, source_frame);
+       }
+
+       if let Some(tf) = tf_map.get(&current_frame) {
+           let parent = tf.header.frame_id.clone();
+           chain.push(tf.clone());
+           current_frame = parent;
+       } else {
+           break;
+       }
+   }
+   ```
+
+5. **Transform composition**:
+   ```rust
+   // Compose: result = t2 * t1 (apply t1 first, then t2)
+   let result_iso = iso2 * iso1;
+   ```
+
+**Files Modified**:
+- `justfile` - Created (replaced Makefile)
+- `src/autoware_carla_bridge/Cargo.toml` - Updated dependencies
+- `src/autoware_carla_bridge/src/main.rs` - Tracing init, shutdown, executor, carla-rust compat
+- `src/autoware_carla_bridge/src/autoware.rs` - Updated wait_for_initial_pose signature
+- `src/autoware_carla_bridge/src/carla_vehicle.rs` - TF chain traversal, debug logging
+- `src/autoware_carla_bridge/src/tf_bridge.rs` - Tree walking and transform composition
+- `src/autoware_carla_bridge/src/bridge/vehicle_bridge.rs` - Vector2D field access fix
+- `docs/carla-autoware-map-integration.md` - Created comprehensive map integration guide
+- Updated all documentation files to reference `just` instead of `make`
+
+**Build Results**:
+- ✅ All 3 build stages completed successfully
+- ✅ Zero compilation errors
+- ✅ Zero lint warnings
+
+**Significance**:
+This session addressed multiple critical issues:
+1. **Build system modernization** improves developer experience
+2. **Better error reporting** with color-eyre and tracing
+3. **Responsive shutdown** allows graceful exit without hanging
+4. **ROS callback processing** enables proper Autoware detection
+5. **TF chain traversal** correctly calculates sensor positions through multi-hop transforms
+6. **Map integration guide** provides clear path for CARLA-Autoware map conversion
+
+The TF chain traversal implementation is particularly important as it enables proper sensor spawning with correct positions relative to base_link, walking through intermediate frames like sensor_kit_base_link.
+
+---
+
 ## Current State
 
 ### Build Status
@@ -522,9 +685,10 @@ make build  # Runs all 3 stages
 │   └── external/
 │       ├── autoware@              # Symlink to Autoware workspace
 │       └── zenoh_carla_bridge/    # Reference implementation
-├── docs/                          # Migration guides
+├── docs/                          # Migration guides and documentation
 │   ├── zenoh-to-rclrs-api-comparison.md
 │   ├── message-type-migration.md
+│   ├── carla-autoware-map-integration.md
 │   └── roadmap.md
 ├── scripts/
 │   └── install_deps.sh
@@ -575,6 +739,7 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 
 **Documentation**:
 - `docs/carla-rust-integration.md` - Using local carla-rust repository
+- `docs/carla-autoware-map-integration.md` - CARLA to Autoware map conversion guide
 - `docs/zenoh-to-rclrs-api-comparison.md` - API comparison guide
 - `docs/message-type-migration.md` - Message type migration guide
 - `docs/roadmap.md` - Detailed phase breakdown
