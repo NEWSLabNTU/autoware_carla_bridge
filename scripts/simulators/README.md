@@ -59,4 +59,4 @@ Each CARLA directory should contain:
 ## Notes
 
 - Each developer maintains their own symlinks pointing to their local CARLA installations
-- Simulators can run only one scenario at a time - tests must use exclusive access (see `docs/roadmap.md` Phase 0)
+- Simulators can run only one scenario at a time - tests must use exclusive access (see `docs/roadmap/core-migration.md` Phase 0)

@@ -62,8 +62,8 @@ This document provides the main roadmap index and project overview for the autow
 - ✅ All ROS 2 topics use correct message types
 - ✅ QoS profiles are appropriate for each topic type
 - ✅ No CDR serialization code remains
-- ✅ Code passes `make lint` with no warnings
-- ✅ Code is formatted with `make format`
+- ✅ Code passes `just lint` with no warnings
+- ✅ Code is formatted with `just format`
 
 ### Performance Requirements
 - ⏳ Topic publication rates match or exceed Zenoh version
@@ -269,7 +269,7 @@ This document provides the main roadmap index and project overview for the autow
 **For Testing**:
 - See [scripts/README.md](../scripts/README.md) for test environment setup
 - See [testing-and-release.md](roadmap/testing-and-release.md) for testing plans
-- Run `make test-env` for automated testing
+- Run `just test-env` for automated testing
 
 **For Development**:
 - See [CLAUDE.md](../CLAUDE.md) for session history and learnings

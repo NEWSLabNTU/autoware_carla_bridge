@@ -48,17 +48,17 @@ The carla-rust repository supports multiple CARLA versions through the `CARLA_VE
 
 ### Default (0.9.16)
 ```bash
-make build  # Uses CARLA 0.9.16 by default
+just build  # Uses CARLA 0.9.16 by default
 ```
 
 ### CARLA 0.9.15
 ```bash
-CARLA_VERSION=0.9.15 make build
+CARLA_VERSION=0.9.15 just build
 ```
 
 ### CARLA 0.9.14
 ```bash
-CARLA_VERSION=0.9.14 make build
+CARLA_VERSION=0.9.14 just build
 ```
 
 ### How It Works
@@ -159,13 +159,13 @@ build:
 ### 3. Clean and Rebuild
 
 ```bash
-make clean
-make build
+just clean
+just build
 ```
 
 Or with specific CARLA version:
 ```bash
-CARLA_VERSION=0.9.15 make build
+CARLA_VERSION=0.9.15 just build
 ```
 
 ### 4. Verify Integration
@@ -239,15 +239,15 @@ With multi-version support, we can test against different CARLA versions:
 
 ```bash
 # Test with CARLA 0.9.14
-CARLA_VERSION=0.9.14 make build
+CARLA_VERSION=0.9.14 just build
 ./scripts/test_with_carla_0914.sh
 
 # Test with CARLA 0.9.15
-CARLA_VERSION=0.9.15 make build
+CARLA_VERSION=0.9.15 just build
 ./scripts/test_with_carla_0915.sh
 
 # Test with CARLA 0.9.16 (default)
-make build
+just build
 ./scripts/test_with_carla_0916.sh
 ```
 
@@ -295,7 +295,7 @@ ls ../../carla-rust/carla/Cargo.toml  # From src/autoware_carla_bridge/
 ~/carla/CARLA_0.9.15/CarlaUE4.sh --version
 
 # Build with matching version
-CARLA_VERSION=0.9.15 make build
+CARLA_VERSION=0.9.15 just build
 ```
 
 ### Build takes a long time on first use
@@ -325,14 +325,14 @@ export LIBCLANG_PATH=/usr/lib/llvm-12/lib
 2. Test changes:
    ```bash
    cd ~/repos/carla-rust
-   make build
+   just build
    cargo run --example spawn_vehicle --profile dev-release
    ```
 3. Changes automatically available to autoware_carla_bridge (path dependency)
 4. Rebuild bridge:
    ```bash
    cd ~/repos/ros_zenoh_bridge
-   make build
+   just build
    ```
 
 ### Contributing Back

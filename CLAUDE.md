@@ -172,7 +172,7 @@
 - ✅ Confirmed `ros2 launch` can find and load the launch file
 
 **Part 3: Runtime Verification** 🎉
-- ✅ Successfully ran bridge with `make run` (connects to CARLA on port 3000)
+- ✅ Successfully ran bridge with `just run` (connects to CARLA on port 3000)
 - ✅ Verified `/clock` topic publishes successfully with `ros2 topic echo /clock`
 - ✅ **First runtime verification** - Bridge connects to CARLA and publishes ROS 2 topics!
 
@@ -185,7 +185,7 @@
   - Handles cleanup on Ctrl+C
   - Supports multiple CARLA versions (0.9.14, 0.9.15, 0.9.16)
   - Configurable port and skip options
-- ✅ Added `make test-env` target for one-command test setup
+- ✅ Added `just test-env` target for one-command test setup
 - ✅ Created comprehensive `scripts/README.md` with testing workflows:
   - Quick start guide
   - Manual testing procedures
@@ -202,7 +202,7 @@
 - `docs/roadmap.md` - Updated Phase 2 status (v1.3), marked runtime verified
 - `CLAUDE.md` - Session 4 documentation
 - `src/autoware_carla_bridge/Cargo.toml` - Added cargo-ament metadata
-- `README.md` - Added Quick Start section with `make test-env`
+- `README.md` - Added Quick Start section with `just test-env`
 
 **Significance**:
 This is the first successful runtime test of the migrated bridge. It confirms:
@@ -465,7 +465,7 @@ The bridge now follows a clean, linear workflow that matches the natural sequenc
 ### Build Status
 - ✅ Code compiles successfully
 - ✅ Zero lint warnings
-- ✅ Three-stage build system working (`make build`)
+- ✅ Three-stage build system working (`just build`)
 - ✅ Separated install directories for each stage
 
 ### What Works

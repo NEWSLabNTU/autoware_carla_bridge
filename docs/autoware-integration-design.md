@@ -816,7 +816,7 @@ opendrive2lanelet Town01.xodr -o Town01.osm
 # Edit Town01.osm if needed
 
 # 3. Generate point cloud (drive in CARLA with recording)
-make run -- --map-name Town01 --record-pointcloud --duration 300
+just run -- --map-name Town01 --record-pointcloud --duration 300
 
 # 4. Place in Autoware map directory
 make install-map MAP=Town01
@@ -825,7 +825,7 @@ make install-map MAP=Town01
 cd scripts/autoware && make launch MAP_PATH=$HOME/autoware_map/carla_town01
 
 # 6. Launch bridge
-make run -- --map-name Town01 --vehicle-name ego_vehicle
+just run -- --map-name Town01 --vehicle-name ego_vehicle
 ```
 
 **Documentation TODO:**
