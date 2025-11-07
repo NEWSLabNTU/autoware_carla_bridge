@@ -322,6 +322,144 @@ This enables the next phase (Phase 4: Vehicle Lifecycle Management) where the br
 
 ---
 
+### Session 6: CarlaVehicle API Refactoring (2025-11-07)
+
+**Objective**: Simplify CarlaVehicle API, implement single-client architecture, and move initial pose management to Autoware struct
+
+**Accomplishments**:
+
+**Part 1: Coordinate Conversion Enhancement**
+- ✅ Moved `ros_pose_to_carla_isometry()` from CarlaVehicle to coordinate_conversion module
+- ✅ Made function public for reuse across codebase
+- ✅ Handles ROS Pose → CARLA Isometry3 conversion for spawning
+
+**Part 2: Autoware Struct Enhancement**
+- ✅ Added initial pose subscription to `/initialpose` topic
+- ✅ Added fields: `initial_pose: Arc<Mutex<Option<Isometry3<f32>>>>`, `_initialpose_sub`
+- ✅ Implemented pose conversion in callback using coordinate_conversion utility
+- ✅ Added public API methods:
+  - `has_initial_pose()` - Check if pose received
+  - `wait_for_initial_pose(timeout)` - Blocking wait with timeout support
+  - `get_initial_pose()` - Get copy of pose
+  - `take_initial_pose()` - Take and consume pose (one-time use for spawning)
+
+**Part 3: CarlaVehicle Simplification**
+- ✅ Removed LifecycleState enum and all state management
+- ✅ Removed Arc<Mutex<>> wrappers (no longer needed)
+- ✅ Removed `/initialpose` subscription (moved to Autoware)
+- ✅ Removed state tracking fields and methods
+- ✅ Changed constructor to spawn vehicle and sensors immediately
+- ✅ Made `spawn_vehicle()` and `spawn_sensors()` private
+- ✅ Changed `get_vehicle()` and `get_sensors()` to return references (not clones)
+- ✅ Changed `cleanup()` to take `&mut self`
+- ✅ **Code reduction**: 435 lines → 214 lines (51% reduction)
+
+**Part 4: Main Architecture Update**
+- ✅ Replaced two CARLA clients (client_world, client_vehicle) with single client
+- ✅ Changed workflow to wait for prerequisites before spawning:
+  1. Wait for Autoware
+  2. Parse URDF sensors
+  3. Wait for initial pose (via Autoware)
+  4. Take initial pose from Autoware
+  5. Spawn vehicle and sensors atomically (via CarlaVehicle::new)
+- ✅ Simplified main loop (vehicle already spawned, no state checks needed)
+
+**Part 5: Library Exports Cleanup**
+- ✅ Removed LifecycleState from public exports in lib.rs
+- ✅ Fixed unused imports (UnitQuaternion, std::str::FromStr)
+
+**Code Statistics**:
+- 5 files modified
+- carla_vehicle.rs: 435 → 214 lines (51% reduction)
+- coordinate_conversion.rs: +47 lines (new public function)
+- autoware.rs: +82 lines (initial pose management)
+- main.rs: Simplified workflow, clearer separation of concerns
+- lib.rs: Removed LifecycleState export
+
+**Key Technical Changes**:
+
+1. **Single Client Architecture**:
+   ```rust
+   // Before
+   let client_world = Client::connect(&opts.carla_address, opts.carla_port, None);
+   let client_vehicle = Client::connect(&opts.carla_address, opts.carla_port, None);
+
+   // After
+   let client = Client::connect(&opts.carla_address, opts.carla_port, None);
+   let mut world = client.world();
+   ```
+
+2. **Initial Pose Management** (moved to Autoware):
+   ```rust
+   // Autoware struct now handles /initialpose subscription
+   autoware.wait_for_initial_pose(pose_timeout)?;
+   let initial_pose = autoware.take_initial_pose()?;
+   ```
+
+3. **Simplified CarlaVehicle Constructor**:
+   ```rust
+   // Before: Multi-step lifecycle
+   let carla_vehicle = CarlaVehicle::new(node, client, blueprint)?;
+   carla_vehicle.wait_for_initial_pose(timeout)?;
+   carla_vehicle.spawn_vehicle()?;
+   carla_vehicle.spawn_sensors(sensor_configs, tf_buffer)?;
+
+   // After: Atomic spawning
+   let mut carla_vehicle = CarlaVehicle::new(
+       &mut world,
+       &vehicle_blueprint,
+       &initial_pose,
+       sensor_configs,
+       tf_buffer,
+   )?;
+   // Vehicle and sensors already spawned!
+   ```
+
+4. **Stateless Design**:
+   ```rust
+   // Before: Complex state management
+   pub enum LifecycleState { WaitingForPrerequisites, ReadyToSpawn, Active, CleaningUp }
+   state: Arc<Mutex<LifecycleState>>
+
+   // After: No state, just actors
+   pub struct CarlaVehicle {
+       vehicle: Vehicle,
+       sensors: HashMap<String, Sensor>,
+   }
+   ```
+
+**Files Modified**:
+- `src/autoware_carla_bridge/src/coordinate_conversion.rs` - Added public ros_pose_to_carla_isometry
+- `src/autoware_carla_bridge/src/autoware.rs` - Added initial pose subscription and methods
+- `src/autoware_carla_bridge/src/carla_vehicle.rs` - Simplified to stateless design
+- `src/autoware_carla_bridge/src/main.rs` - Single client, linear workflow
+- `src/autoware_carla_bridge/src/lib.rs` - Removed LifecycleState export
+
+**Architecture Improvements**:
+1. **Clear separation of concerns**: Autoware manages prerequisites, CarlaVehicle manages CARLA actors
+2. **Stateless CarlaVehicle**: Easier to reason about, no lifecycle complexity
+3. **Single responsibility**: Each component has focused purpose
+4. **Immediate spawning**: No two-phase initialization, vehicles spawn atomically
+5. **Linear workflow**: Bridge follows clear sequential steps without state checks
+
+**Build Results**:
+- ✅ All 3 build stages completed successfully
+- ✅ Zero compilation errors
+- ✅ No unused import warnings
+- ⚠️ Only acceptable warnings remain (dead_code for future features, upstream library warnings)
+
+**Significance**:
+This refactoring significantly simplifies the bridge architecture:
+- Reduces cognitive load (no lifecycle state machine to track)
+- Makes spawning logic more predictable (everything happens in constructor)
+- Improves testability (stateless components are easier to test)
+- Maintains clear ownership boundaries (Autoware owns prerequisites, CarlaVehicle owns actors)
+- Reduces CARLA server load (single client connection instead of two)
+
+The bridge now follows a clean, linear workflow that matches the natural sequence of operations.
+
+---
+
 ## Current State
 
 ### Build Status
@@ -451,5 +589,5 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 
 ---
 
-**Last Updated**: 2025-11-05
-**Migration Status**: Phases 0-3, 7-8 Complete (50% - Core Infrastructure + Autoware Integration Foundation)
+**Last Updated**: 2025-11-07
+**Migration Status**: Phases 0-3, 7-8 Complete (50% - Core Infrastructure + Autoware Integration Foundation + CarlaVehicle API Refactoring)
