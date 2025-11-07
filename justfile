@@ -25,8 +25,7 @@ build-ros2-rust:
 # Build message packages (generates Rust crates)
 build-interface:
     #!/usr/bin/env bash
-    set -euo pipefail
-    . src/ros2_rust/install/setup.sh
+    source src/ros2_rust/install/setup.bash
     cd src/interface
     colcon build {{colcon_build_flags}} \
         --packages-select \
@@ -42,10 +41,8 @@ build-interface:
 # Build autoware_carla_bridge package
 build-bridge:
     #!/usr/bin/env bash
-    set -euo pipefail
-    . /opt/ros/humble/setup.sh
-    . src/ros2_rust/install/setup.sh
-    . src/interface/install/setup.sh
+    source /opt/ros/humble/setup.bash
+    source src/interface/install/setup.bash
     cd src/autoware_carla_bridge
     CARLA_VERSION={{carla_version}} colcon build {{colcon_build_flags}}
 
@@ -55,11 +52,7 @@ build: build-ros2-rust build-interface build-bridge
 # Launch the bridge with ros2 run
 run port="2000":
     #!/usr/bin/env bash
-    set -euo pipefail
-    . /opt/ros/humble/setup.sh
-    . src/ros2_rust/install/setup.sh
-    . src/interface/install/setup.sh
-    . src/autoware_carla_bridge/install/setup.sh
+    source src/autoware_carla_bridge/install/setup.bash
     ros2 run autoware_carla_bridge autoware_carla_bridge --carla-port {{port}}
 
 # Clean ros2_rust build artifacts
@@ -80,20 +73,16 @@ clean: clean-ros2-rust clean-interface clean-bridge
 # Format code with rustfmt
 format:
     #!/usr/bin/env bash
-    set -euo pipefail
-    . /opt/ros/humble/setup.sh
-    . src/ros2_rust/install/setup.sh
-    . src/interface/install/setup.sh
+    source /opt/ros/humble/setup.bash
+    source src/interface/install/setup.bash
     cd src/autoware_carla_bridge
     cargo +nightly fmt
 
 # Run format check and clippy
 lint:
     #!/usr/bin/env bash
-    set -euo pipefail
-    . /opt/ros/humble/setup.sh
-    . src/ros2_rust/install/setup.sh
-    . src/interface/install/setup.sh
+    source /opt/ros/humble/setup.bash
+    source src/interface/install/setup.bash
     cd src/autoware_carla_bridge
     cargo +nightly fmt --check
     cargo clippy
@@ -101,10 +90,8 @@ lint:
 # Run tests
 test:
     #!/usr/bin/env bash
-    set -euo pipefail
-    . /opt/ros/humble/setup.sh
-    . src/ros2_rust/install/setup.sh
-    . src/interface/install/setup.sh
+    source /opt/ros/humble/setup.bash
+    source src/interface/install/setup.bash
     cd src/autoware_carla_bridge
     cargo nextest run --no-tests pass --no-fail-fast
 
