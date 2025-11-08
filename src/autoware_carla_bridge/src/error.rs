@@ -19,6 +19,9 @@ pub enum BridgeError {
     #[error("Autoware detection error: {0}")]
     AutowareIssue(String),
 
+    #[error("Configuration error: {0}")]
+    ConfigError(String),
+
     #[error("{0}")]
     Other(#[from] Box<dyn std::error::Error + Sync + Send + 'static>),
 }

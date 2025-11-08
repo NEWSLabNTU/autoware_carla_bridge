@@ -4,6 +4,7 @@
 /// The vehicle and sensors are spawned immediately in the constructor.
 use crate::{
     error::{BridgeError, Result},
+    sensor_config::CarlaConfig,
     tf_bridge::TFBuffer,
     urdf_parser::SensorConfig,
 };
@@ -21,6 +22,7 @@ use std::collections::HashMap;
 pub struct CarlaVehicle {
     vehicle: Vehicle,
     sensors: HashMap<String, Sensor>,
+    sensor_configs: Vec<SensorConfig>,
 }
 
 impl CarlaVehicle {
@@ -34,6 +36,7 @@ impl CarlaVehicle {
     /// * `initial_pose` - Spawn location and orientation in CARLA coordinates
     /// * `sensor_configs` - Sensor configurations from URDF parsing
     /// * `tf_buffer` - TF buffer for sensor transforms
+    /// * `carla_config` - CARLA sensor configuration (CARLA-specific parameters)
     ///
     /// # Returns
     /// A CarlaVehicle instance with spawned vehicle and sensors
@@ -43,6 +46,7 @@ impl CarlaVehicle {
         initial_pose: &nalgebra::Isometry3<f32>,
         sensor_configs: &[SensorConfig],
         tf_buffer: &TFBuffer,
+        carla_config: &CarlaConfig,
     ) -> Result<Self> {
         tracing::info!(
             "Spawning vehicle at ({:.2}, {:.2}, {:.2})",
@@ -66,11 +70,16 @@ impl CarlaVehicle {
             tracing::debug!("  - {}", frame);
         }
 
-        let sensors = Self::spawn_sensors(world, &vehicle, sensor_configs, tf_buffer)?;
+        let sensors =
+            Self::spawn_sensors(world, &vehicle, sensor_configs, tf_buffer, carla_config)?;
 
         tracing::info!("All sensors spawned successfully");
 
-        Ok(Self { vehicle, sensors })
+        Ok(Self {
+            vehicle,
+            sensors,
+            sensor_configs: sensor_configs.to_vec(),
+        })
     }
 
     /// Spawn vehicle at the specified pose (private)
@@ -110,6 +119,7 @@ impl CarlaVehicle {
         vehicle: &Vehicle,
         sensor_configs: &[SensorConfig],
         tf_buffer: &TFBuffer,
+        carla_config: &CarlaConfig,
     ) -> Result<HashMap<String, Sensor>> {
         let blueprint_library = world.blueprint_library();
         let mut spawned_sensors = HashMap::new();
@@ -131,9 +141,37 @@ impl CarlaVehicle {
             };
 
             // Get blueprint
-            let sensor_bp = blueprint_library.find(blueprint_id).ok_or_else(|| {
+            let mut sensor_bp = blueprint_library.find(blueprint_id).ok_or_else(|| {
                 BridgeError::AutowareIssue(format!("Sensor blueprint '{}' not found", blueprint_id))
             })?;
+
+            // Apply CARLA-specific parameters from config
+            let config_sensor_type = match config.sensor_type {
+                crate::bridge::sensor_bridge::SensorType::CameraRgb => {
+                    crate::sensor_config::SensorType::Camera
+                }
+                crate::bridge::sensor_bridge::SensorType::LidarRayCast
+                | crate::bridge::sensor_bridge::SensorType::LidarRayCastSemantic => {
+                    crate::sensor_config::SensorType::Lidar
+                }
+                crate::bridge::sensor_bridge::SensorType::Imu => {
+                    crate::sensor_config::SensorType::Imu
+                }
+                crate::bridge::sensor_bridge::SensorType::Gnss => {
+                    crate::sensor_config::SensorType::Gnss
+                }
+                _ => {
+                    tracing::warn!(
+                        "Unknown sensor type for config mapping: {:?}",
+                        config.sensor_type
+                    );
+                    crate::sensor_config::SensorType::Camera // Default fallback
+                }
+            };
+
+            let sensor_params =
+                carla_config.get_sensor_params(&config.link_name, config_sensor_type);
+            sensor_params.apply_to_blueprint(&mut sensor_bp);
 
             // Try to get transform from TF buffer (base_link → sensor)
             tracing::info!(
@@ -247,6 +285,14 @@ impl CarlaVehicle {
     /// Get reference to all spawned sensors
     pub fn get_sensors(&self) -> &HashMap<String, Sensor> {
         &self.sensors
+    }
+
+    /// Get reference to sensor configurations
+    ///
+    /// This returns the sensor configurations used to spawn the sensors,
+    /// allowing main.rs to create sensor bridges with the correct parameters.
+    pub fn get_sensor_configs(&self) -> &[SensorConfig] {
+        &self.sensor_configs
     }
 
     /// Cleanup: destroy vehicle and sensors

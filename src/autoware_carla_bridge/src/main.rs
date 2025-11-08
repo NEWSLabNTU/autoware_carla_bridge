@@ -5,10 +5,16 @@ mod carla_vehicle;
 mod clock;
 mod coordinate_conversion;
 mod error;
+mod sensor_config;
 mod tf_bridge;
 mod types;
 mod urdf_parser;
 mod utils;
+
+use bridge::{
+    actor_bridge::BridgeType,
+    sensor_bridge::{SensorBridge, SensorType},
+};
 
 use std::{
     sync::{
@@ -24,6 +30,60 @@ use clap::Parser;
 use clock::SimulatorClock;
 use error::{BridgeError, Result};
 use rclrs::CreateBasicExecutor;
+
+/// Create sensor bridges for all sensors spawned by CarlaVehicle
+///
+/// This iterates over the sensor configurations and creates a SensorBridge
+/// for each sensor that was spawned in CARLA. The bridges handle CARLA
+/// sensor callbacks and publish data to ROS topics.
+fn create_sensor_bridges(
+    node: rclrs::Node,
+    carla_vehicle: &CarlaVehicle,
+    autoware: &autoware::Autoware,
+) -> Result<Vec<SensorBridge>> {
+    let sensor_configs = carla_vehicle.get_sensor_configs();
+    let sensors = carla_vehicle.get_sensors();
+    let mut bridges = Vec::new();
+
+    for config in sensor_configs {
+        // Get the sensor actor from the HashMap
+        let sensor = match sensors.get(&config.link_name) {
+            Some(s) => s.clone(),
+            None => {
+                tracing::warn!(
+                    "Sensor '{}' not found in spawned sensors, skipping",
+                    config.link_name
+                );
+                continue;
+            }
+        };
+
+        // Create bridge type from sensor config
+        let bridge_type = BridgeType::Sensor(config.sensor_type, config.link_name.clone());
+
+        // Create sensor bridge
+        match SensorBridge::new(node.clone(), sensor, bridge_type, autoware) {
+            Ok(bridge) => {
+                tracing::info!(
+                    "Created sensor bridge for '{}' (type: {:?})",
+                    config.link_name,
+                    config.sensor_type
+                );
+                bridges.push(bridge);
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to create sensor bridge for '{}': {}",
+                    config.link_name,
+                    e
+                );
+                // Continue with other sensors rather than failing completely
+            }
+        }
+    }
+
+    Ok(bridges)
+}
 
 /// ROS 2 CARLA bridge for Autoware (Autoware-centric architecture)
 ///
@@ -57,6 +117,10 @@ struct Opts {
     /// Timeout in seconds to wait for initial pose from RViz (0 = wait forever)
     #[clap(long, default_value_t = 60)]
     pub pose_timeout: u64,
+
+    /// Path to CARLA sensor configuration file (YAML)
+    #[clap(long, default_value = "config/carla_sensors.yaml")]
+    pub sensor_config: String,
 }
 
 fn main() -> Result<()> {
@@ -185,7 +249,21 @@ fn main() -> Result<()> {
     // Get initial pose from Autoware
     let initial_pose = autoware.take_initial_pose()?;
 
-    // === Step 6: Spawn vehicle and sensors in CARLA ===
+    // === Step 6: Load CARLA sensor configuration ===
+    let carla_config = match sensor_config::CarlaConfig::from_file(&opts.sensor_config) {
+        Ok(config) => config,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to load sensor config from '{}': {}",
+                opts.sensor_config,
+                e
+            );
+            tracing::warn!("Using default sensor parameters");
+            sensor_config::CarlaConfig::default()
+        }
+    };
+
+    // === Step 7: Spawn vehicle and sensors in CARLA ===
     tracing::info!("Spawning vehicle and sensors in CARLA...");
     let mut carla_vehicle = CarlaVehicle::new(
         &mut world,
@@ -193,11 +271,18 @@ fn main() -> Result<()> {
         &initial_pose,
         sensor_configs,
         autoware.get_tf_buffer(),
+        &carla_config,
     )?;
 
     let vehicle = carla_vehicle.get_vehicle();
 
     tracing::info!("Vehicle and sensors spawned successfully!");
+
+    // === Step 8: Create sensor bridges ===
+    tracing::info!("Creating sensor bridges...");
+    let _sensor_bridges = create_sensor_bridges(node.clone(), &carla_vehicle, &autoware)?;
+    tracing::info!("Created {} sensor bridges", _sensor_bridges.len());
+
     tracing::info!("=== Bridge running ===");
 
     // Track consecutive timeouts to detect CARLA connection issues

@@ -103,19 +103,19 @@ impl SensorBridge {
 
         match sensor_type {
             SensorType::CameraRgb => {
-                register_camera_rgb(node.clone(), &actor, key_list)?;
+                register_camera_rgb(node.clone(), &actor, key_list, &sensor_name)?;
             }
             SensorType::LidarRayCast => {
-                register_lidar_raycast(node.clone(), &actor, key_list)?;
+                register_lidar_raycast(node.clone(), &actor, key_list, &sensor_name)?;
             }
             SensorType::LidarRayCastSemantic => {
-                register_lidar_raycast_semantic(node.clone(), &actor, key_list)?;
+                register_lidar_raycast_semantic(node.clone(), &actor, key_list, &sensor_name)?;
             }
             SensorType::Imu => {
-                register_imu(node.clone(), &actor, key_list)?;
+                register_imu(node.clone(), &actor, key_list, &sensor_name)?;
             }
             SensorType::Gnss => {
-                register_gnss(node.clone(), &actor, key_list)?;
+                register_gnss(node.clone(), &actor, key_list, &sensor_name)?;
             }
             SensorType::Collision => {
                 tracing::warn!("Collision sensor is not supported yet");
@@ -143,22 +143,13 @@ impl ActorBridge for SensorBridge {
 impl Drop for SensorBridge {
     fn drop(&mut self) {
         tracing::info!(
-            "Cleaning up sensor bridge: {} (type: {:?})",
+            "Dropping sensor bridge: {} (type: {:?}) - sensor owned by CarlaVehicle",
             self._sensor_name,
             self._sensor_type
         );
-        if self._actor.destroy() {
-            tracing::info!(
-                "Destroyed sensor actor: {} (type: {:?})",
-                self._sensor_name,
-                self._sensor_type
-            );
-        } else {
-            tracing::warn!(
-                "Failed to destroy sensor actor: {} (may have already been destroyed)",
-                self._sensor_name
-            );
-        }
+        // NOTE: We don't destroy the sensor here because CarlaVehicle owns the sensors
+        // and is responsible for destroying them in cleanup(). The sensor reference
+        // in SensorBridge keeps callbacks alive while the bridge exists.
     }
 }
 
@@ -166,6 +157,7 @@ fn register_camera_rgb(
     node: Arc<rclrs::Node>,
     actor: &Sensor,
     key_list: Option<Vec<String>>,
+    frame_id: &str,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let raw_topic = key_list[0].clone();
@@ -209,10 +201,13 @@ fn register_camera_rgb(
         .try_into_f32()
         .or(Err(BridgeError::CarlaIssue("Unable to transform into f32")))? as f64;
 
+    // Clone frame_id for closure
+    let frame_id = frame_id.to_string();
+
     // Setup CARLA listener
     actor.listen(move |data| {
         let mut header = utils::create_ros_header(Some(data.timestamp()));
-        header.frame_id = String::from("camera4/camera_link");
+        header.frame_id = frame_id.clone();
 
         if let Ok(carla_image) = data.try_into() {
             // Publish image
@@ -236,6 +231,7 @@ fn register_lidar_raycast(
     node: Arc<rclrs::Node>,
     actor: &Sensor,
     key_list: Option<Vec<String>>,
+    frame_id: &str,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
@@ -244,9 +240,12 @@ fn register_lidar_raycast(
         node.create_publisher::<sensor_msgs::msg::PointCloud2>(topic.as_str().sensor_data_qos())?,
     );
 
+    // Clone frame_id for closure
+    let frame_id = frame_id.to_string();
+
     actor.listen(move |data| {
         let mut header = utils::create_ros_header(Some(data.timestamp()));
-        header.frame_id = String::from("velodyne_top_base_link");
+        header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
             if let Err(e) = publish_lidar(&publisher, header, measure) {
@@ -264,6 +263,7 @@ fn register_lidar_raycast_semantic(
     node: Arc<rclrs::Node>,
     actor: &Sensor,
     key_list: Option<Vec<String>>,
+    frame_id: &str,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
@@ -272,9 +272,12 @@ fn register_lidar_raycast_semantic(
         node.create_publisher::<sensor_msgs::msg::PointCloud2>(topic.as_str().sensor_data_qos())?,
     );
 
+    // Clone frame_id for closure
+    let frame_id = frame_id.to_string();
+
     actor.listen(move |data| {
         let mut header = utils::create_ros_header(Some(data.timestamp()));
-        header.frame_id = String::from("velodyne_top_base_link");
+        header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
             if let Err(e) = publish_semantic_lidar(&publisher, header, measure) {
@@ -292,15 +295,19 @@ fn register_imu(
     node: Arc<rclrs::Node>,
     actor: &Sensor,
     key_list: Option<Vec<String>>,
+    frame_id: &str,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
 
     let publisher = Arc::new(node.create_publisher::<sensor_msgs::msg::Imu>(topic.as_str())?);
 
+    // Clone frame_id for closure
+    let frame_id = frame_id.to_string();
+
     actor.listen(move |data| {
         let mut header = utils::create_ros_header(Some(data.timestamp()));
-        header.frame_id = String::from("tamagawa/imu_link");
+        header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
             if let Err(e) = publish_imu(&publisher, header, measure) {
@@ -318,15 +325,19 @@ fn register_gnss(
     node: Arc<rclrs::Node>,
     actor: &Sensor,
     key_list: Option<Vec<String>>,
+    frame_id: &str,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
 
     let publisher = Arc::new(node.create_publisher::<sensor_msgs::msg::NavSatFix>(topic.as_str())?);
 
+    // Clone frame_id for closure
+    let frame_id = frame_id.to_string();
+
     actor.listen(move |data| {
         let mut header = utils::create_ros_header(Some(data.timestamp()));
-        header.frame_id = String::from("gnss_link");
+        header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
             if let Err(e) = publish_gnss(&publisher, header, measure) {
