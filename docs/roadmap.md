@@ -105,6 +105,20 @@ This document provides the main roadmap index and project overview for the autow
 - Documentation (README, integration guide, API docs)
 - Release preparation (v0.13.0)
 
+#### Feature Parity & Map Integration
+**[autoware-feature-parity.md](roadmap/autoware-feature-parity.md)** - TUMFTM Comparison
+- Vehicle control integration (control_cmd, status publishers)
+- Feature comparison with TUMFTM bridge
+- Performance benchmarks and improvements
+- Vehicle calibration system
+
+**[map-integration.md](roadmap/map-integration.md)** - CARLA Map Integration
+- TUMFTM pre-converted maps (quick start)
+- Automated point cloud generation
+- OpenDRIVE to Lanelet2 conversion
+- Traffic light integration
+- Map validation and management
+
 ### 🏛️ Architecture & Design
 - **[architecture.md](architecture.md)** - 1-to-1 design philosophy, core principles, ADRs
 - **[autoware-integration-design.md](autoware-integration-design.md)** - Detailed Autoware integration design
@@ -126,6 +140,7 @@ This document provides the main roadmap index and project overview for the autow
 **Current Phases**:
 - 🔧 Phase 4: Vehicle Lifecycle Management (core module complete, integration pending)
 - 🔧 Phase 5: Sensor Data Publishing (publishing code complete 80%, integration pending)
+- ✅ Sensor Configuration System: CARLA sensor parameters (YAML config) - **NEW** (2025-11-08)
 
 **Pending** (Phases 4-6, 9-10):
 - 🔧 Phase 4: Vehicle Lifecycle Management (core module complete, integration pending)
@@ -151,6 +166,9 @@ This document provides the main roadmap index and project overview for the autow
 | Autoware Integration Foundation    | ✅ Complete | 2025-11-05 |
 | Vehicle Lifecycle Management       | 🔧 In Progress (core module complete) | 2025-11-05 (started) |
 | Sensor Data Publishing             | 🔧 In Progress (80% complete) | 2025-11-05 (documented) |
+| CARLA Sensor Configuration System  | ✅ Complete | 2025-11-08 |
+| TUMFTM Feature Parity Roadmap      | ✅ Complete | 2025-11-08 |
+| Map Integration Roadmap            | ✅ Complete | 2025-11-08 |
 | Vehicle Control Integration        | ⏳ Pending  | TBD        |
 | Integration Testing                | ⏳ Pending  | TBD        |
 | v0.13.0 Release                    | ⏳ Pending  | TBD        |
@@ -162,11 +180,12 @@ This document provides the main roadmap index and project overview for the autow
 **Project Completion**: 50% (Phases 0-3, 7-8 complete)
 
 **Documentation**:
-- 4 roadmap documents: infrastructure.md, bridge.md, integration.md, testing-and-release.md
+- 6 roadmap documents: infrastructure.md, bridge.md, integration.md, testing-and-release.md, **autoware-feature-parity.md**, **map-integration.md**
 - 1 architecture document: architecture.md
 - 1 integration design: autoware-integration-design.md
-- 4 technical guides: API comparison, message migration, carla-rust integration, URDF integration
-- **Total**: 10 documents, ~5,000+ lines
+- 6 technical guides: API comparison, message migration, carla-rust integration, URDF integration, **sensor-configuration-strategy.md**, **automated-map-generation.md**
+- 2 comparison documents: **architecture-comparison.md**, **tumftm-bridge-analysis.md**
+- **Total**: 16 documents, ~8,000+ lines
 
 **Phase Progress**:
 - **Phases Total**: 10 phases (0-2, 3-6, 7-8, 9-10)
