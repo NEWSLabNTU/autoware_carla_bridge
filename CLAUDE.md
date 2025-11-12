@@ -623,6 +623,59 @@ The TF chain traversal implementation is particularly important as it enables pr
 
 ---
 
+### Session 8: carla-rust Dependency Update - nalgebra Migration (2025-11-12)
+
+**Objective**: Fix API breakages after carla-rust dependency update
+
+**Problem**:
+The user updated `src/external/carla-rust` to the latest version, which upgraded nalgebra from 0.32.x to 0.34.1. This caused type mismatch errors when passing `Isometry3<f32>` values to `Transform::from_na()`.
+
+**Error encountered**:
+```
+error[E0308]: mismatched types
+   --> src/autoware_carla_bridge/src/carla_vehicle.rs:101:50
+    |
+101 |         let carla_transform = Transform::from_na(initial_pose);
+    |                               ------------------ ^^^^^^^^^^^^ expected `Isometry<f32, Unit<Quaternion<f32>>, 3>`, found a different `Isometry<f32, Unit<Quaternion<f32>>, 3>`
+```
+
+**Root Cause**:
+Two different versions of nalgebra were being used simultaneously:
+- Our code: nalgebra 0.32.3 (in `Cargo.toml`)
+- carla-rust: nalgebra 0.34.1 (updated in their `Cargo.toml`)
+
+Even though the type signatures looked identical, Rust treats types from different crate versions as incompatible.
+
+**Fix Applied**:
+Updated nalgebra dependency in `src/autoware_carla_bridge/Cargo.toml`:
+```toml
+# Before
+nalgebra = "0.32.3"
+
+# After
+nalgebra = "0.34.1"
+```
+
+**Files Modified**:
+- `src/autoware_carla_bridge/Cargo.toml` - Updated nalgebra version to match carla-rust
+
+**Build Results**:
+- ✅ Compilation successful
+- ✅ All lint checks passing with zero errors
+- ✅ All carla-rust APIs compatible
+- ✅ No breaking API changes in carla-rust itself
+
+**Key Learning**:
+When using local carla-rust dependency (`path = "../external/carla-rust/carla"`), dependency versions must be synchronized:
+1. Check carla-rust's `Cargo.toml` for dependency versions
+2. Match critical dependencies (nalgebra, ndarray, etc.) in our `Cargo.toml`
+3. Version mismatches cause type incompatibility errors even for "identical" types
+
+**Impact**:
+This was a straightforward dependency version alignment. The carla-rust update itself introduced no breaking API changes - only the transitive nalgebra dependency needed updating.
+
+---
+
 ## Current State
 
 ### Build Status
@@ -717,6 +770,115 @@ make build  # Runs all 3 stages
 
 ---
 
+## Coding Practices
+
+### Error Handling
+
+**RULE: Never silence Result types with `let _ = ...` without justification**
+
+When a function returns `Result`, it must be handled properly to avoid silent errors:
+
+1. **Preferred: Propagate errors with `?`**
+   ```rust
+   // Good: Error propagates to caller
+   blueprint.set_attribute("fov", &value.to_string())?;
+   ```
+
+2. **Alternative: Explicit error handling**
+   ```rust
+   // Good: Error is explicitly handled
+   if let Err(e) = blueprint.set_attribute("fov", &value.to_string()) {
+       tracing::error!("Failed to set FOV: {}", e);
+       return Err(e);
+   }
+   ```
+
+3. **Last Resort: Document why ignoring is safe**
+   ```rust
+   // Only if there's a valid reason to ignore
+   // SAFETY: Blueprint attribute setting is best-effort; failures don't affect core functionality
+   let _ = blueprint.set_attribute("fov", &value.to_string());
+   ```
+
+**Why this matters:**
+- Silent errors make debugging difficult
+- Critical failures may go unnoticed
+- Code reviewers need to understand error handling decisions
+
+**How to fix existing code:**
+- Change function signature to return `Result<()>` if needed
+- Use `?` operator to propagate errors up the call chain
+- Add proper error handling at appropriate boundaries
+
+---
+
+### Unused Code Management
+
+**RULE: Delete unused code unless there's a documented reason to keep it**
+
+Unused code should be deleted to keep the codebase clean and maintainable. Only keep unused items when there's a valid reason, and always document why.
+
+1. **Default: Delete unused items**
+   ```rust
+   // Bad: Unused function with #[allow(dead_code)]
+   #[allow(dead_code)]
+   fn unused_helper() -> i32 {
+       42
+   }
+
+   // Good: Just delete it
+   // (function removed)
+   ```
+
+2. **Keep if needed for resource management**
+   ```rust
+   // Good: Kept to maintain subscription, documented
+   /// Subscription to /robot_description topic.
+   /// NOTE: This field is never accessed directly but must be kept alive to receive callbacks.
+   /// The subscription is cancelled when this struct is dropped.
+   #[allow(dead_code)]
+   robot_desc_sub: Arc<rclrs::Subscription<std_msgs::msg::String>>,
+   ```
+
+3. **Keep if planned for future use**
+   ```rust
+   // Good: Kept for future phase, documented
+   /// Radar sensor support - planned for Phase 4.
+   /// TODO(Phase 4): Implement radar data bridge
+   #[allow(dead_code)]
+   Radar,
+   ```
+
+4. **Keep entire modules for future phases**
+   ```rust
+   // Good: Module-level annotation with clear documentation
+   //! Traffic light bridge - Phase 2 implementation
+   //!
+   //! This module will handle bidirectional traffic light state synchronization
+   //! between CARLA and Autoware. Currently unused but kept for Phase 2.
+   #![allow(dead_code)]
+   ```
+
+**When to use `#[allow(dead_code)]`:**
+- Struct fields that must exist but aren't directly accessed (e.g., keeping subscriptions alive)
+- Code planned for upcoming phases (document the phase number)
+- Diagnostic/debugging utilities that are conditionally used
+- Public API methods not yet used internally
+
+**When to DELETE instead:**
+- Experimental code no longer needed
+- Old implementations that have been replaced
+- Helper functions with no clear future use
+- Duplicate or redundant functionality
+
+**Why this matters:**
+- Reduces cognitive load when reading code
+- Makes it clear what code is actually in use
+- Prevents accumulation of dead code over time
+- Documents intent when code must be kept unused
+
+---
+
 ## Using Local carla-rust
 
 **Location**: `~/repos/carla-rust/`
@@ -738,8 +900,12 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 ## References
 
 **Documentation**:
-- `docs/carla-rust-integration.md` - Using local carla-rust repository
+- `docs/sensor-configuration-strategy.md` - ⭐ Sensor config strategy & Autoware-CARLA gap analysis
+- `docs/architecture-comparison.md` - Quick reference: Our bridge vs TUMFTM
+- `docs/tumftm-bridge-analysis.md` - Detailed TUMFTM Carla-Autoware-Bridge analysis
 - `docs/carla-autoware-map-integration.md` - CARLA to Autoware map conversion guide
+- `docs/autoware-integration-design.md` - Autoware integration architecture
+- `docs/carla-rust-integration.md` - Using local carla-rust repository
 - `docs/zenoh-to-rclrs-api-comparison.md` - API comparison guide
 - `docs/message-type-migration.md` - Message type migration guide
 - `docs/roadmap.md` - Detailed phase breakdown
@@ -748,11 +914,12 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 **External Resources**:
 - [carla-rust](https://github.com/jerry73204/carla-rust) - Local development at ~/repos/carla-rust/
 - [rclrs](https://github.com/ros2-rust/ros2_rust) - ROS 2 Rust client library
-- [zenoh_carla_bridge](https://github.com/evshary/zenoh_carla_bridge) - Reference implementation
+- [zenoh_carla_bridge](https://github.com/evshary/zenoh_carla_bridge) - Reference implementation (Zenoh-based)
+- [TUMFTM Carla-Autoware-Bridge](https://github.com/TUMFTM/Carla-Autoware-Bridge) - Python-based bridge (IEEE IV 2024)
 - [CARLA Simulator](https://carla.org/)
 - [Autoware](https://autowarefoundation.github.io/autoware-documentation/)
 
 ---
 
-**Last Updated**: 2025-11-07
+**Last Updated**: 2025-11-12
 **Migration Status**: Phases 0-3, 7-8 Complete (50% - Core Infrastructure + Autoware Integration Foundation + CarlaVehicle API Refactoring)
