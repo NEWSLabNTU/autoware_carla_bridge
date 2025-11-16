@@ -55,7 +55,7 @@ build-bridge:
 build: build-ros2-rust build-interface build-bridge
 
 # Launch the bridge with ros2 run
-run port="2000":
+run port:
     #!/usr/bin/env bash
     source src/autoware_carla_bridge/install/setup.bash
     ros2 run autoware_carla_bridge autoware_carla_bridge --carla-port {{port}}
@@ -111,3 +111,85 @@ agent-spawn:
 # Run complete test environment (CARLA + agents + bridge)
 test-env:
     ./scripts/run_test_env.sh
+
+# Start CARLA simulator with systemd-run
+start-carla version port:
+    #!/usr/bin/env bash
+    set -e
+
+    # Check if DISPLAY is set
+    if [ -z "$DISPLAY" ]; then
+        echo "Error: DISPLAY environment variable is not set"
+        echo "Please set DISPLAY (e.g., export DISPLAY=:1)"
+        exit 1
+    fi
+
+    # Determine CARLA directory based on version
+    CARLA_DIR="$HOME/repos/autoware_carla_bridge/scripts/simulators/startup/carla-{{version}}"
+
+    if [ ! -d "$CARLA_DIR" ]; then
+        echo "Error: CARLA directory not found: $CARLA_DIR"
+        echo "Available versions: 0.9.14, 0.9.15, 0.9.16"
+        exit 1
+    fi
+
+    # Use a unique transient unit name to avoid conflicts with template units
+    UNIT_NAME="carla-run-{{version}}-{{port}}"
+
+    # Stop any existing unit (running or not) and reset failed state
+    echo "Ensuring no existing $UNIT_NAME unit..."
+    systemctl --user stop "$UNIT_NAME" 2>/dev/null || true
+    systemctl --user reset-failed "$UNIT_NAME" 2>/dev/null || true
+    # Wait a moment for cleanup
+    sleep 0.5
+
+    echo "Starting CARLA {{version}} on port {{port}} with DISPLAY=$DISPLAY..."
+
+    # Start CARLA using systemd-run
+    systemd-run --user \
+        --unit="$UNIT_NAME" \
+        --working-directory="$CARLA_DIR" \
+        --setenv=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json \
+        --setenv=DISPLAY="$DISPLAY" \
+        --setenv=CARLA_PORT={{port}} \
+        bash -c './CarlaUE4.sh -quality-level=Low -carla-rpc-port={{port}}'
+
+    echo "CARLA {{version}} started on port {{port}}"
+    echo "Use 'just status-carla {{version}} {{port}}' to check status"
+    echo "Use 'just logs-carla {{version}} {{port}}' to view logs"
+    echo "Use 'just stop-carla {{version}} {{port}}' to stop"
+
+# Stop CARLA simulator
+stop-carla version port:
+    #!/usr/bin/env bash
+    UNIT_NAME="carla-run-{{version}}-{{port}}"
+
+    if systemctl --user is-active --quiet "$UNIT_NAME"; then
+        echo "Stopping CARLA {{version}} on port {{port}}..."
+        systemctl --user stop "$UNIT_NAME"
+        echo "CARLA stopped"
+    else
+        echo "CARLA {{version}} is not running on port {{port}}"
+    fi
+
+# Show CARLA logs
+logs-carla version port follow="":
+    #!/usr/bin/env bash
+    UNIT_NAME="carla-run-{{version}}-{{port}}"
+
+    if [ "{{follow}}" = "follow" ] || [ "{{follow}}" = "-f" ]; then
+        journalctl --user -u "$UNIT_NAME" -f
+    else
+        journalctl --user -u "$UNIT_NAME" --no-pager
+    fi
+
+# Check CARLA status
+status-carla version port:
+    #!/usr/bin/env bash
+    UNIT_NAME="carla-run-{{version}}-{{port}}"
+
+    echo "=== CARLA {{version}} Status (port {{port}}) ==="
+    systemctl --user status "$UNIT_NAME" --no-pager || true
+    echo ""
+    echo "=== Recent logs ==="
+    journalctl --user -u "$UNIT_NAME" -n 20 --no-pager
