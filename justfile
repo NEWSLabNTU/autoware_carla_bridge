@@ -30,13 +30,18 @@ build-interface:
     colcon build {{colcon_build_flags}} \
         --packages-select \
         builtin_interfaces \
+        action_msgs \
         std_msgs \
         geometry_msgs \
+        nav_msgs \
         sensor_msgs \
         tf2_msgs \
+        unique_identifier_msgs \
+        autoware_common_msgs \
+        autoware_planning_msgs \
         autoware_vehicle_msgs \
-        tier4_vehicle_msgs \
-        tier4_control_msgs
+        tier4_control_msgs \
+        tier4_vehicle_msgs
 
 # Build autoware_carla_bridge package
 build-bridge:
