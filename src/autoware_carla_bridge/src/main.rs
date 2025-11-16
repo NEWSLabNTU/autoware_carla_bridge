@@ -10,16 +10,14 @@ mod tf_bridge;
 mod types;
 mod urdf_parser;
 mod utils;
+mod vehicle_control;
 
-use bridge::{
-    actor_bridge::BridgeType,
-    sensor_bridge::{SensorBridge, SensorType},
-};
+use bridge::{actor_bridge::BridgeType, sensor_bridge::SensorBridge};
 
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -276,12 +274,21 @@ fn main() -> Result<()> {
 
     let vehicle = carla_vehicle.get_vehicle();
 
+    // Wrap vehicle in Arc<Mutex<>> for shared access between control callbacks and main loop
+    let vehicle_shared = Arc::new(Mutex::new(Some(vehicle.clone())));
+
     tracing::info!("Vehicle and sensors spawned successfully!");
 
     // === Step 8: Create sensor bridges ===
     tracing::info!("Creating sensor bridges...");
     let _sensor_bridges = create_sensor_bridges(node.clone(), &carla_vehicle, &autoware)?;
     tracing::info!("Created {} sensor bridges", _sensor_bridges.len());
+
+    // === Step 9: Create vehicle control bridge ===
+    tracing::info!("Creating vehicle control bridge...");
+    let vehicle_control =
+        vehicle_control::VehicleControlBridge::new(node.clone(), vehicle_shared.clone())?;
+    tracing::info!("Vehicle control bridge created");
 
     tracing::info!("=== Bridge running ===");
 
@@ -410,9 +417,8 @@ fn main() -> Result<()> {
             &[angular_vel.x, angular_vel.y, angular_vel.z],
         )?;
 
-        // TODO: Apply control commands from Autoware to CARLA vehicle
-        // let actuation_cmd = autoware.get_actuation_cmd();
-        // Apply throttle/brake/steering to vehicle
+        // Publish vehicle status (velocity, steering, control mode)
+        vehicle_control.publish_status(sec)?;
     }
 
     tracing::info!("Cleaning up...");
