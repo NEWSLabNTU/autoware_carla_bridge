@@ -45,7 +45,7 @@ clap = { version = "4.5.48", features = ["derive"] }
 interp = "2.1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-nalgebra = "0.32.3"
+nalgebra = "0.34.1"
 ndarray = "0.16.1"
 urdf-rs = "0.8.0"
 serde = { version = "1.0.226", features = ["derive"] }
