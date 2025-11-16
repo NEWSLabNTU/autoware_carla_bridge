@@ -14,7 +14,7 @@ use std::{collections::HashMap, fs, path::Path};
 use crate::error::{BridgeError, Result};
 
 /// Top-level CARLA sensor configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CarlaConfig {
     /// Type-level defaults for each sensor category
     #[serde(default)]
@@ -54,14 +54,6 @@ impl CarlaConfig {
         );
 
         Ok(config)
-    }
-
-    /// Create a default configuration (no overrides)
-    pub fn default() -> Self {
-        Self {
-            defaults: SensorTypeDefaults::default(),
-            sensors: HashMap::new(),
-        }
     }
 
     /// Get merged parameters for a specific sensor
@@ -311,11 +303,17 @@ impl SensorParams {
     /// Apply these parameters to a CARLA sensor blueprint
     ///
     /// This sets all non-None attributes on the blueprint.
-    pub fn apply_to_blueprint(&self, blueprint: &mut carla::client::ActorBlueprint) {
-        // Helper macro to set attribute from a value
+    /// Returns an error if any attribute fails to set.
+    pub fn apply_to_blueprint(&self, blueprint: &mut carla::client::ActorBlueprint) -> Result<()> {
+        // Helper macro to set attribute from a value and propagate errors
         macro_rules! set_attr {
             ($name:expr, $value:expr) => {
-                blueprint.set_attribute($name, &$value.to_string());
+                if !blueprint.set_attribute($name, &$value.to_string()) {
+                    return Err(BridgeError::ConfigError(format!(
+                        "Failed to set sensor attribute '{}' to '{}'",
+                        $name, $value
+                    )));
+                }
             };
         }
 
@@ -438,6 +436,8 @@ impl SensorParams {
         if let Some(v) = self.vertical_fov {
             set_attr!("vertical_fov", v);
         }
+
+        Ok(())
     }
 }
 

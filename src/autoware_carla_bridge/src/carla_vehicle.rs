@@ -171,7 +171,7 @@ impl CarlaVehicle {
 
             let sensor_params =
                 carla_config.get_sensor_params(&config.link_name, config_sensor_type);
-            sensor_params.apply_to_blueprint(&mut sensor_bp);
+            sensor_params.apply_to_blueprint(&mut sensor_bp)?;
 
             // Try to get transform from TF buffer (base_link → sensor)
             tracing::info!(
