@@ -38,7 +38,7 @@ tier4_control_msgs = "*"
 
 # CARLA and utilities
 # Using local carla-rust for latest APIs and multi-version support
-carla = { version = "0.12.0", path = "../external/carla-rust/carla" }
+carla = "0.13.0"
 atomic_float = "1.1.0"
 arc-swap = "1.6.0"
 clap = { version = "4.5.48", features = ["derive"] }
