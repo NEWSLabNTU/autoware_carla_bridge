@@ -85,7 +85,7 @@ lint:
     source src/interface/install/setup.bash
     cd src/autoware_carla_bridge
     cargo +nightly fmt --check
-    cargo clippy
+    cargo clippy -- -D warnings
 
 # Run tests
 test:
