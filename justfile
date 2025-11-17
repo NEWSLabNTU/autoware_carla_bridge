@@ -157,7 +157,7 @@ lint:
     fi
 
     cargo +nightly fmt --check
-    cargo clippy --config build/ros2_cargo_config.toml -- -D warnings
+    cargo clippy --config build/ros2_cargo_config.toml --all-targets -- -D warnings
 
 # Run tests
 test:
