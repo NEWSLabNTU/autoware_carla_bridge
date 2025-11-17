@@ -22,7 +22,8 @@ build:
     export CARLA_VERSION={{carla_version}}
     colcon build \
         --base-paths src \
-        --symlink-install
+        --symlink-install \
+        --cargo-args --profile dev-release
 
 # Launch the bridge with ros2 run
 run port:
