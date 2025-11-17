@@ -6,9 +6,6 @@
 # The carla-rust build system uses this to select appropriate bindings
 carla_version := env_var_or_default('CARLA_VERSION', '0.9.16')
 
-# Common colcon build flags
-colcon_build_flags := "--symlink-install --cargo-args --release"
-
 # Default recipe (runs when you type `just`)
 default:
     @just --list
@@ -17,69 +14,31 @@ default:
 install-deps:
     ./scripts/install_deps.sh
 
-# Build ros2_rust packages (Rust generator, runtime, and rclrs)
-build-ros2-rust:
-    cd src/ros2_rust && \
-    colcon build {{colcon_build_flags}}
-
-# Build message packages (generates Rust crates)
-build-interface:
+# Build autoware_carla_bridge package (colcon-cargo-ros2 handles everything)
+build:
     #!/usr/bin/env bash
-    source src/ros2_rust/install/setup.bash
-    cd src/interface
-    colcon build {{colcon_build_flags}} \
-        --packages-select \
-        builtin_interfaces \
-        action_msgs \
-        std_msgs \
-        geometry_msgs \
-        nav_msgs \
-        sensor_msgs \
-        tf2_msgs \
-        unique_identifier_msgs \
-        autoware_common_msgs \
-        autoware_planning_msgs \
-        autoware_vehicle_msgs \
-        tier4_control_msgs \
-        tier4_vehicle_msgs
-
-# Build autoware_carla_bridge package
-build-bridge:
-    #!/usr/bin/env bash
-    source /opt/ros/humble/setup.bash
-    source src/interface/install/setup.bash
-    cd src/autoware_carla_bridge
-    CARLA_VERSION={{carla_version}} colcon build {{colcon_build_flags}}
-
-# Build all stages (complete build)
-build: build-ros2-rust build-interface build-bridge
+    set -e
+    source src/external/autoware/install/setup.bash
+    export CARLA_VERSION={{carla_version}}
+    colcon build \
+        --base-paths src \
+        --symlink-install
 
 # Launch the bridge with ros2 run
 run port:
     #!/usr/bin/env bash
-    source src/autoware_carla_bridge/install/setup.bash
+    source install/setup.bash
     ros2 run autoware_carla_bridge autoware_carla_bridge --carla-port {{port}}
 
-# Clean ros2_rust build artifacts
-clean-ros2-rust:
-    cd src/ros2_rust && rm -rf build install log
-
-# Clean interface build artifacts
-clean-interface:
-    cd src/interface && rm -rf build install log
-
-# Clean bridge build artifacts
-clean-bridge:
-    cd src/autoware_carla_bridge && rm -rf build install log
-
 # Clean all build artifacts
-clean: clean-ros2-rust clean-interface clean-bridge
+clean:
+    rm -rf build install log
 
 # Format code with rustfmt
 format:
     #!/usr/bin/env bash
     source /opt/ros/humble/setup.bash
-    source src/interface/install/setup.bash
+    source install/setup.bash
     cd src/autoware_carla_bridge
     cargo +nightly fmt
 
@@ -87,7 +46,7 @@ format:
 lint:
     #!/usr/bin/env bash
     source /opt/ros/humble/setup.bash
-    source src/interface/install/setup.bash
+    source install/setup.bash
     cd src/autoware_carla_bridge
     cargo +nightly fmt --check
     cargo clippy -- -D warnings
@@ -96,7 +55,7 @@ lint:
 test:
     #!/usr/bin/env bash
     source /opt/ros/humble/setup.bash
-    source src/interface/install/setup.bash
+    source install/setup.bash
     cd src/autoware_carla_bridge
     cargo nextest run --no-tests pass --no-fail-fast
 
@@ -189,6 +148,79 @@ status-carla version port:
     UNIT_NAME="carla-run-{{version}}-{{port}}"
 
     echo "=== CARLA {{version}} Status (port {{port}}) ==="
+    systemctl --user status "$UNIT_NAME" --no-pager || true
+    echo ""
+    echo "=== Recent logs ==="
+    journalctl --user -u "$UNIT_NAME" -n 20 --no-pager
+
+# Start Autoware planning simulator with systemd-run
+start-autoware:
+    #!/usr/bin/env bash
+    set -e
+
+    AUTOWARE_DIR="$HOME/repos/autoware/2025.02-ws"
+    UNIT_NAME="autoware-planning-simulator"
+
+    if [ ! -d "$AUTOWARE_DIR" ]; then
+        echo "Error: Autoware directory not found: $AUTOWARE_DIR"
+        exit 1
+    fi
+
+    # Stop any existing unit and reset failed state
+    echo "Ensuring no existing $UNIT_NAME unit..."
+    systemctl --user stop "$UNIT_NAME" 2>/dev/null || true
+    systemctl --user reset-failed "$UNIT_NAME" 2>/dev/null || true
+    sleep 0.5
+
+    echo "Starting Autoware planning simulator..."
+
+    # Start Autoware using systemd-run
+    systemd-run --user \
+        --unit="$UNIT_NAME" \
+        --working-directory="$AUTOWARE_DIR" \
+        bash -c '\
+            source install/setup.sh && \
+            play_launch launch \
+                autoware_launch planning_simulator.launch.xml \
+                map_path:=$HOME/autoware_map/sample-map-planning \
+                vehicle_model:=sample_vehicle \
+                sensor_model:=sample_sensor_kit'
+
+    echo "Autoware planning simulator started"
+    echo "Use 'just status-autoware' to check status"
+    echo "Use 'just logs-autoware' to view logs"
+    echo "Use 'just stop-autoware' to stop"
+
+# Stop Autoware simulator
+stop-autoware:
+    #!/usr/bin/env bash
+    UNIT_NAME="autoware-planning-simulator"
+
+    if systemctl --user is-active --quiet "$UNIT_NAME"; then
+        echo "Stopping Autoware planning simulator..."
+        systemctl --user stop "$UNIT_NAME"
+        echo "Autoware stopped"
+    else
+        echo "Autoware is not running"
+    fi
+
+# Show Autoware logs
+logs-autoware follow="":
+    #!/usr/bin/env bash
+    UNIT_NAME="autoware-planning-simulator"
+
+    if [ "{{follow}}" = "follow" ] || [ "{{follow}}" = "-f" ]; then
+        journalctl --user -u "$UNIT_NAME" -f
+    else
+        journalctl --user -u "$UNIT_NAME" --no-pager
+    fi
+
+# Check Autoware status
+status-autoware:
+    #!/usr/bin/env bash
+    UNIT_NAME="autoware-planning-simulator"
+
+    echo "=== Autoware Planning Simulator Status ==="
     systemctl --user status "$UNIT_NAME" --no-pager || true
     echo ""
     echo "=== Recent logs ==="
