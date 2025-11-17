@@ -40,15 +40,10 @@
 **Accomplishments**:
 - Reorganized project to colcon workspace structure
 - Created ROS 2 package manifest (`package.xml`) and launch file
-- Implemented three-stage build process:
-  1. Build rosidl_generator_rs (Rust message generator)
-  2. Build message packages → generates Rust bindings + `.cargo/config.toml`
-  3. Build autoware_carla_bridge
-- Added git submodules for standard ROS 2 messages (common_interfaces, rcl_interfaces, unique_identifier_msgs)
-- Created symlinks to Autoware message packages
+- Configured build system with colcon-cargo-ros2 for seamless ROS 2 + Rust integration
 - Created `scripts/install_deps.sh` for dependency installation
 
-**Key Insight**: rosidl_generator_rs must be installed BEFORE building message packages, otherwise only C/C++/Python bindings are generated (no Rust).
+**Key Insight**: With colcon-cargo-ros2, Rust ROS packages build like standard colcon packages - no special staging required.
 
 **Files Created**:
 - `src/autoware_carla_bridge/package.xml`
@@ -222,8 +217,6 @@ This is the first successful runtime test of the migrated bridge. It confirms:
 
 **Part 1: Dependencies and Setup**
 - ✅ Added tf2_msgs dependency to Cargo.toml
-- ✅ Built tf2_msgs package from geometry2 submodule
-- ✅ Added cargo patch to .cargo/config.toml
 - ✅ Added roxmltree dependency for lightweight XML parsing
 - ✅ Added nalgebra dependency for vector/quaternion math
 
@@ -283,7 +276,6 @@ This is the first successful runtime test of the migrated bridge. It confirms:
 
 **Files Modified**:
 - `src/autoware_carla_bridge/Cargo.toml` - Added dependencies (tf2_msgs, nalgebra, roxmltree)
-- `src/autoware_carla_bridge/.cargo/config.toml` - Added tf2_msgs patch
 - `src/autoware_carla_bridge/src/lib.rs` - Exported new modules
 - `src/autoware_carla_bridge/src/main.rs` - Declared new modules
 
@@ -443,7 +435,7 @@ This enables the next phase (Phase 4: Vehicle Lifecycle Management) where the br
 5. **Linear workflow**: Bridge follows clear sequential steps without state checks
 
 **Build Results**:
-- ✅ All 3 build stages completed successfully
+- ✅ Build completed successfully
 - ✅ Zero compilation errors
 - ✅ No unused import warnings
 - ⚠️ Only acceptable warnings remain (dead_code for future features, upstream library warnings)
@@ -606,7 +598,7 @@ The bridge now follows a clean, linear workflow that matches the natural sequenc
 - Updated all documentation files to reference `just` instead of `make`
 
 **Build Results**:
-- ✅ All 3 build stages completed successfully
+- ✅ Build completed successfully
 - ✅ Zero compilation errors
 - ✅ Zero lint warnings
 
@@ -681,8 +673,7 @@ This was a straightforward dependency version alignment. The carla-rust update i
 ### Build Status
 - ✅ Code compiles successfully
 - ✅ Zero lint warnings
-- ✅ Three-stage build system working (`just build`)
-- ✅ Separated install directories for each stage
+- ✅ Standard colcon build system with colcon-cargo-ros2
 
 ### What Works
 - ✅ All Zenoh code removed
@@ -714,14 +705,12 @@ This was a straightforward dependency version alignment. The carla-rust update i
 
 ## Build System
 
-**Three-Stage Build Process**:
+**Standard Colcon Build with colcon-cargo-ros2**:
 ```bash
-make build  # Runs all 3 stages
+just build  # Standard colcon build
 ```
 
-1. **Stage 1**: Build ros2_rust packages → installs rosidl_generator_rs
-2. **Stage 2**: Build interface packages → generates Rust bindings + `.cargo/config.toml`
-3. **Stage 3**: Build autoware_carla_bridge → uses patches from config
+The project uses colcon-cargo-ros2, which integrates Rust seamlessly with ROS 2 build system. No manual staging or configuration required - builds work like any standard ROS 2 package.
 
 **Incremental builds**: After first build, only modified packages rebuild.
 
@@ -733,10 +722,9 @@ make build  # Runs all 3 stages
 .
 ├── src/
 │   ├── autoware_carla_bridge/     # Main bridge (rclrs-based)
-│   ├── interface/                 # Message packages (submodules + symlinks)
-│   ├── ros2_rust/                 # Rust generators (submodules)
 │   └── external/
 │       ├── autoware@              # Symlink to Autoware workspace
+│       ├── carla-rust/            # CARLA Rust bindings
 │       └── zenoh_carla_bridge/    # Reference implementation
 ├── docs/                          # Migration guides and documentation
 │   ├── zenoh-to-rclrs-api-comparison.md
@@ -745,8 +733,10 @@ make build  # Runs all 3 stages
 │   └── roadmap.md
 ├── scripts/
 │   └── install_deps.sh
-├── build/, install/, log/         # Colcon artifacts
-└── .cargo/config.toml             # Generated cargo patches
+├── third_party/
+│   ├── autoware@                  # Symlink to Autoware workspace
+│   └── carla/                     # CARLA run scripts
+└── build/, install/, log/         # Colcon artifacts
 ```
 
 ---
@@ -766,7 +756,7 @@ make build  # Runs all 3 stages
 
 4. **Arc Semantics**: Node is `Arc<NodeState>` internally (clone is cheap). Publishers aren't Arc (wrap them for thread sharing).
 
-5. **Three-Stage Build**: rosidl_generator_rs must be installed before building message packages.
+5. **colcon-cargo-ros2 Integration**: Seamless Rust + ROS 2 integration without manual staging or configuration files.
 
 ---
 
