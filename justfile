@@ -224,12 +224,12 @@ carla command *ARGS:
                 exit 1
             fi
 
-            # Determine CARLA directory based on version
-            CARLA_DIR="$HOME/repos/autoware_carla_bridge/scripts/simulators/startup/carla-$VERSION"
-
-            if [ ! -d "$CARLA_DIR" ]; then
-                echo "Error: CARLA directory not found: $CARLA_DIR"
+            # Check if run script exists
+            RUN_SCRIPT="$(pwd)/third_party/carla/run-$VERSION.sh"
+            if [ ! -f "$RUN_SCRIPT" ]; then
+                echo "Error: CARLA run script not found: $RUN_SCRIPT"
                 echo "Available versions: 0.9.14, 0.9.15, 0.9.16"
+                echo "Please configure symlinks in third_party/carla/"
                 exit 1
             fi
 
@@ -244,14 +244,12 @@ carla command *ARGS:
 
             echo "Starting CARLA $VERSION on port $PORT with DISPLAY=$DISPLAY..."
 
-            # Start CARLA using systemd-run
+            # Start CARLA using systemd-run with the run script
             systemd-run --user \
                 --unit="$UNIT_NAME" \
-                --working-directory="$CARLA_DIR" \
-                --setenv=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json \
                 --setenv=DISPLAY="$DISPLAY" \
                 --setenv=CARLA_PORT="$PORT" \
-                bash -c "./CarlaUE4.sh -quality-level=Low -carla-rpc-port=$PORT"
+                bash "$RUN_SCRIPT"
 
             echo "CARLA $VERSION started on port $PORT"
             echo "Use 'just carla status $VERSION $PORT' to check status"
@@ -424,10 +422,12 @@ demo command *ARGS:
             # 1. Start CARLA
             echo "Step 1/3: Starting CARLA simulator..."
 
-            CARLA_DIR="$HOME/repos/autoware_carla_bridge/scripts/simulators/startup/carla-$CARLA_VERSION"
-            if [ ! -d "$CARLA_DIR" ]; then
-                echo "Error: CARLA directory not found: $CARLA_DIR"
+            # Check if run script exists
+            RUN_SCRIPT="$(pwd)/third_party/carla/run-$CARLA_VERSION.sh"
+            if [ ! -f "$RUN_SCRIPT" ]; then
+                echo "Error: CARLA run script not found: $RUN_SCRIPT"
                 echo "Available versions: 0.9.14, 0.9.15, 0.9.16"
+                echo "Please configure symlinks in third_party/carla/"
                 exit 1
             fi
 
@@ -437,14 +437,12 @@ demo command *ARGS:
             systemctl --user reset-failed "$CARLA_UNIT" 2>/dev/null || true
             sleep 0.5
 
-            # Start CARLA using systemd-run
+            # Start CARLA using systemd-run with the run script
             systemd-run --user \
                 --unit="$CARLA_UNIT" \
-                --working-directory="$CARLA_DIR" \
-                --setenv=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json \
                 --setenv=DISPLAY="$DISPLAY" \
                 --setenv=CARLA_PORT="$CARLA_PORT" \
-                bash -c "./CarlaUE4.sh -quality-level=Low -carla-rpc-port=$CARLA_PORT"
+                bash "$RUN_SCRIPT"
 
             echo "CARLA $CARLA_VERSION started on port $CARLA_PORT"
             echo ""
