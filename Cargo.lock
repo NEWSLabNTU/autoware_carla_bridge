@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "action_msgs"
-version = "1.2.2"
+version = "0.5.0"
 dependencies = [
  "builtin_interfaces",
  "rosidl_runtime_rs",
@@ -236,6 +236,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stream"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.107",
+]
+
+[[package]]
 name = "async-task"
 version = "4.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -432,34 +454,18 @@ dependencies = [
 
 [[package]]
 name = "autoware_common_msgs"
-version = "1.3.0"
+version = "0.5.0"
 dependencies = [
  "rosidl_runtime_rs",
-]
-
-[[package]]
-name = "autoware_planning_msgs"
-version = "1.3.0"
-dependencies = [
- "builtin_interfaces",
- "geometry_msgs",
- "nav_msgs",
- "rosidl_runtime_rs",
- "std_msgs",
- "unique_identifier_msgs",
 ]
 
 [[package]]
 name = "autoware_vehicle_msgs"
-version = "1.3.0"
+version = "0.5.0"
 dependencies = [
- "autoware_planning_msgs",
  "builtin_interfaces",
- "geometry_msgs",
- "nav_msgs",
  "rosidl_runtime_rs",
  "std_msgs",
- "unique_identifier_msgs",
 ]
 
 [[package]]
@@ -525,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "builtin_interfaces"
-version = "1.2.2"
+version = "0.5.0"
 dependencies = [
  "rosidl_runtime_rs",
 ]
@@ -1140,6 +1146,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
+name = "fontdue"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e57e16b3fe8ff4364c0661fdaac543fb38b29ea9bc9c2f45612d90adf931d2b"
+dependencies = [
+ "hashbrown 0.15.5",
+ "ttf-parser",
+]
+
+[[package]]
 name = "foreign-types"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1321,9 +1337,8 @@ dependencies = [
 
 [[package]]
 name = "geometry_msgs"
-version = "4.9.0"
+version = "0.5.0"
 dependencies = [
- "builtin_interfaces",
  "rosidl_runtime_rs",
  "std_msgs",
 ]
@@ -1959,6 +1974,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "macroquad"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2befbae373456143ef55aa93a73594d080adfb111dc32ec96a1123a3e4ff4ae"
+dependencies = [
+ "fontdue",
+ "glam 0.27.0",
+ "image",
+ "macroquad_macro",
+ "miniquad",
+ "quad-rand",
+]
+
+[[package]]
+name = "macroquad_macro"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64b1d96218903768c1ce078b657c0d5965465c95a60d2682fd97443c9d2483dd"
+
+[[package]]
+name = "malloc_buf"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62bb907fe88d54d8d9ce32a3cceab4218ed2f6b7d35617cafe9adf84e43919cb"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "manual_control"
+version = "0.1.0"
+dependencies = [
+ "carla",
+ "color-eyre",
+ "eyre",
+ "macroquad",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2020,6 +2076,18 @@ name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
+
+[[package]]
+name = "miniquad"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fb3e758e46dbc45716a8a49ca9edc54b15bcca826277e80b1f690708f67f9e3"
+dependencies = [
+ "libc",
+ "ndk-sys",
+ "objc-rs",
+ "winapi",
+]
 
 [[package]]
 name = "miniz_oxide"
@@ -2102,7 +2170,7 @@ dependencies = [
 
 [[package]]
 name = "nav_msgs"
-version = "4.9.0"
+version = "0.5.0"
 dependencies = [
  "builtin_interfaces",
  "geometry_msgs",
@@ -2137,6 +2205,12 @@ dependencies = [
  "portable-atomic-util",
  "rawpointer",
 ]
+
+[[package]]
+name = "ndk-sys"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1bcdd74c20ad5d95aacd60ef9ba40fdf77f767051040541df557b7a9b2a2121"
 
 [[package]]
 name = "nix"
@@ -2216,6 +2290,15 @@ checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
  "libm",
+]
+
+[[package]]
+name = "objc-rs"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64a1e7069a2525126bf12a9f1f7916835fafade384fb27cabf698e745e2a1eb8"
+dependencies = [
+ "malloc_buf",
 ]
 
 [[package]]
@@ -2508,6 +2591,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "quad-rand"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a651516ddc9168ebd67b24afd085a718be02f8858fe406591b013d101ce2f40"
+
+[[package]]
 name = "quote"
 version = "1.0.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2580,13 +2669,20 @@ dependencies = [
 
 [[package]]
 name = "rclrs"
-version = "0.5.1"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b79c46ba8be755c1c0976a660ea0bb1cbd46724d25801fa11d23b0b73fe686e3"
 dependencies = [
  "async-std",
+ "async-stream",
  "cfg-if",
  "futures",
+ "futures-lite",
  "rosidl_runtime_rs",
  "rustflags",
+ "tokio",
+ "tokio-stream",
+ "uuid",
 ]
 
 [[package]]
@@ -2649,7 +2745,9 @@ checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
 
 [[package]]
 name = "rosidl_runtime_rs"
-version = "0.4.2"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b00ea2ee34606be89514fe2ba100b5fc6165e0f682824f1462f9b09105975566"
 dependencies = [
  "cfg-if",
 ]
@@ -2832,7 +2930,7 @@ checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 
 [[package]]
 name = "sensor_msgs"
-version = "4.9.0"
+version = "0.5.0"
 dependencies = [
  "builtin_interfaces",
  "geometry_msgs",
@@ -2988,7 +3086,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "std_msgs"
-version = "4.9.0"
+version = "0.5.0"
 dependencies = [
  "builtin_interfaces",
  "rosidl_runtime_rs",
@@ -3087,13 +3185,12 @@ dependencies = [
 
 [[package]]
 name = "tf2_msgs"
-version = "0.25.17"
+version = "0.5.0"
 dependencies = [
  "action_msgs",
  "builtin_interfaces",
  "geometry_msgs",
  "rosidl_runtime_rs",
- "std_msgs",
  "unique_identifier_msgs",
 ]
 
@@ -3148,24 +3245,20 @@ dependencies = [
 
 [[package]]
 name = "tier4_control_msgs"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "autoware_common_msgs",
  "builtin_interfaces",
  "rosidl_runtime_rs",
- "std_msgs",
 ]
 
 [[package]]
 name = "tier4_vehicle_msgs"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
- "autoware_common_msgs",
  "builtin_interfaces",
- "geometry_msgs",
  "rosidl_runtime_rs",
  "std_msgs",
- "tier4_control_msgs",
 ]
 
 [[package]]
@@ -3187,6 +3280,26 @@ checksum = "5d4f6d1145dcb577acf783d4e601bc1d76a13337bb54e6233add580b07344c8b"
 dependencies = [
  "displaydoc",
  "zerovec",
+]
+
+[[package]]
+name = "tokio"
+version = "1.48.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff360e02eab121e0bc37a2d3b4d4dc622e6eda3a8e5253d5435ecf5bd4c68408"
+dependencies = [
+ "pin-project-lite",
+]
+
+[[package]]
+name = "tokio-stream"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eca58d7bba4a75707817a2c44174253f9236b2d5fbd055602e9d5c07c139a047"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]
@@ -3261,6 +3374,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ttf-parser"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c591d83f69777866b9126b24c6dd9a18351f177e49d625920d19f989fd31cf8"
+
+[[package]]
 name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3292,7 +3411,7 @@ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
 name = "unique_identifier_msgs"
-version = "2.2.1"
+version = "0.5.0"
 dependencies = [
  "rosidl_runtime_rs",
 ]
@@ -3363,6 +3482,17 @@ name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
+
+[[package]]
+name = "uuid"
+version = "1.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f87b8aa10b915a06587d0dec516c282ff295b475d94abf425d62b57710070a2"
+dependencies = [
+ "getrandom 0.3.4",
+ "js-sys",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "valuable"
@@ -3925,3 +4055,431 @@ checksum = "73ab332fe2f6680068f3582b16a24f90ad7096d5d39b974d1c0aff0125116f02"
 dependencies = [
  "simd-adler32",
 ]
+
+[[patch.unused]]
+name = "action_tutorials_interfaces"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "actionlib_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "actuator_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_adapi_v1_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_adapi_version_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_behavior_velocity_planner"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_control_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_control_validator"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_external_api_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_internal_debug_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_internal_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_internal_perception_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_internal_planning_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_localization_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_map_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_motion_velocity_planner_node"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_operation_mode_transition_manager"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_perception_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_planning_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_planning_validator"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_sensing_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_static_centerline_generator"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_system_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_v2x_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "autoware_vehicle_cmd_gate"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "bond"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "can_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "cob_srvs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "composition_interfaces"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "continental_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "continental_srvs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "control_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "control_performance_analysis"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "data_tamer_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "diagnostic_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "eagleye_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "example_interfaces"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "ffmpeg_image_transport_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "geographic_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "gps_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "grid_map_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "lifecycle_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "logging_demo"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "map_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "morai_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "moveit_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "nav2_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "nebula_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "nmea_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "object_recognition_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "octomap_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "openscenario_interpreter_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "openscenario_preprocessor_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "pacmod2_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "pacmod3_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "pandar_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "pcl_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "pendulum_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "planning_debug_tools"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "plotjuggler_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "point_cloud_interfaces"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "radar_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "rcl_interfaces"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "rmw_dds_common"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "robosense_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "robot_localization"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "ros2_socketcan_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "ros_gz_interfaces"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "ros_ign_interfaces"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "rosapi_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "rosbag2_interfaces"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "rosbridge_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "rosgraph_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "rtklib_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "septentrio_gnss_driver"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "shape_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "statistics_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "std_srvs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "stereo_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "test_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "theora_image_transport"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_api_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_calibration_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_debug_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_external_api_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_hmi_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_localization_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_map_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_metric_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_perception_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_planning_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_rtc_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_screen_capture_rviz_plugin"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_simulation_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_system_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "tier4_v2x_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "topic_tools_interfaces"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "traffic_simulator_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "trajectory_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "turtlesim"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "ublox_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "udp_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "velodyne_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "vision_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "visualization_msgs"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "yabloc_particle_filter"
+version = "0.5.0"
+
+[[patch.unused]]
+name = "zed_msgs"
+version = "0.5.0"

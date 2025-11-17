@@ -38,7 +38,7 @@ tier4_control_msgs = "*"
 
 # CARLA and utilities
 # Using local carla-rust for latest APIs and multi-version support
-carla = "0.13.0"
+carla.workspace = true
 atomic_float = "1.1.0"
 arc-swap = "1.6.0"
 clap = { version = "4.5.48", features = ["derive"] }
@@ -55,9 +55,3 @@ thiserror = "2.0.16"
 eyre = "0.6"
 color-eyre = "0.6"
 ctrlc = { version = "3", features = ["termination"] }
-
-[profile.release-with-debug]
-inherits = "release"
-debug = true
-debug-assertions = true
-strip = false

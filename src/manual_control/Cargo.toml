@@ -1,0 +1,28 @@
+[package]
+name = "manual_control"
+version = "0.1.0"
+edition = "2021"
+description = "CARLA Manual Control - Interactive vehicle control with multiple sensors and HUD"
+license = "Apache-2.0"
+
+[[bin]]
+name = "manual_control"
+path = "main.rs"
+
+[dependencies]
+# CARLA client
+carla.workspace = true
+
+# Graphics and UI
+macroquad = "0.4"
+
+# Error handling
+eyre = "0.6"
+color-eyre = "0.6"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[package.metadata.ros]
+# No special ROS metadata needed for this binary
