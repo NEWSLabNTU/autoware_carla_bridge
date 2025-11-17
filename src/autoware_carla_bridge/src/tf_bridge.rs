@@ -208,6 +208,10 @@ impl TFBuffer {
     ///
     /// # Returns
     /// Transform for the frame (parent → frame)
+    ///
+    /// NOTE: Public API method kept for direct transform lookups. Use `lookup_transform()`
+    /// for chain traversal.
+    #[allow(dead_code)]
     pub fn get_transform(&self, frame_id: &str) -> Result<TransformStamped> {
         let tf_map = self.transforms.lock().unwrap();
 
@@ -223,12 +227,18 @@ impl TFBuffer {
     }
 
     /// Get number of transforms in buffer
+    ///
+    /// NOTE: Public API method kept for diagnostic and monitoring purposes.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         let tf_map = self.transforms.lock().unwrap();
         tf_map.len()
     }
 
     /// Check if buffer is empty
+    ///
+    /// NOTE: Public API method kept for diagnostic and monitoring purposes.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

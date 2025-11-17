@@ -1,3 +1,14 @@
+//! Vehicle control bridge - bidirectional control synchronization
+//!
+//! This module handles bidirectional control between Autoware and CARLA vehicles:
+//! - Subscribes to Autoware control commands
+//! - Publishes vehicle status back to Autoware
+//! - Manages control mode, steering, acceleration, etc.
+//!
+//! Currently unused but kept for future phases when we implement full vehicle
+//! control integration.
+#![allow(dead_code)]
+
 use std::sync::{atomic::Ordering, Arc};
 
 use arc_swap::ArcSwap;

@@ -19,6 +19,8 @@ use crate::{
 pub struct Autoware {
     // === ROS Infrastructure ===
     /// ROS node handle
+    /// NOTE: Kept for future use in creating additional ROS resources dynamically
+    #[allow(dead_code)]
     node: rclrs::Node,
 
     // === Autoware Detection and Configuration ===
@@ -39,13 +41,22 @@ pub struct Autoware {
     pub_tf: Arc<rclrs::Publisher<tf2_msgs::msg::TFMessage>>,
 
     // === Vehicle Status Publishers ===
+    // NOTE: These publishers are created but not yet used. They will be used in future phases
+    // to publish vehicle status from CARLA to Autoware.
+    #[allow(dead_code)]
     pub_actuation_status: Arc<rclrs::Publisher<tier4_vehicle_msgs::msg::ActuationStatusStamped>>,
+    #[allow(dead_code)]
     pub_velocity_status: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::VelocityReport>>,
+    #[allow(dead_code)]
     pub_steering_status: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::SteeringReport>>,
+    #[allow(dead_code)]
     pub_gear_status: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::GearReport>>,
+    #[allow(dead_code)]
     pub_control_mode: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::ControlModeReport>>,
+    #[allow(dead_code)]
     pub_turn_indicators_status:
         Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::TurnIndicatorsReport>>,
+    #[allow(dead_code)]
     pub_hazard_lights_status: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::HazardLightsReport>>,
 
     // === Vehicle Command Subscriptions ===
@@ -58,10 +69,16 @@ pub struct Autoware {
         Arc<rclrs::Subscription<autoware_vehicle_msgs::msg::HazardLightsCommand>>,
 
     // === Shared State for Commands ===
+    /// NOTE: Command state fields kept for future vehicle control integration
+    #[allow(dead_code)]
     current_actuation_cmd: Arc<ArcSwap<tier4_vehicle_msgs::msg::ActuationCommandStamped>>,
+    #[allow(dead_code)]
     current_gear_cmd: Arc<ArcSwap<autoware_vehicle_msgs::msg::GearCommand>>,
+    #[allow(dead_code)]
     current_gate_mode: Arc<ArcSwap<tier4_control_msgs::msg::GateMode>>,
+    #[allow(dead_code)]
     current_turn_indicators_cmd: Arc<ArcSwap<autoware_vehicle_msgs::msg::TurnIndicatorsCommand>>,
+    #[allow(dead_code)]
     current_hazard_lights_cmd: Arc<ArcSwap<autoware_vehicle_msgs::msg::HazardLightsCommand>>,
 
     // === Initial Pose from RViz ===
@@ -408,6 +425,9 @@ impl Autoware {
     ///
     /// # Returns
     /// Result indicating success or timeout error
+    ///
+    /// NOTE: Alternative to is_alive() check, kept for explicit detection workflows
+    #[allow(dead_code)]
     pub fn wait_for_detection(&self) -> Result<()> {
         tracing::info!("Waiting for Autoware detection...");
         self.detector.wait_for_detection()?;
@@ -499,6 +519,9 @@ impl Autoware {
     ///
     /// # Returns
     /// Diagnostic information including state and health
+    ///
+    /// NOTE: Diagnostic API kept for monitoring and debugging purposes
+    #[allow(dead_code)]
     pub fn get_diagnostics(&self) -> crate::autoware_detection::DetectionDiagnostics {
         self.detector.get_diagnostics()
     }
@@ -580,6 +603,9 @@ impl Autoware {
     ///
     /// # Returns
     /// Result containing the initial pose or error if not available
+    ///
+    /// NOTE: Alternative to take_initial_pose(), kept for non-consuming access
+    #[allow(dead_code)]
     pub fn get_initial_pose(&self) -> Result<nalgebra::Isometry3<f32>> {
         self.initial_pose.lock().unwrap().ok_or_else(|| {
             crate::error::BridgeError::AutowareIssue("No initial pose available".to_string())
@@ -606,11 +632,15 @@ impl Autoware {
     ///
     /// # Returns
     /// Clone of ROS node handle (cheap - uses Arc internally)
+    ///
+    /// NOTE: Public API method kept for dynamic ROS resource creation
+    #[allow(dead_code)]
     pub fn node(&self) -> rclrs::Node {
         self.node.clone()
     }
 
     // === Vehicle Command Accessors ===
+    // NOTE: Command accessors kept for future vehicle control integration
 
     /// Get current actuation command
     ///
@@ -618,6 +648,7 @@ impl Autoware {
     ///
     /// # Returns
     /// Arc containing the latest ActuationCommandStamped
+    #[allow(dead_code)]
     pub fn get_actuation_cmd(&self) -> Arc<tier4_vehicle_msgs::msg::ActuationCommandStamped> {
         self.current_actuation_cmd.load_full()
     }
@@ -628,6 +659,7 @@ impl Autoware {
     ///
     /// # Returns
     /// Arc containing the latest GearCommand
+    #[allow(dead_code)]
     pub fn get_gear_cmd(&self) -> Arc<autoware_vehicle_msgs::msg::GearCommand> {
         self.current_gear_cmd.load_full()
     }
@@ -638,6 +670,7 @@ impl Autoware {
     ///
     /// # Returns
     /// Arc containing the latest GateMode
+    #[allow(dead_code)]
     pub fn get_gate_mode(&self) -> Arc<tier4_control_msgs::msg::GateMode> {
         self.current_gate_mode.load_full()
     }
@@ -648,6 +681,7 @@ impl Autoware {
     ///
     /// # Returns
     /// Arc containing the latest TurnIndicatorsCommand
+    #[allow(dead_code)]
     pub fn get_turn_indicators_cmd(
         &self,
     ) -> Arc<autoware_vehicle_msgs::msg::TurnIndicatorsCommand> {
@@ -660,6 +694,7 @@ impl Autoware {
     ///
     /// # Returns
     /// Arc containing the latest HazardLightsCommand
+    #[allow(dead_code)]
     pub fn get_hazard_lights_cmd(&self) -> Arc<autoware_vehicle_msgs::msg::HazardLightsCommand> {
         self.current_hazard_lights_cmd.load_full()
     }

@@ -1,3 +1,12 @@
+//! Actor bridge trait and factory functions
+//!
+//! This module provides the core ActorBridge trait and factory functions for creating
+//! bridges for different actor types (Vehicle, Sensor, TrafficLight, TrafficSign, Other).
+//!
+//! Currently unused but kept for future phases when we implement full actor lifecycle
+//! management with Autoware integration.
+#![allow(dead_code)]
+
 use carla::client::ActorKind;
 
 use super::{

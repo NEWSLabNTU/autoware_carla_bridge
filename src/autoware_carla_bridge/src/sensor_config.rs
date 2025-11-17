@@ -142,6 +142,8 @@ pub enum SensorType {
     Lidar,
     Gnss,
     Imu,
+    /// Radar sensor support - planned for future phases
+    #[allow(dead_code)]
     Radar,
 }
 

@@ -1,3 +1,11 @@
+//! Traffic light bridge - bidirectional state synchronization
+//!
+//! This module will handle bidirectional traffic light state synchronization
+//! between CARLA and Autoware.
+//!
+//! Currently unused but kept for future phases.
+#![allow(dead_code)]
+
 use carla::client::TrafficLight;
 
 use super::actor_bridge::ActorBridge;

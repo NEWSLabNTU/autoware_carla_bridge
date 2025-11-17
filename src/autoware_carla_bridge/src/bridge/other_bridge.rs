@@ -1,3 +1,11 @@
+//! Bridge for other (generic) actors
+//!
+//! This module handles actors that don't fit into the specific categories
+//! (Vehicle, Sensor, TrafficLight, TrafficSign).
+//!
+//! Currently unused but kept for future phases.
+#![allow(dead_code)]
+
 use carla::client::Actor;
 
 use super::actor_bridge::ActorBridge;

@@ -122,6 +122,9 @@ pub fn carla_to_ros_position(carla_position: &Vector3<f64>) -> Vector3<f64> {
 /// assert!((carla_pitch - 0.0).abs() < 1e-10);
 /// assert!((carla_yaw - (-90.0)).abs() < 1e-6); // 90° counterclockwise → -90° in CARLA
 /// ```
+///
+/// NOTE: Kept for API completeness and potential future use in rotation conversions.
+#[allow(dead_code)]
 pub fn ros_to_carla_rotation(roll: f64, pitch: f64, yaw: f64) -> (f64, f64, f64) {
     (
         -roll * 180.0 / PI, // Sign flip for left-handed system
@@ -165,6 +168,8 @@ pub fn carla_to_ros_rotation(roll: f64, pitch: f64, yaw: f64) -> (f64, f64, f64)
 ///
 /// # Returns
 /// Tuple of (roll, pitch, yaw) in degrees for CARLA
+/// NOTE: Kept for API completeness and potential future use in quaternion conversions.
+#[allow(dead_code)]
 pub fn ros_quaternion_to_carla_euler(quaternion: &Quaternion<f64>) -> (f64, f64, f64) {
     let (roll, pitch, yaw) = quaternion_to_euler(quaternion);
     ros_to_carla_rotation(roll, pitch, yaw)
@@ -179,6 +184,9 @@ pub fn ros_quaternion_to_carla_euler(quaternion: &Quaternion<f64>) -> (f64, f64,
 ///
 /// # Returns
 /// Rotation as quaternion (x, y, z, w)
+///
+/// NOTE: Kept for API completeness and potential future use in sensor data conversion.
+#[allow(dead_code)]
 pub fn carla_euler_to_ros_quaternion(roll: f64, pitch: f64, yaw: f64) -> Quaternion<f64> {
     let (ros_roll, ros_pitch, ros_yaw) = carla_to_ros_rotation(roll, pitch, yaw);
     euler_to_quaternion(ros_roll, ros_pitch, ros_yaw)
@@ -352,6 +360,10 @@ pub fn ros_pose_to_carla_isometry(pose: &geometry_msgs::msg::Pose) -> nalgebra::
 }
 
 /// Normalize angle to range [-π, π]
+///
+/// NOTE: Utility function kept for potential future use in angle computations
+/// and quaternion/euler conversions.
+#[allow(dead_code)]
 pub fn normalize_angle(angle: f64) -> f64 {
     let mut a = angle % (2.0 * PI);
     if a > PI {

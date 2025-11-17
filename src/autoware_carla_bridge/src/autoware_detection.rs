@@ -25,9 +25,14 @@ pub enum AutowareState {
 /// their lifecycle. Handles the transition between NotDetected → Detected → Lost states.
 pub struct AutowareDetector {
     /// ROS node handle
+    /// NOTE: Kept for future use in health checks and node queries
+    #[allow(dead_code)]
     node: rclrs::Node,
 
     /// Subscription to /robot_description topic
+    /// NOTE: This field is never accessed directly but must be kept alive to receive callbacks.
+    /// The subscription is cancelled when this struct is dropped.
+    #[allow(dead_code)]
     robot_desc_sub: Arc<rclrs::Subscription<std_msgs::msg::String>>,
 
     /// Flag indicating if robot_description has been received
@@ -43,6 +48,8 @@ pub struct AutowareDetector {
     last_heartbeat: Arc<Mutex<Option<Instant>>>,
 
     /// Detection timeout duration
+    /// NOTE: Kept for wait_for_detection() method (currently unused but part of public API)
+    #[allow(dead_code)]
     detection_timeout: Duration,
 
     /// Health check timeout duration (for detecting loss)
@@ -155,6 +162,9 @@ impl AutowareDetector {
     /// # Returns
     ///
     /// Ok(()) if detected, Err if timeout
+    ///
+    /// NOTE: Alternative to is_alive() check, kept for explicit detection workflows
+    #[allow(dead_code)]
     pub fn wait_for_detection(&self) -> Result<()> {
         let start = Instant::now();
 
@@ -179,6 +189,9 @@ impl AutowareDetector {
     /// Check for /robot_state_publisher node presence
     ///
     /// This is an additional check to verify Autoware components are running
+    ///
+    /// NOTE: Diagnostic utility kept for health checking
+    #[allow(dead_code)]
     pub fn check_robot_state_publisher(&self) -> Result<bool> {
         let node_names = self
             .node
@@ -201,6 +214,9 @@ impl AutowareDetector {
     /// Check for /tf_static topic presence
     ///
     /// This verifies that TF static transforms are being published
+    ///
+    /// NOTE: Diagnostic utility kept for health checking
+    #[allow(dead_code)]
     pub fn check_tf_static_topic(&self) -> Result<bool> {
         let topics = self
             .node
@@ -266,6 +282,9 @@ impl AutowareDetector {
     }
 
     /// Get diagnostic information about detection state
+    ///
+    /// NOTE: Diagnostic API kept for monitoring and debugging purposes
+    #[allow(dead_code)]
     pub fn get_diagnostics(&self) -> DetectionDiagnostics {
         let state = self.state();
         let urdf_available = self.latest_urdf.lock().unwrap().is_some();
@@ -281,6 +300,9 @@ impl AutowareDetector {
 }
 
 /// Diagnostic information about Autoware detection
+///
+/// NOTE: Diagnostic struct kept for monitoring and debugging purposes
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DetectionDiagnostics {
     pub state: AutowareState,

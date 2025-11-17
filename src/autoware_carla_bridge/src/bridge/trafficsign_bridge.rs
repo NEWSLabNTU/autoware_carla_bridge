@@ -1,3 +1,10 @@
+//! Traffic sign bridge
+//!
+//! This module will handle traffic sign data synchronization between CARLA and Autoware.
+//!
+//! Currently unused but kept for future phases.
+#![allow(dead_code)]
+
 use carla::client::TrafficSign;
 
 use super::actor_bridge::ActorBridge;

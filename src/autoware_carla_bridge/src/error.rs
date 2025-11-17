@@ -10,7 +10,9 @@ pub enum BridgeError {
     #[allow(dead_code)]
     Communication(&'static str),
 
+    /// Error variant for sensors without owners - reserved for future error handling
     #[error("The sensor with ID {sensor_id} is ownerless")]
+    #[allow(dead_code)]
     OwnerlessSensor { sensor_id: u32 },
 
     #[error("The issue is from Carla: {0}")]
