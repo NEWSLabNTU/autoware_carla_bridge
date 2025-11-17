@@ -377,7 +377,7 @@ pub fn normalize_angle(angle: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::f64::consts::FRAC_PI_2;
+    use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2};
 
     #[test]
     fn test_ros_to_carla_position() {
@@ -447,8 +447,8 @@ mod tests {
         // 90° yaw rotation quaternion: [0, 0, sin(45°), cos(45°)]
         assert!(q.i.abs() < 1e-10);
         assert!(q.j.abs() < 1e-10);
-        assert!((q.k - 0.70710678118).abs() < 1e-6);
-        assert!((q.w - 0.70710678118).abs() < 1e-6);
+        assert!((q.k - FRAC_1_SQRT_2).abs() < 1e-6);
+        assert!((q.w - FRAC_1_SQRT_2).abs() < 1e-6);
     }
 
     #[test]
@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn test_quaternion_to_euler_90deg_yaw() {
-        let q = Quaternion::new(0.70710678118, 0.0, 0.0, 0.70710678118);
+        let q = Quaternion::new(FRAC_1_SQRT_2, 0.0, 0.0, FRAC_1_SQRT_2);
         let (roll, pitch, yaw) = quaternion_to_euler(&q);
         assert!(roll.abs() < 1e-10);
         assert!(pitch.abs() < 1e-10);

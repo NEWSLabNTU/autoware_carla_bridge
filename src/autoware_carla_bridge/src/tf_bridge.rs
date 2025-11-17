@@ -299,8 +299,6 @@ impl TFBuffer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_identity_transform() {
         // Create a mock TFBuffer without actual ROS node

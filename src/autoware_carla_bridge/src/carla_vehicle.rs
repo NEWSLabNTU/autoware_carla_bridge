@@ -326,8 +326,6 @@ impl CarlaVehicle {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Tests removed since they tested lifecycle state management
     // which is no longer part of CarlaVehicle
 }
