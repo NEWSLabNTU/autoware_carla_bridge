@@ -6,9 +6,46 @@
 # The carla-rust build system uses this to select appropriate bindings
 carla_version := env_var_or_default('CARLA_VERSION', '0.9.16')
 
-# Default recipe - list all available recipes
-default:
-    @just --list
+# Show help message
+help:
+    @echo "Autoware-CARLA Bridge - Available Commands"
+    @echo ""
+    @echo "Build & Development:"
+    @echo "  just build              Build all packages"
+    @echo "  just clean              Remove build artifacts"
+    @echo "  just format             Format code with rustfmt"
+    @echo "  just lint               Run format check and clippy"
+    @echo "  just test               Run tests with nextest"
+    @echo ""
+    @echo "Bridge Control:"
+    @echo "  just bridge start [port]    Start bridge (default port: 2000)"
+    @echo "  just bridge stop            Stop bridge"
+    @echo "  just bridge logs [args...]  View bridge logs"
+    @echo "  just bridge status          Check bridge status"
+    @echo ""
+    @echo "CARLA Simulator:"
+    @echo "  just carla start <version> <port>  Start CARLA (e.g., 0.9.16 2000)"
+    @echo "  just carla stop <version> <port>   Stop CARLA"
+    @echo "  just carla logs <version> <port>   View CARLA logs"
+    @echo "  just carla status <version> <port> Check CARLA status"
+    @echo ""
+    @echo "Autoware Simulator:"
+    @echo "  just autoware start         Start Autoware planning simulator"
+    @echo "  just autoware stop          Stop Autoware"
+    @echo "  just autoware logs [args...]  View Autoware logs"
+    @echo "  just autoware status        Check Autoware status"
+    @echo ""
+    @echo "Testing Environment:"
+    @echo "  just agent-setup            Setup carla_agent environment"
+    @echo "  just agent-spawn            Spawn test vehicles in CARLA"
+    @echo "  just test-env               Run complete test environment"
+    @echo ""
+    @echo "Other:"
+    @echo "  just install-deps           Install colcon plugins and dependencies"
+    @echo "  just help                   Show this help message"
+
+# Default recipe
+default: help
 
 # Install colcon plugins and dependencies
 install-deps:
@@ -24,11 +61,78 @@ build:
         --symlink-install \
         --cargo-args --profile dev-release
 
-# Launch the bridge with ros2 run
-run port:
+# Autoware-CARLA bridge management: just bridge {start|stop|logs|status} [ARGS...]
+bridge command *ARGS:
     #!/usr/bin/env bash
-    source install/setup.bash
-    ros2 run autoware_carla_bridge autoware_carla_bridge --carla-port {{port}}
+    set -e
+
+    UNIT_NAME="autoware-carla-bridge"
+
+    case "{{command}}" in
+        start)
+            PORT="${1:-2000}"
+            BRIDGE_DIR="$(pwd)"
+
+            if [ ! -f "$BRIDGE_DIR/install/setup.bash" ]; then
+                echo "Error: Bridge not built. Run 'just build' first."
+                exit 1
+            fi
+
+            # Stop any existing unit and reset failed state
+            echo "Ensuring no existing $UNIT_NAME unit..."
+            systemctl --user stop "$UNIT_NAME" 2>/dev/null || true
+            systemctl --user reset-failed "$UNIT_NAME" 2>/dev/null || true
+            sleep 0.5
+
+            echo "Starting Autoware-CARLA bridge on port $PORT..."
+
+            # Start bridge using systemd-run
+            systemd-run --user \
+                --unit="$UNIT_NAME" \
+                --working-directory="$BRIDGE_DIR" \
+                bash -c "\
+                    source install/setup.bash && \
+                    ros2 run autoware_carla_bridge autoware_carla_bridge --carla-port $PORT"
+
+            echo "Autoware-CARLA bridge started on port $PORT"
+            echo "Use 'just bridge status' to check status"
+            echo "Use 'just bridge logs' to view logs"
+            echo "Use 'just bridge stop' to stop"
+            ;;
+
+        stop)
+            if systemctl --user is-active --quiet "$UNIT_NAME"; then
+                echo "Stopping Autoware-CARLA bridge..."
+                systemctl --user stop "$UNIT_NAME"
+                echo "Bridge stopped"
+            else
+                echo "Bridge is not running"
+            fi
+            ;;
+
+        logs)
+            journalctl --user -u "$UNIT_NAME" {{ARGS}}
+            ;;
+
+        status)
+            echo "=== Autoware-CARLA Bridge Status ==="
+            systemctl --user status "$UNIT_NAME" --no-pager || true
+            echo ""
+            echo "=== Recent logs ==="
+            journalctl --user -u "$UNIT_NAME" -n 20 --no-pager
+            ;;
+
+        *)
+            echo "Usage: just bridge {start|stop|logs|status} [ARGS...]"
+            echo ""
+            echo "Commands:"
+            echo "  start [port]       Start bridge (default port: 2000)"
+            echo "  stop               Stop bridge"
+            echo "  logs [args...]     View bridge logs"
+            echo "  status             Check bridge status"
+            exit 1
+            ;;
+    esac
 
 # Clean all build artifacts
 clean:
