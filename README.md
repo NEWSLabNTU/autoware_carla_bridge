@@ -34,7 +34,7 @@ Create a symlink to your Autoware workspace:
 
 ```bash
 # Adjust the path to point to your Autoware workspace
-ln -s /path/to/your/autoware/workspace src/external/autoware
+ln -s /path/to/your/autoware/workspace third_party/autoware
 ```
 
 Verify the symlink points to a built Autoware workspace with an `install/` directory.

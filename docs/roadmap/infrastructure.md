@@ -20,7 +20,7 @@ This document covers the core infrastructure work for the autoware_carla_bridge 
 - [x] Study rclrs API and examples
 - [x] Document API differences and migration strategy
 - [x] Set up Autoware environment
-  - Symlink created: `src/external/autoware` → `/home/aeon/repos/autoware/2025.02-ws`
+  - Symlink created: `third_party/autoware` → `/home/aeon/repos/autoware/2025.02-ws`
   - Autoware workspace configured and accessible
 - [x] Review and understand all bridge types:
   - [x] `sensor_bridge.rs` (Camera, LiDAR, IMU, GNSS)
@@ -347,7 +347,7 @@ make build  # Runs all 3 stages, but only rebuilds changed packages
 
 **direnv** automatically configures:
 - ROS 2 Humble environment (`/opt/ros/humble/setup.bash`)
-- Autoware environment (`src/external/autoware/install/setup.bash`)
+- Autoware environment (`third_party/autoware/install/setup.bash`)
 - Local colcon workspace (`install/setup.bash`)
 - CARLA_VERSION environment variable
 - Additional build paths and flags
@@ -355,7 +355,7 @@ make build  # Runs all 3 stages, but only rebuilds changed packages
 **Manual activation** (if direnv not installed):
 ```bash
 source /opt/ros/humble/setup.bash
-source src/external/autoware/install/setup.bash
+source third_party/autoware/install/setup.bash
 source install/setup.bash
 export CARLA_VERSION=0.9.16  # or 0.9.14, 0.9.15
 ```

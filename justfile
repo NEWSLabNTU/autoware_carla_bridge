@@ -18,7 +18,6 @@ install-deps:
 build:
     #!/usr/bin/env bash
     set -e
-    source src/external/autoware/install/setup.bash
     export CARLA_VERSION={{carla_version}}
     colcon build \
         --base-paths src \
@@ -38,26 +37,20 @@ clean:
 # Format code with rustfmt
 format:
     #!/usr/bin/env bash
-    source /opt/ros/humble/setup.bash
     source install/setup.bash
-    cd src/autoware_carla_bridge
     cargo +nightly fmt
 
 # Run format check and clippy
 lint:
     #!/usr/bin/env bash
-    source /opt/ros/humble/setup.bash
     source install/setup.bash
-    cd src/autoware_carla_bridge
     cargo +nightly fmt --check
     cargo clippy -- -D warnings
 
 # Run tests
 test:
     #!/usr/bin/env bash
-    source /opt/ros/humble/setup.bash
     source install/setup.bash
-    cd src/autoware_carla_bridge
     cargo nextest run --no-tests pass --no-fail-fast
 
 # Setup carla_agent environment
