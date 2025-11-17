@@ -35,6 +35,13 @@ help:
     @echo "  just autoware logs [args...]  View Autoware logs"
     @echo "  just autoware status        Check Autoware status"
     @echo ""
+    @echo "Demo Environment (All-in-One):"
+    @echo "  just demo start             Start CARLA + Autoware + Bridge"
+    @echo "  just demo restart           Restart all services"
+    @echo "  just demo stop              Stop all services"
+    @echo "  just demo status            Show status of all services"
+    @echo "  just demo logs [args...]    View logs from all services"
+    @echo ""
     @echo "Testing Environment:"
     @echo "  just agent-setup            Setup carla_agent environment"
     @echo "  just agent-spawn            Spawn test vehicles in CARLA"
@@ -382,6 +389,243 @@ autoware command *ARGS:
             echo "  stop               Stop Autoware planning simulator"
             echo "  logs [args...]     View Autoware logs"
             echo "  status             Check Autoware status"
+            exit 1
+            ;;
+    esac
+
+# Demo environment management: just demo {start|restart|stop|status|logs} [ARGS...]
+demo command *ARGS:
+    #!/usr/bin/env bash
+    set -e
+
+    # Default configuration
+    CARLA_VERSION="${CARLA_VERSION:-0.9.16}"
+    CARLA_PORT="${CARLA_PORT:-2000}"
+    BRIDGE_PORT="${BRIDGE_PORT:-2000}"
+
+    # Unit names
+    CARLA_UNIT="carla-run-$CARLA_VERSION-$CARLA_PORT"
+    AUTOWARE_UNIT="autoware-planning-simulator"
+    BRIDGE_UNIT="autoware-carla-bridge"
+
+    case "{{command}}" in
+        start)
+            echo "=== Starting Demo Environment ==="
+            echo "CARLA Version: $CARLA_VERSION, Port: $CARLA_PORT"
+            echo ""
+
+            # Check if DISPLAY is set for CARLA
+            if [ -z "$DISPLAY" ]; then
+                echo "Error: DISPLAY environment variable is not set"
+                echo "Please set DISPLAY (e.g., export DISPLAY=:1)"
+                exit 1
+            fi
+
+            # 1. Start CARLA
+            echo "Step 1/3: Starting CARLA simulator..."
+
+            CARLA_DIR="$HOME/repos/autoware_carla_bridge/scripts/simulators/startup/carla-$CARLA_VERSION"
+            if [ ! -d "$CARLA_DIR" ]; then
+                echo "Error: CARLA directory not found: $CARLA_DIR"
+                echo "Available versions: 0.9.14, 0.9.15, 0.9.16"
+                exit 1
+            fi
+
+            # Stop any existing CARLA unit and reset failed state
+            echo "Ensuring no existing $CARLA_UNIT unit..."
+            systemctl --user stop "$CARLA_UNIT" 2>/dev/null || true
+            systemctl --user reset-failed "$CARLA_UNIT" 2>/dev/null || true
+            sleep 0.5
+
+            # Start CARLA using systemd-run
+            systemd-run --user \
+                --unit="$CARLA_UNIT" \
+                --working-directory="$CARLA_DIR" \
+                --setenv=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json \
+                --setenv=DISPLAY="$DISPLAY" \
+                --setenv=CARLA_PORT="$CARLA_PORT" \
+                bash -c "./CarlaUE4.sh -quality-level=Low -carla-rpc-port=$CARLA_PORT"
+
+            echo "CARLA $CARLA_VERSION started on port $CARLA_PORT"
+            echo ""
+
+            # Wait for CARLA to be ready
+            echo "Waiting for CARLA to be ready..."
+            CARLA_READY=false
+            for i in {1..60}; do
+                if timeout 3 python3 -c "import carla; client = carla.Client('127.0.0.1', $CARLA_PORT); client.set_timeout(2.0); client.get_world()" 2>/dev/null; then
+                    echo "✓ CARLA is ready (${i}s elapsed)"
+                    CARLA_READY=true
+                    break
+                fi
+                sleep 1
+            done
+
+            if [ "$CARLA_READY" = false ]; then
+                echo "✗ CARLA failed to become ready after 60 seconds"
+                exit 1
+            fi
+            echo ""
+
+            # 2. Start Autoware
+            echo "Step 2/3: Starting Autoware planning simulator..."
+
+            AUTOWARE_DIR="$(pwd)/third_party/autoware"
+            if [ ! -d "$AUTOWARE_DIR" ]; then
+                echo "Error: Autoware directory not found: $AUTOWARE_DIR"
+                exit 1
+            fi
+
+            # Stop any existing Autoware unit and reset failed state
+            systemctl --user stop "$AUTOWARE_UNIT" 2>/dev/null || true
+            systemctl --user reset-failed "$AUTOWARE_UNIT" 2>/dev/null || true
+            sleep 0.5
+
+            # Start Autoware using systemd-run
+            systemd-run --user \
+                --unit="$AUTOWARE_UNIT" \
+                --working-directory="$AUTOWARE_DIR" \
+                bash -c '\
+                    source install/setup.sh && \
+                    play_launch launch \
+                        autoware_launch planning_simulator.launch.xml \
+                        map_path:=$HOME/autoware_map/sample-map-planning \
+                        vehicle_model:=sample_vehicle \
+                        sensor_model:=sample_sensor_kit'
+
+            echo "Autoware planning simulator started"
+            echo ""
+
+            # Wait for Autoware to be ready
+            echo "Waiting for Autoware to initialize (10 seconds)..."
+            sleep 10
+            echo ""
+
+            # 3. Start Bridge
+            echo "Step 3/3: Starting Autoware-CARLA bridge..."
+
+            BRIDGE_DIR="$(pwd)"
+            if [ ! -f "$BRIDGE_DIR/install/setup.bash" ]; then
+                echo "Error: Bridge not built. Run 'just build' first."
+                exit 1
+            fi
+
+            # Stop any existing bridge unit and reset failed state
+            systemctl --user stop "$BRIDGE_UNIT" 2>/dev/null || true
+            systemctl --user reset-failed "$BRIDGE_UNIT" 2>/dev/null || true
+            sleep 0.5
+
+            # Start bridge using systemd-run
+            systemd-run --user \
+                --unit="$BRIDGE_UNIT" \
+                --working-directory="$BRIDGE_DIR" \
+                bash -c "\
+                    source install/setup.bash && \
+                    ros2 run autoware_carla_bridge autoware_carla_bridge --carla-port $BRIDGE_PORT"
+
+            echo "Autoware-CARLA bridge started on port $BRIDGE_PORT"
+            echo ""
+
+            echo "=== Demo Environment Started Successfully ==="
+            echo ""
+            echo "All services are now running:"
+            echo "  - CARLA:    just carla status $CARLA_VERSION $CARLA_PORT"
+            echo "  - Autoware: just autoware status"
+            echo "  - Bridge:   just bridge status"
+            echo ""
+            echo "Use 'just demo status' to check all services"
+            echo "Use 'just demo logs' to view all logs"
+            echo "Use 'just demo stop' to stop all services"
+            ;;
+
+        restart)
+            echo "=== Restarting Demo Environment ==="
+            just demo stop
+            sleep 2
+            just demo start
+            ;;
+
+        stop)
+            echo "=== Stopping Demo Environment ==="
+            echo ""
+
+            # Stop in reverse order
+            echo "Step 1/3: Stopping bridge..."
+            if systemctl --user is-active --quiet "$BRIDGE_UNIT"; then
+                systemctl --user stop "$BRIDGE_UNIT"
+                echo "Bridge stopped"
+            else
+                echo "Bridge is not running"
+            fi
+            echo ""
+
+            echo "Step 2/3: Stopping Autoware..."
+            if systemctl --user is-active --quiet "$AUTOWARE_UNIT"; then
+                systemctl --user stop "$AUTOWARE_UNIT"
+                echo "Autoware stopped"
+            else
+                echo "Autoware is not running"
+            fi
+            echo ""
+
+            echo "Step 3/3: Stopping CARLA..."
+            if systemctl --user is-active --quiet "$CARLA_UNIT"; then
+                systemctl --user stop "$CARLA_UNIT"
+                echo "CARLA stopped"
+            else
+                echo "CARLA is not running"
+            fi
+            echo ""
+
+            echo "=== Demo Environment Stopped ==="
+            ;;
+
+        status)
+            echo "=== Demo Environment Status ==="
+            echo ""
+            echo "--- CARLA Simulator ---"
+            systemctl --user status "$CARLA_UNIT" --no-pager || echo "CARLA is not running"
+            echo ""
+            echo "--- Autoware Planning Simulator ---"
+            systemctl --user status "$AUTOWARE_UNIT" --no-pager || echo "Autoware is not running"
+            echo ""
+            echo "--- Autoware-CARLA Bridge ---"
+            systemctl --user status "$BRIDGE_UNIT" --no-pager || echo "Bridge is not running"
+            ;;
+
+        logs)
+            echo "=== Demo Environment Logs ==="
+            echo ""
+            echo "=== CARLA Logs (last 10 lines) ==="
+            journalctl --user -u "$CARLA_UNIT" -n 10 --no-pager {{ARGS}} || echo "No CARLA logs available"
+            echo ""
+            echo "=== Autoware Logs (last 10 lines) ==="
+            journalctl --user -u "$AUTOWARE_UNIT" -n 10 --no-pager {{ARGS}} || echo "No Autoware logs available"
+            echo ""
+            echo "=== Bridge Logs (last 10 lines) ==="
+            journalctl --user -u "$BRIDGE_UNIT" -n 10 --no-pager {{ARGS}} || echo "No Bridge logs available"
+            echo ""
+            echo "To view full logs for a specific service:"
+            echo "  just carla logs $CARLA_VERSION $CARLA_PORT [args...]"
+            echo "  just autoware logs [args...]"
+            echo "  just bridge logs [args...]"
+            ;;
+
+        *)
+            echo "Usage: just demo {start|restart|stop|status|logs} [ARGS...]"
+            echo ""
+            echo "Commands:"
+            echo "  start              Start CARLA + Autoware + Bridge"
+            echo "  restart            Restart all services"
+            echo "  stop               Stop all services"
+            echo "  status             Show status of all services"
+            echo "  logs [args...]     View logs from all services"
+            echo ""
+            echo "Environment variables:"
+            echo "  CARLA_VERSION      CARLA version (default: 0.9.16)"
+            echo "  CARLA_PORT         CARLA port (default: 2000)"
+            echo "  BRIDGE_PORT        Bridge port (default: 2000)"
+            echo "  DISPLAY            X11 display for CARLA (required)"
             exit 1
             ;;
     esac
