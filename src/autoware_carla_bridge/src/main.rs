@@ -113,7 +113,7 @@ struct Opts {
     pub autoware_timeout: u64,
 
     /// Timeout in seconds to wait for initial pose from RViz (0 = wait forever)
-    #[clap(long, default_value_t = 60)]
+    #[clap(long, default_value_t = 0)]
     pub pose_timeout: u64,
 
     /// Path to CARLA sensor configuration file (YAML)
