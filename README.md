@@ -40,7 +40,8 @@ cd autoware_carla_bridge
 git submodule update --init --recursive
 
 # 2. Link your Autoware workspace
-ln -s /path/to/autoware/workspace third_party/autoware
+mkdir -p third_party/autoware
+ln -s /path/to/autoware/workspace third_party/autoware/autoware_repo
 
 # 3. Configure CARLA symlinks (for just commands)
 cd third_party/carla
@@ -53,7 +54,7 @@ just install-deps
 just build
 ```
 
-The run scripts (`run-0.9.*.sh`) are already provided in `third_party/carla/`.
+**Run scripts**: CARLA run scripts (`run-0.9.*.sh`) are provided in `third_party/carla/`. Autoware run script (`run-planning-simulation.sh`) is provided in `third_party/autoware/`.
 
 ## Running
 
@@ -98,7 +99,7 @@ just bridge logs
 
 | Issue               | Solution                                              |
 |---------------------|-------------------------------------------------------|
-| Can't find Autoware | Check `ls -la third_party/autoware`                   |
+| Can't find Autoware | Check `ls -la third_party/autoware/autoware_repo`     |
 | CARLA run script not found | Configure symlinks: `ls -la third_party/carla/` |
 | CARLA timeout       | Verify CARLA running: `just carla status 0.9.16 2000` |
 | Build fails         | Run `just clean && just build`                        |

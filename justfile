@@ -324,10 +324,11 @@ autoware command *ARGS:
 
     case "{{command}}" in
         start)
-            AUTOWARE_DIR="$(pwd)/third_party/autoware"
+            RUN_SCRIPT="$(pwd)/third_party/autoware/run-planning-simulation.sh"
 
-            if [ ! -d "$AUTOWARE_DIR" ]; then
-                echo "Error: Autoware directory not found: $AUTOWARE_DIR"
+            if [ ! -f "$RUN_SCRIPT" ]; then
+                echo "Error: Autoware run script not found: $RUN_SCRIPT"
+                echo "Please configure third_party/autoware/run-planning-simulation.sh"
                 exit 1
             fi
 
@@ -339,17 +340,10 @@ autoware command *ARGS:
 
             echo "Starting Autoware planning simulator..."
 
-            # Start Autoware using systemd-run
+            # Start Autoware using systemd-run with the run script
             systemd-run --user \
                 --unit="$UNIT_NAME" \
-                --working-directory="$AUTOWARE_DIR" \
-                bash -c '\
-                    source install/setup.sh && \
-                    play_launch launch \
-                        autoware_launch planning_simulator.launch.xml \
-                        map_path:=$HOME/autoware_map/sample-map-planning \
-                        vehicle_model:=sample_vehicle \
-                        sensor_model:=sample_sensor_kit'
+                bash "$RUN_SCRIPT"
 
             echo "Autoware planning simulator started"
             echo "Use 'just autoware status' to check status"
@@ -468,9 +462,10 @@ demo command *ARGS:
             # 2. Start Autoware
             echo "Step 2/3: Starting Autoware planning simulator..."
 
-            AUTOWARE_DIR="$(pwd)/third_party/autoware"
-            if [ ! -d "$AUTOWARE_DIR" ]; then
-                echo "Error: Autoware directory not found: $AUTOWARE_DIR"
+            AUTOWARE_SCRIPT="$(pwd)/third_party/autoware/run-planning-simulation.sh"
+            if [ ! -f "$AUTOWARE_SCRIPT" ]; then
+                echo "Error: Autoware run script not found: $AUTOWARE_SCRIPT"
+                echo "Please configure third_party/autoware/run-planning-simulation.sh"
                 exit 1
             fi
 
@@ -479,17 +474,10 @@ demo command *ARGS:
             systemctl --user reset-failed "$AUTOWARE_UNIT" 2>/dev/null || true
             sleep 0.5
 
-            # Start Autoware using systemd-run
+            # Start Autoware using systemd-run with the run script
             systemd-run --user \
                 --unit="$AUTOWARE_UNIT" \
-                --working-directory="$AUTOWARE_DIR" \
-                bash -c '\
-                    source install/setup.sh && \
-                    play_launch launch \
-                        autoware_launch planning_simulator.launch.xml \
-                        map_path:=$HOME/autoware_map/sample-map-planning \
-                        vehicle_model:=sample_vehicle \
-                        sensor_model:=sample_sensor_kit'
+                bash "$AUTOWARE_SCRIPT"
 
             echo "Autoware planning simulator started"
             echo ""
@@ -592,21 +580,15 @@ demo command *ARGS:
             ;;
 
         logs)
-            echo "=== Demo Environment Logs ==="
+            echo "=== Demo Environment Logs (all services) ==="
+            echo "Services: CARLA, Autoware, Bridge"
+            echo "Press Ctrl-C to exit (if following logs with -f)"
             echo ""
-            echo "=== CARLA Logs (last 10 lines) ==="
-            journalctl --user -u "$CARLA_UNIT" -n 10 --no-pager {{ARGS}} || echo "No CARLA logs available"
-            echo ""
-            echo "=== Autoware Logs (last 10 lines) ==="
-            journalctl --user -u "$AUTOWARE_UNIT" -n 10 --no-pager {{ARGS}} || echo "No Autoware logs available"
-            echo ""
-            echo "=== Bridge Logs (last 10 lines) ==="
-            journalctl --user -u "$BRIDGE_UNIT" -n 10 --no-pager {{ARGS}} || echo "No Bridge logs available"
-            echo ""
-            echo "To view full logs for a specific service:"
-            echo "  just carla logs $CARLA_VERSION $CARLA_PORT [args...]"
-            echo "  just autoware logs [args...]"
-            echo "  just bridge logs [args...]"
+            journalctl --user \
+                -u "$CARLA_UNIT" \
+                -u "$AUTOWARE_UNIT" \
+                -u "$BRIDGE_UNIT" \
+                {{ARGS}}
             ;;
 
         *)
@@ -617,7 +599,12 @@ demo command *ARGS:
             echo "  restart            Restart all services"
             echo "  stop               Stop all services"
             echo "  status             Show status of all services"
-            echo "  logs [args...]     View logs from all services"
+            echo "  logs [args...]     View logs from all services (interleaved)"
+            echo ""
+            echo "Examples:"
+            echo "  just demo logs -n 50        Show last 50 lines"
+            echo "  just demo logs -f           Follow logs in real-time"
+            echo "  just demo logs --since=1h   Show logs from last hour"
             echo ""
             echo "Environment variables:"
             echo "  CARLA_VERSION      CARLA version (default: 0.9.16)"
