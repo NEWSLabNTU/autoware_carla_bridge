@@ -42,13 +42,8 @@ help:
     @echo "  just demo status            Show status of all services"
     @echo "  just demo logs [args...]    View logs from all services"
     @echo ""
-    @echo "Testing Environment:"
-    @echo "  just agent-setup            Setup carla_agent environment"
-    @echo "  just agent-spawn            Spawn test vehicles in CARLA"
-    @echo "  just test-env               Run complete test environment"
-    @echo ""
     @echo "Other:"
-    @echo "  just install-deps           Install colcon plugins and dependencies"
+    @echo "  just install-deps           Install dependencies and download maps"
     @echo "  just help                   Show this help message"
 
 # Default recipe
@@ -57,6 +52,7 @@ default: help
 # Install colcon plugins and dependencies
 install-deps:
     ./scripts/install_deps.sh
+    ./scripts/download_carla_maps_for_autoware.sh
 
 # Build autoware_carla_bridge package (colcon-cargo-ros2 handles everything)
 build:
@@ -189,18 +185,6 @@ test:
     ln -sf ../build/ros2_cargo_config.toml .cargo/config.toml
 
     cargo nextest run --no-tests pass --no-fail-fast
-
-# Setup carla_agent environment
-agent-setup:
-    cd carla_agent && uv sync
-
-# Spawn test vehicles (requires CARLA running)
-agent-spawn:
-    cd carla_agent && uv run python simple_spawn.py
-
-# Run complete test environment (CARLA + agents + bridge)
-test-env:
-    ./scripts/run_test_env.sh
 
 # CARLA simulator management: just carla {start|stop|logs|status} [ARGS...]
 carla command *ARGS:
@@ -414,7 +398,7 @@ demo command *ARGS:
             fi
 
             # 1. Start CARLA
-            echo "Step 1/3: Starting CARLA simulator..."
+            echo "Step 1/4: Starting CARLA simulator..."
 
             # Check if run script exists
             RUN_SCRIPT="$(pwd)/third_party/carla/run-$CARLA_VERSION.sh"
@@ -459,8 +443,14 @@ demo command *ARGS:
             fi
             echo ""
 
-            # 2. Start Autoware
-            echo "Step 2/3: Starting Autoware planning simulator..."
+            # 2. Configure CARLA
+            echo "Step 2/4: Configuring CARLA (Town01, synchronous mode)..."
+            python3 "$(pwd)/scripts/setup_carla.py" --port $CARLA_PORT --map Town01 --sync --timeout 60
+            echo "✓ CARLA configured successfully"
+            echo ""
+
+            # 3. Start Autoware
+            echo "Step 3/4: Starting Autoware planning simulator..."
 
             AUTOWARE_SCRIPT="$(pwd)/third_party/autoware/run-planning-simulation.sh"
             if [ ! -f "$AUTOWARE_SCRIPT" ]; then
@@ -487,8 +477,8 @@ demo command *ARGS:
             sleep 10
             echo ""
 
-            # 3. Start Bridge
-            echo "Step 3/3: Starting Autoware-CARLA bridge..."
+            # 4. Start Bridge
+            echo "Step 4/4: Starting Autoware-CARLA bridge..."
 
             BRIDGE_DIR="$(pwd)"
             if [ ! -f "$BRIDGE_DIR/install/setup.bash" ]; then
