@@ -45,6 +45,54 @@ No manual staging or configuration required - builds like any ROS 2 package.
 
 ---
 
+## Environment Setup
+
+**CRITICAL**: Always source `.envrc` before working on this project.
+
+The `.envrc` file sets up the required environment:
+- ROS 2 Humble
+- Autoware workspace (provides Autoware message packages)
+- Local install directory
+
+### Using direnv (Recommended)
+
+```bash
+# Install direnv if not already installed
+sudo apt install direnv
+
+# Add to ~/.bashrc
+eval "$(direnv hook bash)"
+
+# Allow .envrc in this directory (one-time)
+cd /path/to/autoware_carla_bridge
+direnv allow
+```
+
+Environment is automatically sourced when entering the directory.
+
+### Manual Sourcing
+
+If not using direnv, source manually each session:
+
+```bash
+source /opt/ros/humble/setup.sh
+source third_party/autoware/autoware_repo/install/setup.sh
+source install/setup.sh  # After first build
+```
+
+### Verification
+
+Check that Autoware packages are available:
+
+```bash
+# Should list Autoware message packages
+colcon list | grep autoware_vehicle_msgs
+```
+
+**Note for Claude Code**: When starting a new session, always verify the environment is properly sourced. Build failures with "package not found" errors typically indicate missing environment setup.
+
+---
+
 ## Repository Structure
 
 ```
