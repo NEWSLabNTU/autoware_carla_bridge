@@ -93,10 +93,27 @@ just bridge status        # Check status
 
 **Demo (All-in-One)**:
 ```bash
-just demo start    # Start CARLA + Autoware + Bridge
+just demo start    # Start CARLA + Autoware + Bridge (+ autonomous driving if poses.json exists)
 just demo stop     # Stop all services
 just demo status   # Check all services
 just demo logs     # View all logs
+```
+
+The demo workflow:
+1. **Phase 1**: Starts CARLA and Autoware in parallel using GNU Parallel
+2. **Phase 2**: Starts bridge after both are ready (5s initialization wait)
+3. **Phase 3**: Runs `drive_in_autoware.py` automatically if `scripts/poses.json` exists
+
+**Autonomous Driving Scripts**:
+```bash
+# Capture poses from RViz (run once)
+./scripts/read_poses.py
+
+# Run autonomous driving (reusable in same Autoware session)
+./scripts/drive_in_autoware.py
+
+# Or use the all-in-one demo
+just demo start    # Runs autonomous driving automatically if poses.json exists
 ```
 
 **Environment Variables**: The justfile automatically passes `RMW_IMPLEMENTATION`, `ROS_DOMAIN_ID`, and `ROS_LOCALHOST_ONLY` to Autoware if set.
@@ -231,6 +248,10 @@ colcon list | grep autoware_vehicle_msgs
 - Route planning requires poses on **connected lanes** in lanelet2 map
 - Use RViz "2D Pose Estimate" and "2D Goal Pose" for guaranteed valid poses
 - Service calls may fail if Autoware not fully initialized (wait 10-15s after launch)
+- **Timing for automated workflows**:
+  - 15s wait after localization initialization (vehicle spawn + diagnostics stabilization)
+  - 10s wait after route is set (planning/control pipeline activation)
+  - These waits are critical for autonomous mode engagement
 
 ### CARLA Integration
 - Sensor callbacks run in separate threads
