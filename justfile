@@ -459,122 +459,122 @@ demo command *ARGS:
                 exit 1
             fi
 
-            # 1. Start CARLA
-            echo "Step 1/4: Starting CARLA simulator..."
+            # Check if poses.json exists for autonomous driving
+            POSES_FILE="$(pwd)/scripts/poses.json"
+            if [ ! -f "$POSES_FILE" ]; then
+                echo "Warning: poses.json not found at $POSES_FILE"
+                echo "Please run './scripts/read_poses.py' after starting Autoware to capture poses"
+                echo ""
+            fi
 
-            # Check if run script exists
-            RUN_SCRIPT="$(pwd)/third_party/carla/run-$CARLA_VERSION.sh"
-            if [ ! -f "$RUN_SCRIPT" ]; then
-                echo "Error: CARLA run script not found: $RUN_SCRIPT"
-                echo "Available versions: 0.9.14, 0.9.15, 0.9.16"
-                echo "Please configure symlinks in third_party/carla/"
+            # Check if GNU Parallel is available
+            if ! command -v parallel &> /dev/null; then
+                echo "Error: GNU Parallel is not installed"
+                echo "Please install it: sudo apt install parallel"
                 exit 1
             fi
 
-            # Stop any existing CARLA unit and reset failed state
-            echo "Ensuring no existing $CARLA_UNIT unit..."
-            systemctl --user stop "$CARLA_UNIT" 2>/dev/null || true
-            systemctl --user reset-failed "$CARLA_UNIT" 2>/dev/null || true
-            sleep 0.5
-
-            # Start CARLA using systemd-run with the run script
-            systemd-run --user \
-                --unit="$CARLA_UNIT" \
-                --setenv=DISPLAY="$DISPLAY" \
-                --setenv=CARLA_PORT="$CARLA_PORT" \
-                bash "$RUN_SCRIPT"
-
-            echo "CARLA $CARLA_VERSION started on port $CARLA_PORT"
+            echo "=== Phase 1: Starting CARLA and Autoware in Parallel ==="
             echo ""
 
-            # Wait for CARLA to be ready
-            echo "Waiting for CARLA to be ready..."
-            CARLA_READY=false
-            for i in {1..60}; do
-                if timeout 3 python3 -c "import carla; client = carla.Client('127.0.0.1', $CARLA_PORT); client.set_timeout(2.0); client.get_world()" 2>/dev/null; then
-                    echo "✓ CARLA is ready (${i}s elapsed)"
-                    CARLA_READY=true
-                    break
-                fi
-                sleep 1
-            done
+            # Define function for starting CARLA
+            start_carla() {
+                local CARLA_VERSION=$1
+                local CARLA_PORT=$2
 
-            if [ "$CARLA_READY" = false ]; then
-                echo "✗ CARLA failed to become ready after 60 seconds"
-                exit 1
-            fi
-            echo ""
+                echo "[CARLA] Starting CARLA $CARLA_VERSION on port $CARLA_PORT..."
+                just carla start "$CARLA_VERSION" "$CARLA_PORT" > /tmp/demo-carla-start.log 2>&1
 
-            # 2. Configure CARLA
-            echo "Step 2/4: Configuring CARLA (Town01, synchronous mode)..."
-            python3 "$(pwd)/scripts/setup_carla.py" --port $CARLA_PORT --map Town01 --sync --timeout 60
-            echo "✓ CARLA configured successfully"
-            echo ""
+                # Wait for CARLA to be ready
+                echo "[CARLA] Waiting for CARLA to be ready..."
+                for i in {1..60}; do
+                    if timeout 3 python3 -c "import carla; client = carla.Client('127.0.0.1', $CARLA_PORT); client.set_timeout(2.0); client.get_world()" 2>/dev/null; then
+                        echo "[CARLA] ✓ CARLA is ready (${i}s elapsed)"
+                        break
+                    fi
+                    sleep 1
+                done
 
-            # 3. Start Autoware
-            echo "Step 3/4: Starting Autoware planning simulator..."
+                # Configure CARLA
+                echo "[CARLA] Configuring CARLA (Town01, synchronous mode)..."
+                python3 "$(pwd)/scripts/setup_carla.py" --port "$CARLA_PORT" --map Town01 --sync --timeout 60
+                echo "[CARLA] ✓ CARLA configured successfully"
+            }
+            export -f start_carla
 
-            AUTOWARE_SCRIPT="$(pwd)/third_party/autoware/run-planning-simulation.sh"
-            if [ ! -f "$AUTOWARE_SCRIPT" ]; then
-                echo "Error: Autoware run script not found: $AUTOWARE_SCRIPT"
-                echo "Please configure third_party/autoware/run-planning-simulation.sh"
-                exit 1
-            fi
+            # Define function for starting Autoware
+            start_autoware() {
+                echo "[Autoware] Starting Autoware planning simulator..."
+                just autoware start > /tmp/demo-autoware-start.log 2>&1
+                echo "[Autoware] Autoware started"
 
-            # Stop any existing Autoware unit and reset failed state
-            systemctl --user stop "$AUTOWARE_UNIT" 2>/dev/null || true
-            systemctl --user reset-failed "$AUTOWARE_UNIT" 2>/dev/null || true
-            sleep 0.5
+                # Wait for Autoware to initialize
+                echo "[Autoware] Waiting for Autoware to initialize..."
+                sleep 15
 
-            # Build setenv arguments for ROS environment variables
-            SETENV_ARGS=()
-            if [ -n "$RMW_IMPLEMENTATION" ]; then
-                SETENV_ARGS+=(--setenv=RMW_IMPLEMENTATION="$RMW_IMPLEMENTATION")
-            fi
-            if [ -n "$ROS_DOMAIN_ID" ]; then
-                SETENV_ARGS+=(--setenv=ROS_DOMAIN_ID="$ROS_DOMAIN_ID")
-            fi
-            if [ -n "$ROS_LOCALHOST_ONLY" ]; then
-                SETENV_ARGS+=(--setenv=ROS_LOCALHOST_ONLY="$ROS_LOCALHOST_ONLY")
-            fi
+                # Check if Autoware services are available
+                echo "[Autoware] Checking Autoware services..."
+                for i in {1..10}; do
+                    if timeout 3 ros2 service list 2>/dev/null | grep -q "/api/localization/initialize"; then
+                        echo "[Autoware] ✓ Autoware services are ready"
+                        break
+                    fi
+                    sleep 1
+                done
+            }
+            export -f start_autoware
 
-            # Start Autoware using systemd-run with the run script
-            systemd-run --user \
-                --unit="$AUTOWARE_UNIT" \
-                "${SETENV_ARGS[@]}" \
-                bash "$AUTOWARE_SCRIPT"
+            # Run both tasks in parallel using GNU Parallel
+            echo "Starting CARLA and Autoware in parallel..."
+            parallel --line-buffer --halt now,fail=1 ::: \
+                "start_carla $CARLA_VERSION $CARLA_PORT" \
+                "start_autoware"
 
-            echo "Autoware planning simulator started"
-            echo ""
-
-            # Wait for Autoware to be ready
-            echo "Waiting for Autoware to initialize (10 seconds)..."
-            sleep 10
-            echo ""
-
-            # 4. Start Bridge
-            echo "Step 4/4: Starting Autoware-CARLA bridge..."
-
-            BRIDGE_DIR="$(pwd)"
-            if [ ! -f "$BRIDGE_DIR/install/setup.bash" ]; then
-                echo "Error: Bridge not built. Run 'just build' first."
+            if [ $? -ne 0 ]; then
+                echo "✗ Failed to start services. Check logs:"
+                echo "  - CARLA:    /tmp/demo-carla-start.log"
+                echo "  - Autoware: /tmp/demo-autoware-start.log"
                 exit 1
             fi
 
-            # Stop any existing bridge unit and reset failed state
-            systemctl --user stop "$BRIDGE_UNIT" 2>/dev/null || true
-            systemctl --user reset-failed "$BRIDGE_UNIT" 2>/dev/null || true
-            sleep 0.5
+            echo "✓ Both CARLA and Autoware are ready"
+            echo ""
 
-            # Start bridge using systemd-run
-            systemd-run --user \
-                --unit="$BRIDGE_UNIT" \
-                --working-directory="$BRIDGE_DIR" \
-                bash -c "\
-                    source install/setup.bash && \
-                    ros2 run autoware_carla_bridge autoware_carla_bridge --carla-port $BRIDGE_PORT"
+            # Start Bridge
+            echo "=== Phase 2: Starting Bridge ==="
+            just bridge start "$BRIDGE_PORT"
 
-            echo "Autoware-CARLA bridge started on port $BRIDGE_PORT"
+            # Wait for bridge to be ready to receive initial pose
+            # Note: Bridge won't publish vehicle status until initial pose is set
+            echo "Waiting for bridge to initialize..."
+            sleep 5
+
+            echo "✓ Bridge started and ready"
+            echo ""
+
+            # Run autonomous driving if poses exist
+            if [ -f "$POSES_FILE" ]; then
+                echo "=== Phase 3: Running Autonomous Driving ==="
+                echo ""
+
+                # Note: drive_in_autoware.py will set initial pose, which spawns the vehicle
+                # After vehicle spawn, diagnostics need time to stabilize
+                # The script has built-in waits, so no additional delay needed here
+
+                echo "Starting autonomous driving sequence..."
+                echo "(Initial pose will spawn vehicle in CARLA)"
+
+                echo ""
+                "$(pwd)/scripts/drive_in_autoware.py"
+                echo ""
+                echo "✓ Autonomous driving completed"
+            else
+                echo "=== Phase 3: Skipped (No poses.json) ==="
+                echo "To run autonomous driving:"
+                echo "  1. In RViz, set initial pose and goal pose"
+                echo "  2. Run: ./scripts/read_poses.py"
+                echo "  3. Run: ./scripts/drive_in_autoware.py"
+            fi
             echo ""
 
             echo "=== Demo Environment Started Successfully ==="
@@ -600,32 +600,17 @@ demo command *ARGS:
             echo "=== Stopping Demo Environment ==="
             echo ""
 
-            # Stop in reverse order
+            # Stop in reverse order using just commands
             echo "Step 1/3: Stopping bridge..."
-            if systemctl --user is-active --quiet "$BRIDGE_UNIT"; then
-                systemctl --user stop "$BRIDGE_UNIT"
-                echo "Bridge stopped"
-            else
-                echo "Bridge is not running"
-            fi
+            just bridge stop
             echo ""
 
             echo "Step 2/3: Stopping Autoware..."
-            if systemctl --user is-active --quiet "$AUTOWARE_UNIT"; then
-                systemctl --user stop "$AUTOWARE_UNIT"
-                echo "Autoware stopped"
-            else
-                echo "Autoware is not running"
-            fi
+            just autoware stop
             echo ""
 
             echo "Step 3/3: Stopping CARLA..."
-            if systemctl --user is-active --quiet "$CARLA_UNIT"; then
-                systemctl --user stop "$CARLA_UNIT"
-                echo "CARLA stopped"
-            else
-                echo "CARLA is not running"
-            fi
+            just carla stop "$CARLA_VERSION" "$CARLA_PORT"
             echo ""
 
             echo "=== Demo Environment Stopped ==="
@@ -676,6 +661,9 @@ demo command *ARGS:
             echo "  CARLA_PORT         CARLA port (default: 2000)"
             echo "  BRIDGE_PORT        Bridge port (default: 2000)"
             echo "  DISPLAY            X11 display for CARLA (required)"
+            echo ""
+            echo "Requirements:"
+            echo "  - GNU Parallel: sudo apt install parallel"
             exit 1
             ;;
     esac
