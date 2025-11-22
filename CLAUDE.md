@@ -8,11 +8,15 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
 
 **Status**: ✅ Phases 0-3 Complete (50%) - Core migration from Zenoh to rclrs complete with Autoware integration foundation.
 
+**New**: ✅ Autonomous driving test scripts (Python/rclpy) - Working end-to-end autonomous driving with modern Autoware APIs.
+
 ---
 
 ## Current State
 
 ### What Works
+
+**Rust Bridge (rclrs)**:
 - ✅ Native ROS 2 publishers/subscribers (no Zenoh/CDR serialization)
 - ✅ Clock publisher and utility functions
 - ✅ All 5 bridge types migrated (Sensor, Vehicle, TrafficLight, TrafficSign, OtherActor)
@@ -24,6 +28,21 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
 - ✅ Responsive shutdown (100ms Ctrl-C exit)
 - ✅ Runtime verified with live Autoware + CARLA
 
+**Autonomous Driving Scripts (Python/rclpy)**:
+- ✅ **`drive_in_autoware.py`** - Full autonomous driving workflow
+  - Uses modern Autoware 2024/2025 API services
+  - Initializes localization via `/api/localization/initialize`
+  - Sets route via `/api/routing/set_route_points`
+  - Engages autonomous mode via `/api/operation_mode/change_to_autonomous`
+  - Monitors progress until goal reached
+  - **Reusable**: Can run multiple times in single Autoware session
+- ✅ **`read_poses.py`** - Captures poses from RViz
+  - Subscribes to `/initialpose` and `/planning/mission_planning/goal`
+  - Saves to `scripts/poses.json` for autonomous driving
+- ✅ **`get_carla_spawn_points.py`** - Get valid CARLA spawn points
+  - Connects to CARLA and retrieves spawn points
+  - Suggests valid pose pairs for autonomous driving
+
 ### What's Next (Phase 4)
 - [ ] Vehicle spawning with initial pose from RViz
 - [ ] Sensor attachment with TF2 transforms
@@ -33,7 +52,9 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
 
 ---
 
-## Build System
+## Build & Run System
+
+### Build (Rust Bridge)
 
 Uses colcon-cargo-ros2 for seamless Rust + ROS 2 integration:
 
@@ -42,6 +63,43 @@ just build  # Standard colcon build
 ```
 
 No manual staging or configuration required - builds like any ROS 2 package.
+
+### Runtime Management (justfile)
+
+**Autoware Management**:
+```bash
+just autoware start     # Start Autoware planning simulator
+just autoware restart   # Restart Autoware
+just autoware stop      # Stop Autoware
+just autoware logs      # View logs
+just autoware status    # Check status
+```
+
+**CARLA Management**:
+```bash
+just carla start 0.9.16 2000   # Start CARLA (version, port)
+just carla stop 0.9.16 2000    # Stop CARLA
+just carla logs 0.9.16 2000    # View logs
+just carla status 0.9.16 2000  # Check status
+```
+
+**Bridge Management**:
+```bash
+just bridge start [port]  # Start bridge (default: 2000)
+just bridge stop          # Stop bridge
+just bridge logs          # View logs
+just bridge status        # Check status
+```
+
+**Demo (All-in-One)**:
+```bash
+just demo start    # Start CARLA + Autoware + Bridge
+just demo stop     # Stop all services
+just demo status   # Check all services
+just demo logs     # View all logs
+```
+
+**Environment Variables**: The justfile automatically passes `RMW_IMPLEMENTATION`, `ROS_DOMAIN_ID`, and `ROS_LOCALHOST_ONLY` to Autoware if set.
 
 ---
 
@@ -103,11 +161,24 @@ colcon list | grep autoware_vehicle_msgs
 │       ├── autoware@              # Symlink to Autoware workspace
 │       ├── carla-rust/            # CARLA Rust bindings
 │       └── zenoh_carla_bridge/    # Reference implementation
-├── docs/                          # Migration guides
-├── scripts/                       # Utilities
+├── docs/                          # Technical documentation
+│   ├── carla-map-acquisition-guide.md
+│   ├── sensor-configuration-strategy.md
+│   └── roadmap.md
+├── scripts/                       # Python utilities & autonomous driving
+│   ├── drive_in_autoware.py      # ⭐ Main autonomous driving script
+│   ├── read_poses.py              # Capture poses from RViz
+│   ├── get_carla_spawn_points.py # Get valid CARLA spawn points
+│   ├── setup_carla.py             # Configure CARLA
+│   ├── set_initial_pose.py        # Set initial pose
+│   ├── poses.json                 # Current poses (auto-generated)
+│   └── README.md                  # Scripts documentation
 ├── third_party/
 │   ├── autoware@                  # Symlink for just commands
 │   └── carla/                     # CARLA run scripts
+├── data/
+│   └── carla-autoware-bridge/     # Pre-converted maps (Town01-10)
+├── justfile                       # Service management commands
 └── build/, install/, log/         # Colcon artifacts
 ```
 
@@ -137,11 +208,29 @@ colcon list | grep autoware_vehicle_msgs
 
 ## Key Learnings
 
-### rclrs API
+### rclrs API (Rust)
 - Builder pattern for QoS: `"topic".sensor_data_qos()`, `"topic".reliable()`
 - Node is `Arc<NodeState>` internally (cheap clone)
 - Publishers need `Arc<Publisher>` for thread sharing
 - Automatic serialization (no CDR)
+
+### rclpy API (Python - Autonomous Driving Scripts)
+- Use `call_async()` for service calls, followed by `spin_until_future_complete()`
+- Don't instantiate service classes directly (raises `NotImplementedError`)
+- Use `ServiceClass.Request()` to create request objects
+- QoS profiles: `TRANSIENT_LOCAL` for latched topics, `VOLATILE` for streaming data
+
+### Modern Autoware API (2024/2025)
+**Service Endpoints**:
+- `/api/localization/initialize` - Initialize localization (not `/initialpose` topic)
+- `/api/routing/set_route_points` - Set route to goal
+- `/api/routing/clear_route` - Clear existing route
+- `/api/operation_mode/change_to_autonomous` - Engage autonomous mode (not `change_operation_mode`)
+
+**Important**:
+- Route planning requires poses on **connected lanes** in lanelet2 map
+- Use RViz "2D Pose Estimate" and "2D Goal Pose" for guaranteed valid poses
+- Service calls may fail if Autoware not fully initialized (wait 10-15s after launch)
 
 ### CARLA Integration
 - Sensor callbacks run in separate threads
@@ -206,21 +295,66 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 
 ---
 
+## Autonomous Driving Workflow (Python Scripts)
+
+### Quick Start
+
+1. **Start Autoware**:
+   ```bash
+   just autoware start
+   # Wait 10-15 seconds for full initialization
+   ```
+
+2. **Capture Poses in RViz**:
+   ```bash
+   # In RViz:
+   # - Click "2D Pose Estimate" → set initial position
+   # - Click "2D Goal Pose" → set goal position
+
+   # Capture poses:
+   ./scripts/read_poses.py
+   # Saves to scripts/poses.json
+   ```
+
+3. **Run Autonomous Driving**:
+   ```bash
+   ./scripts/drive_in_autoware.py
+   ```
+
+### Script Details
+
+**`drive_in_autoware.py`** performs these steps:
+1. Load poses from `poses.json`
+2. Initialize localization via `/api/localization/initialize` service
+3. Clear existing route via `/api/routing/clear_route`
+4. Set new route via `/api/routing/set_route_points`
+5. Engage autonomous mode via `/api/operation_mode/change_to_autonomous`
+6. Monitor progress (velocity, distance, route state) until goal reached
+
+**Reusability**: Can be run multiple times in a single Autoware session without restarting.
+
+**Troubleshooting**: See `scripts/README.md` for common issues and solutions.
+
+---
+
 ## Documentation
 
 **In-repo**:
+- `scripts/README.md` - **Autonomous driving scripts guide** ⭐
+- `docs/carla-map-acquisition-guide.md` - Map conversion guide
 - `docs/sensor-configuration-strategy.md` - Sensor config & gap analysis
-- `docs/carla-autoware-map-integration.md` - Map conversion guide
 - `docs/roadmap.md` - Phase breakdown
 - `README.md` - Setup & quick start
 
 **External**:
+- [Autoware Documentation](https://autowarefoundation.github.io/autoware-documentation/main/)
+- [Autoware AD API](https://autowarefoundation.github.io/autoware-documentation/main/design/autoware-interfaces/ad-api/)
 - [carla-rust](https://github.com/jerry73204/carla-rust)
 - [rclrs](https://github.com/ros2-rust/ros2_rust)
 - [CARLA Simulator](https://carla.org/)
-- [Autoware](https://autowarefoundation.github.io/autoware-documentation/)
 
 ---
 
-**Last Updated**: 2025-11-18
+**Last Updated**: 2025-11-23
 **Migration Status**: Phases 0-3 Complete (50%)
+**Autonomous Driving Scripts**: ✅ Working (Python/rclpy with modern Autoware APIs)
