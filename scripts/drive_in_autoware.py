@@ -405,6 +405,10 @@ def main():
         print("   Waiting for localization to stabilize...")
         time.sleep(5)
 
+        # Wait for vehicle to spawn and diagnostics to stabilize
+        print("   Waiting for vehicle spawn and diagnostics...")
+        time.sleep(15)
+
         # Spin a few times to get initial state
         for _ in range(10):
             rclpy.spin_once(node, timeout_sec=0.1)
@@ -433,7 +437,9 @@ def main():
         else:
             print("   ✓ Route is set and ready")
 
-        time.sleep(2)
+        # Wait for planning and control pipelines to activate
+        print("   Waiting for planning and control to initialize...")
+        time.sleep(10)
 
         # Engage autonomous mode
         print("\n5. Engaging autonomous mode...")
