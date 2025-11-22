@@ -31,6 +31,7 @@ help:
     @echo ""
     @echo "Autoware Simulator:"
     @echo "  just autoware start         Start Autoware planning simulator"
+    @echo "  just autoware restart       Restart Autoware"
     @echo "  just autoware stop          Stop Autoware"
     @echo "  just autoware logs [args...]  View Autoware logs"
     @echo "  just autoware status        Check Autoware status"
@@ -68,6 +69,7 @@ build:
 bridge command *ARGS:
     #!/usr/bin/env bash
     set -e
+    set -- {{ARGS}}
 
     UNIT_NAME="autoware-carla-bridge"
 
@@ -190,6 +192,7 @@ test:
 carla command *ARGS:
     #!/usr/bin/env bash
     set -e
+    set -- {{ARGS}}
 
     case "{{command}}" in
         start)
@@ -303,6 +306,7 @@ carla command *ARGS:
 autoware command *ARGS:
     #!/usr/bin/env bash
     set -e
+    set -- {{ARGS}}
 
     UNIT_NAME="autoware-planning-simulator"
 
@@ -324,15 +328,71 @@ autoware command *ARGS:
 
             echo "Starting Autoware planning simulator..."
 
+            # Build setenv arguments for ROS environment variables
+            SETENV_ARGS=()
+            if [ -n "$RMW_IMPLEMENTATION" ]; then
+                SETENV_ARGS+=(--setenv=RMW_IMPLEMENTATION="$RMW_IMPLEMENTATION")
+            fi
+            if [ -n "$ROS_DOMAIN_ID" ]; then
+                SETENV_ARGS+=(--setenv=ROS_DOMAIN_ID="$ROS_DOMAIN_ID")
+            fi
+            if [ -n "$ROS_LOCALHOST_ONLY" ]; then
+                SETENV_ARGS+=(--setenv=ROS_LOCALHOST_ONLY="$ROS_LOCALHOST_ONLY")
+            fi
+
             # Start Autoware using systemd-run with the run script
             systemd-run --user \
                 --unit="$UNIT_NAME" \
+                "${SETENV_ARGS[@]}" \
                 bash "$RUN_SCRIPT"
 
             echo "Autoware planning simulator started"
             echo "Use 'just autoware status' to check status"
             echo "Use 'just autoware logs' to view logs"
             echo "Use 'just autoware stop' to stop"
+            ;;
+
+        restart)
+            RUN_SCRIPT="$(pwd)/third_party/autoware/run-planning-simulation.sh"
+
+            if [ ! -f "$RUN_SCRIPT" ]; then
+                echo "Error: Autoware run script not found: $RUN_SCRIPT"
+                echo "Please configure third_party/autoware/run-planning-simulation.sh"
+                exit 1
+            fi
+
+            echo "=== Restarting Autoware Planning Simulator ==="
+
+            # Stop and cleanup
+            echo "Stopping Autoware (if running)..."
+            systemctl --user stop "$UNIT_NAME" 2>/dev/null || true
+            systemctl --user reset-failed "$UNIT_NAME" 2>/dev/null || true
+            sleep 2
+
+            # Start
+            echo "Starting Autoware planning simulator..."
+
+            # Build setenv arguments for ROS environment variables
+            SETENV_ARGS=()
+            if [ -n "$RMW_IMPLEMENTATION" ]; then
+                SETENV_ARGS+=(--setenv=RMW_IMPLEMENTATION="$RMW_IMPLEMENTATION")
+            fi
+            if [ -n "$ROS_DOMAIN_ID" ]; then
+                SETENV_ARGS+=(--setenv=ROS_DOMAIN_ID="$ROS_DOMAIN_ID")
+            fi
+            if [ -n "$ROS_LOCALHOST_ONLY" ]; then
+                SETENV_ARGS+=(--setenv=ROS_LOCALHOST_ONLY="$ROS_LOCALHOST_ONLY")
+            fi
+
+            # Start Autoware using systemd-run with the run script
+            systemd-run --user \
+                --unit="$UNIT_NAME" \
+                "${SETENV_ARGS[@]}" \
+                bash "$RUN_SCRIPT"
+
+            echo "Autoware planning simulator restarted"
+            echo "Use 'just autoware status' to check status"
+            echo "Use 'just autoware logs' to view logs"
             ;;
 
         stop)
@@ -358,10 +418,11 @@ autoware command *ARGS:
             ;;
 
         *)
-            echo "Usage: just autoware {start|stop|logs|status} [ARGS...]"
+            echo "Usage: just autoware {start|restart|stop|logs|status} [ARGS...]"
             echo ""
             echo "Commands:"
             echo "  start              Start Autoware planning simulator"
+            echo "  restart            Restart Autoware planning simulator"
             echo "  stop               Stop Autoware planning simulator"
             echo "  logs [args...]     View Autoware logs"
             echo "  status             Check Autoware status"
@@ -373,6 +434,7 @@ autoware command *ARGS:
 demo command *ARGS:
     #!/usr/bin/env bash
     set -e
+    set -- {{ARGS}}
 
     # Default configuration
     CARLA_VERSION="${CARLA_VERSION:-0.9.16}"
@@ -464,9 +526,22 @@ demo command *ARGS:
             systemctl --user reset-failed "$AUTOWARE_UNIT" 2>/dev/null || true
             sleep 0.5
 
+            # Build setenv arguments for ROS environment variables
+            SETENV_ARGS=()
+            if [ -n "$RMW_IMPLEMENTATION" ]; then
+                SETENV_ARGS+=(--setenv=RMW_IMPLEMENTATION="$RMW_IMPLEMENTATION")
+            fi
+            if [ -n "$ROS_DOMAIN_ID" ]; then
+                SETENV_ARGS+=(--setenv=ROS_DOMAIN_ID="$ROS_DOMAIN_ID")
+            fi
+            if [ -n "$ROS_LOCALHOST_ONLY" ]; then
+                SETENV_ARGS+=(--setenv=ROS_LOCALHOST_ONLY="$ROS_LOCALHOST_ONLY")
+            fi
+
             # Start Autoware using systemd-run with the run script
             systemd-run --user \
                 --unit="$AUTOWARE_UNIT" \
+                "${SETENV_ARGS[@]}" \
                 bash "$AUTOWARE_SCRIPT"
 
             echo "Autoware planning simulator started"
