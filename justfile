@@ -461,14 +461,6 @@ demo command *ARGS:
                 exit 1
             fi
 
-            # Check if poses.json exists for autonomous driving
-            POSES_FILE="$(pwd)/scripts/poses.json"
-            if [ ! -f "$POSES_FILE" ]; then
-                echo "Warning: poses.json not found at $POSES_FILE"
-                echo "Please run './scripts/read_poses.py' after starting Autoware to capture poses"
-                echo ""
-            fi
-
             # Check if GNU Parallel is available
             if ! command -v parallel &> /dev/null; then
                 echo "Error: GNU Parallel is not installed"
@@ -554,31 +546,6 @@ demo command *ARGS:
             echo "✓ Bridge started and ready"
             echo ""
 
-            # Run autonomous driving if poses exist
-            if [ -f "$POSES_FILE" ]; then
-                echo "=== Phase 3: Running Autonomous Driving ==="
-                echo ""
-
-                # Note: drive_in_autoware.py will set initial pose, which spawns the vehicle
-                # After vehicle spawn, diagnostics need time to stabilize
-                # The script has built-in waits, so no additional delay needed here
-
-                echo "Starting autonomous driving sequence..."
-                echo "(Initial pose will spawn vehicle in CARLA)"
-
-                echo ""
-                "$(pwd)/scripts/drive_in_autoware.py"
-                echo ""
-                echo "✓ Autonomous driving completed"
-            else
-                echo "=== Phase 3: Skipped (No poses.json) ==="
-                echo "To run autonomous driving:"
-                echo "  1. In RViz, set initial pose and goal pose"
-                echo "  2. Run: ./scripts/read_poses.py"
-                echo "  3. Run: ./scripts/drive_in_autoware.py"
-            fi
-            echo ""
-
             echo "=== Demo Environment Started Successfully ==="
             echo ""
             echo "All services are now running:"
@@ -586,9 +553,14 @@ demo command *ARGS:
             echo "  - Autoware: just autoware status"
             echo "  - Bridge:   just bridge status"
             echo ""
-            echo "Use 'just demo status' to check all services"
-            echo "Use 'just demo logs' to view all logs"
-            echo "Use 'just demo stop' to stop all services"
+            echo "Next steps:"
+            echo "  1. Run: just drive           # Run autonomous driving"
+            echo "  2. Watch logs: just bridge logs -f"
+            echo ""
+            echo "Management commands:"
+            echo "  - just demo status   # Check all services"
+            echo "  - just demo logs     # View all logs"
+            echo "  - just demo stop     # Stop all services"
             ;;
 
         restart)
@@ -669,3 +641,27 @@ demo command *ARGS:
             exit 1
             ;;
     esac
+
+# Run autonomous driving
+drive:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    POSES_FILE="$(pwd)/scripts/poses.json"
+
+    # Check if poses.json exists
+    if [ ! -f "$POSES_FILE" ]; then
+        echo "Error: poses.json not found at $POSES_FILE"
+        echo ""
+        echo "Please capture poses first:"
+        echo "  1. In RViz, click '2D Pose Estimate' and set initial pose"
+        echo "  2. In RViz, click '2D Goal Pose' and set goal pose"
+        echo "  3. Run: ./scripts/read_poses.py"
+        echo ""
+        exit 1
+    fi
+
+    # Run autonomous driving
+    echo "=== Running Autonomous Driving ==="
+    echo ""
+    "$(pwd)/scripts/drive_in_autoware.py"

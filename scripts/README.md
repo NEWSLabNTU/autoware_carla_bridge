@@ -16,11 +16,15 @@ Main autonomous driving script that:
 5. Monitors progress until goal is reached
 
 **Requirements:**
-- Autoware planning simulator running (`just autoware start`)
+- All services running (`just demo start`)
 - Valid `poses.json` with connected poses in the lanelet2 map
 
 **Usage:**
 ```bash
+# Recommended (with automatic validation)
+just drive
+
+# Or run directly
 ./scripts/drive_in_autoware.py
 ```
 
