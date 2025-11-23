@@ -60,6 +60,8 @@ build:
     #!/usr/bin/env bash
     set -e
     export CARLA_VERSION={{carla_version}}
+    # Source Autoware environment to make interface packages discoverable
+    source third_party/autoware/autoware_repo/install/setup.bash
     colcon build \
         --base-paths src \
         --symlink-install \
