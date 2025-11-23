@@ -24,3 +24,6 @@ log/
 
 # direnv
 .direnv/
+
+# Downloaded data (maps, etc.)
+/data/
