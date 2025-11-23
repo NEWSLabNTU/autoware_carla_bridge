@@ -232,9 +232,9 @@ fn main() -> Result<()> {
         );
     }
 
-    // === Step 5: Wait for initial pose from RViz ===
-    tracing::info!("Waiting for initial pose from RViz...");
-    tracing::info!("(Use '2D Pose Estimate' tool in RViz to set vehicle position)");
+    // === Step 5: Wait for Autoware localization to initialize ===
+    tracing::info!("Waiting for Autoware localization to initialize...");
+    tracing::info!("(Initialize via /api/localization/initialize service)");
 
     let pose_timeout = if opts.pose_timeout == 0 {
         None

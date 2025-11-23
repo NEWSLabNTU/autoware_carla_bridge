@@ -81,12 +81,25 @@ pub struct Autoware {
     #[allow(dead_code)]
     current_hazard_lights_cmd: Arc<ArcSwap<autoware_vehicle_msgs::msg::HazardLightsCommand>>,
 
-    // === Initial Pose from RViz ===
-    /// Initial pose for vehicle spawning (from /initialpose topic)
+    // === Initial Pose (Modern Autoware API) ===
+    /// Initial pose for vehicle spawning (from modern Autoware localization API)
+    /// Set from /localization/kinematic_state when initialization_state becomes 3
     initial_pose: Arc<std::sync::Mutex<Option<nalgebra::Isometry3<f32>>>>,
 
-    /// Subscription to /initialpose (kept alive)
-    _initialpose_sub: Arc<rclrs::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>>,
+    // === Localization State Monitoring ===
+    /// Localization initialization state (from /localization/initialization_state)
+    /// State values: 0=UNKNOWN, 1=UNINITIALIZED, 2=INITIALIZING, 3=INITIALIZED
+    localization_init_state: Arc<std::sync::Mutex<u16>>,
+
+    /// Current kinematic state from localization (from /localization/kinematic_state)
+    localization_kinematic_state: Arc<std::sync::Mutex<Option<nav_msgs::msg::Odometry>>>,
+
+    /// Subscription to /localization/initialization_state (kept alive)
+    _localization_init_state_sub:
+        Arc<rclrs::Subscription<autoware_adapi_v1_msgs::msg::LocalizationInitializationState>>,
+
+    /// Subscription to /localization/kinematic_state (kept alive)
+    _localization_kinematic_state_sub: Arc<rclrs::Subscription<nav_msgs::msg::Odometry>>,
 
     // === Topic Configuration (existing - kept for compatibility) ===
     // Vehicle publish topic (root namespace)
@@ -252,28 +265,58 @@ impl Autoware {
             )?,
         );
 
-        // Create initial pose subscription
+        // Create initial pose state (set via modern Autoware localization API)
         let initial_pose = Arc::new(std::sync::Mutex::new(None));
-        let initial_pose_cb = initial_pose.clone();
-        let initialpose_sub = Arc::new(
-            node.create_subscription::<geometry_msgs::msg::PoseWithCovarianceStamped, _>(
-                "/initialpose".reliable().keep_last(1),
-                move |msg: geometry_msgs::msg::PoseWithCovarianceStamped| {
-                    tracing::info!(
-                        "Initial pose received: ({:.2}, {:.2}, {:.2}) in frame '{}'",
-                        msg.pose.pose.position.x,
-                        msg.pose.pose.position.y,
-                        msg.pose.pose.position.z,
-                        msg.header.frame_id
-                    );
 
-                    // Convert ROS pose to CARLA transform
-                    let carla_isometry =
-                        crate::coordinate_conversion::ros_pose_to_carla_isometry(&msg.pose.pose);
-                    *initial_pose_cb.lock().unwrap() = Some(carla_isometry);
+        // Subscribe to Autoware localization initialization state
+        let localization_init_state = Arc::new(std::sync::Mutex::new(0u16)); // 0 = UNKNOWN
+        let localization_init_state_cb = localization_init_state.clone();
+        let initial_pose_from_localization = initial_pose.clone();
+        let localization_kinematic_state: Arc<std::sync::Mutex<Option<nav_msgs::msg::Odometry>>> = Arc::new(std::sync::Mutex::new(None));
+        let localization_kinematic_state_for_init = localization_kinematic_state.clone();
+
+        let localization_init_state_sub = Arc::new(
+            node.create_subscription::<autoware_adapi_v1_msgs::msg::LocalizationInitializationState, _>(
+                "/localization/initialization_state".reliable().keep_last(1),
+                move |msg: autoware_adapi_v1_msgs::msg::LocalizationInitializationState| {
+                    let old_state = *localization_init_state_cb.lock().unwrap();
+                    let new_state = msg.state;
+                    *localization_init_state_cb.lock().unwrap() = new_state;
+
+                    // When localization becomes INITIALIZED (state == 3), use kinematic state as initial pose
+                    if old_state != 3 && new_state == 3 {
+                        tracing::info!("Localization initialized (state changed from {} to 3)", old_state);
+
+                        // Get current kinematic state and use it as initial pose
+                        if let Some(kinematic_state) = localization_kinematic_state_for_init.lock().unwrap().as_ref() {
+                            let pose = &kinematic_state.pose.pose;
+                            tracing::info!(
+                                "Using localization kinematic state as initial pose: ({:.2}, {:.2}, {:.2})",
+                                pose.position.x,
+                                pose.position.y,
+                                pose.position.z
+                            );
+
+                            // Convert ROS pose to CARLA transform
+                            let carla_isometry = crate::coordinate_conversion::ros_pose_to_carla_isometry(pose);
+                            *initial_pose_from_localization.lock().unwrap() = Some(carla_isometry);
+                        } else {
+                            tracing::warn!("Localization initialized but no kinematic state available yet");
+                        }
+                    }
                 },
             )?,
         );
+
+        // Subscribe to kinematic state
+        let localization_kinematic_state_cb = localization_kinematic_state.clone();
+        let localization_kinematic_state_sub =
+            Arc::new(node.create_subscription::<nav_msgs::msg::Odometry, _>(
+                "/localization/kinematic_state".reliable().keep_last(1),
+                move |msg: nav_msgs::msg::Odometry| {
+                    *localization_kinematic_state_cb.lock().unwrap() = Some(msg);
+                },
+            )?);
 
         tracing::info!("Autoware coordinator initialized");
 
@@ -315,7 +358,12 @@ impl Autoware {
 
             // === Initial Pose ===
             initial_pose,
-            _initialpose_sub: initialpose_sub,
+
+            // === Localization State Monitoring ===
+            localization_init_state,
+            localization_kinematic_state,
+            _localization_init_state_sub: localization_init_state_sub,
+            _localization_kinematic_state_sub: localization_kinematic_state_sub,
 
             // === Topic Configuration ===
             // Vehicle publish topic (standard Autoware topics - no prefix for namespace flexibility)
@@ -540,7 +588,8 @@ impl Autoware {
 
     /// Check if initial pose has been received
     ///
-    /// Returns true if a pose message has been received on /initialpose.
+    /// Returns true if a pose has been received from /localization/kinematic_state
+    /// when localization state becomes INITIALIZED (3).
     ///
     /// # Returns
     /// Boolean indicating if initial pose is available
@@ -550,7 +599,9 @@ impl Autoware {
 
     /// Wait for initial pose to be received
     ///
-    /// Blocks until the `/initialpose` topic receives a message.
+    /// Blocks until initial pose is available from Autoware localization API.
+    /// The pose is set when /localization/initialization_state becomes INITIALIZED (3)
+    /// and /localization/kinematic_state is available.
     ///
     /// # Arguments
     /// * `timeout` - Optional timeout duration. None means wait forever.
@@ -563,13 +614,15 @@ impl Autoware {
         running: &std::sync::Arc<std::sync::atomic::AtomicBool>,
         executor: &mut rclrs::Executor,
     ) -> Result<()> {
-        tracing::info!("Waiting for initial pose from RViz...");
-        tracing::info!("(Use '2D Pose Estimate' tool in RViz to set vehicle position)");
+        tracing::info!("Waiting for Autoware localization to initialize...");
+        tracing::info!(
+            "(Initialize via /api/localization/initialize service)"
+        );
 
         let start = std::time::Instant::now();
 
         loop {
-            // Spin executor to process ROS callbacks (e.g., /initialpose subscription)
+            // Spin executor to process ROS callbacks (localization state subscriptions)
             executor.spin(
                 rclrs::SpinOptions::spin_once().timeout(std::time::Duration::from_millis(100)),
             );
