@@ -93,7 +93,7 @@ just bridge status        # Check status
 
 **Demo (All-in-One)**:
 ```bash
-just demo start    # Start CARLA + Autoware + Bridge (+ autonomous driving if poses.json exists)
+just demo start    # Start CARLA + Autoware + Bridge
 just demo stop     # Stop all services
 just demo status   # Check all services
 just demo logs     # View all logs
@@ -102,19 +102,26 @@ just demo logs     # View all logs
 The demo workflow:
 1. **Phase 1**: Starts CARLA and Autoware in parallel using GNU Parallel
 2. **Phase 2**: Starts bridge after both are ready (5s initialization wait)
-3. **Phase 3**: Runs `drive_in_autoware.py` automatically if `scripts/poses.json` exists
 
-**Autonomous Driving Scripts**:
+**Autonomous Driving**:
 ```bash
-# Capture poses from RViz (run once)
+# Start all services
+just demo start
+
+# Capture poses from RViz (if not already captured)
 ./scripts/read_poses.py
 
-# Run autonomous driving (reusable in same Autoware session)
-./scripts/drive_in_autoware.py
+# Run autonomous driving
+just drive
 
-# Or use the all-in-one demo
-just demo start    # Runs autonomous driving automatically if poses.json exists
+# Watch bridge logs (in another terminal)
+just bridge logs -f
+
+# Stop all services
+just demo stop
 ```
+
+The `just drive` command runs `./scripts/drive_in_autoware.py` with automatic poses.json validation.
 
 **Environment Variables**: The justfile automatically passes `RMW_IMPLEMENTATION`, `ROS_DOMAIN_ID`, and `ROS_LOCALHOST_ONLY` to Autoware if set.
 
@@ -320,13 +327,13 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 
 ### Quick Start
 
-1. **Start Autoware**:
+1. **Start all services**:
    ```bash
-   just autoware start
-   # Wait 10-15 seconds for full initialization
+   just demo start
+   # Starts CARLA + Autoware + Bridge
    ```
 
-2. **Capture Poses in RViz**:
+2. **Capture Poses in RViz** (if not already captured):
    ```bash
    # In RViz:
    # - Click "2D Pose Estimate" → set initial position
@@ -339,7 +346,17 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 
 3. **Run Autonomous Driving**:
    ```bash
-   ./scripts/drive_in_autoware.py
+   just drive
+   ```
+
+4. **Monitor** (optional, in another terminal):
+   ```bash
+   just bridge logs -f
+   ```
+
+5. **Stop all services**:
+   ```bash
+   just demo stop
    ```
 
 ### Script Details
