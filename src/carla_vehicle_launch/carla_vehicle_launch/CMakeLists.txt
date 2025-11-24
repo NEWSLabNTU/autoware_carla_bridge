@@ -1,0 +1,14 @@
+cmake_minimum_required(VERSION 3.14)
+project(carla_vehicle_launch)
+
+# Vehicle interface launch package for CARLA simulation
+# Provides minimal launch files (bridge handles control directly)
+
+find_package(ament_cmake_auto REQUIRED)
+ament_auto_find_build_dependencies()
+
+ament_auto_package(INSTALL_TO_SHARE
+  config  # raw_vehicle_cmd_converter configs (archived, not currently used)
+  data    # Actuation map CSVs (archived, not currently used)
+  launch  # Minimal vehicle_interface.launch.xml
+)

@@ -1,0 +1,266 @@
+<?xml version="1.0"?>
+<robot name="carla_sensor_kit" xmlns:xacro="http://ros.org/wiki/xacro">
+  <!--
+    CARLA Sensor Kit URDF - Bridge-Compatible Sensor Definitions
+
+    This URDF defines sensor link frames that the CARLA bridge reads to spawn and configure
+    sensors in CARLA simulation. The bridge parses this URDF from the /robot_description
+    topic and uses it to:    1. Detect which sensors to spawn in CARLA (by link name patterns)
+    2. Position sensors relative to the vehicle (from TF transforms)
+    3. Configure sensor types and parameters
+
+    Sensor Detection (from bridge urdf_parser.rs):
+    =============================================
+    The bridge classifies sensors by link name patterns:
+    - "camera", "rgb" → Camera RGB
+    - "lidar", "velodyne", "pointcloud", "laser" → LiDAR
+    - "imu", "inertial" → IMU
+    - "gnss", "gps" → GNSS
+
+    Sensor List (awsim_labs configuration):
+    ========================================
+    - 3 LiDARs: velodyne_top, velodyne_left, velodyne_right
+    - 8 Cameras: traffic_light_right/left, camera0-5
+    - 1 GNSS: gnss_link
+    - 1 IMU: tamagawa/imu_link
+
+    Physical Simulation:
+    ===================
+    Unlike real sensor kits, these definitions are metadata-only. CARLA handles:
+    - Actual sensor spawning and attachment
+    - Sensor data generation (images, point clouds, IMU, GNSS)
+    - Ray tracing and physics simulation
+
+    Customization:
+    =============
+    To modify sensor positions, edit config/sensor_kit_calibration.yaml
+    To add/remove sensors, edit this file AND update calibration.yaml
+  -->
+
+  <!-- Configuration directory for calibration files -->
+  <xacro:arg name="config_dir" default="$(find carla_sensor_kit_description)/config"/>
+
+  <xacro:macro name="sensor_kit_macro" params="parent x y z roll pitch yaw">
+    <xacro:property name="calibration" value="${xacro.load_yaml('$(arg config_dir)/sensor_kit_calibration.yaml')}"/>
+
+    <!-- Sensor kit base link - attachment point to vehicle -->
+    <joint name="sensor_kit_base_link_joint" type="fixed">
+      <origin rpy="${roll} ${pitch} ${yaw}" xyz="${x} ${y} ${z}"/>
+      <parent link="${parent}"/>
+      <child link="sensor_kit_base_link"/>
+    </joint>
+    <link name="sensor_kit_base_link"/>
+
+    <!-- ========================================================================== -->
+    <!-- LiDAR Sensors -->
+    <!-- ========================================================================== -->
+
+    <!-- Top LiDAR (VLS-128 equivalent) - Primary 360° coverage -->
+    <joint name="velodyne_top_base_link_joint" type="fixed">
+      <origin
+        xyz="${calibration['sensor_kit_base_link']['velodyne_top_base_link']['x']}
+             ${calibration['sensor_kit_base_link']['velodyne_top_base_link']['y']}
+             ${calibration['sensor_kit_base_link']['velodyne_top_base_link']['z']}"
+        rpy="${calibration['sensor_kit_base_link']['velodyne_top_base_link']['roll']}
+             ${calibration['sensor_kit_base_link']['velodyne_top_base_link']['pitch']}
+             ${calibration['sensor_kit_base_link']['velodyne_top_base_link']['yaw']}"/>
+      <parent link="sensor_kit_base_link"/>
+      <child link="velodyne_top_base_link"/>
+    </joint>
+    <link name="velodyne_top_base_link"/>
+
+    <!-- Actual sensor frame (optical frame) -->
+    <joint name="velodyne_top_joint" type="fixed">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <parent link="velodyne_top_base_link"/>
+      <child link="velodyne_top"/>
+    </joint>
+    <link name="velodyne_top"/>
+
+    <!-- Left LiDAR (VLP-16 equivalent) - Left side coverage -->
+    <joint name="velodyne_left_base_link_joint" type="fixed">
+      <origin
+        xyz="${calibration['sensor_kit_base_link']['velodyne_left_base_link']['x']}
+             ${calibration['sensor_kit_base_link']['velodyne_left_base_link']['y']}
+             ${calibration['sensor_kit_base_link']['velodyne_left_base_link']['z']}"
+        rpy="${calibration['sensor_kit_base_link']['velodyne_left_base_link']['roll']}
+             ${calibration['sensor_kit_base_link']['velodyne_left_base_link']['pitch']}
+             ${calibration['sensor_kit_base_link']['velodyne_left_base_link']['yaw']}"/>
+      <parent link="sensor_kit_base_link"/>
+      <child link="velodyne_left_base_link"/>
+    </joint>
+    <link name="velodyne_left_base_link"/>
+
+    <joint name="velodyne_left_joint" type="fixed">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <parent link="velodyne_left_base_link"/>
+      <child link="velodyne_left"/>
+    </joint>
+    <link name="velodyne_left"/>
+
+    <!-- Right LiDAR (VLP-16 equivalent) - Right side coverage -->
+    <joint name="velodyne_right_base_link_joint" type="fixed">
+      <origin
+        xyz="${calibration['sensor_kit_base_link']['velodyne_right_base_link']['x']}
+             ${calibration['sensor_kit_base_link']['velodyne_right_base_link']['y']}
+             ${calibration['sensor_kit_base_link']['velodyne_right_base_link']['z']}"
+        rpy="${calibration['sensor_kit_base_link']['velodyne_right_base_link']['roll']}
+             ${calibration['sensor_kit_base_link']['velodyne_right_base_link']['pitch']}
+             ${calibration['sensor_kit_base_link']['velodyne_right_base_link']['yaw']}"/>
+      <parent link="sensor_kit_base_link"/>
+      <child link="velodyne_right_base_link"/>
+    </joint>
+    <link name="velodyne_right_base_link"/>
+
+    <joint name="velodyne_right_joint" type="fixed">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <parent link="velodyne_right_base_link"/>
+      <child link="velodyne_right"/>
+    </joint>
+    <link name="velodyne_right"/>
+
+    <!-- ========================================================================== -->
+    <!-- Camera Sensors -->
+    <!-- ========================================================================== -->
+
+    <!-- Traffic Light Recognition Cameras -->
+    <joint name="traffic_light_right_camera_link_joint" type="fixed">
+      <origin
+        xyz="${calibration['sensor_kit_base_link']['traffic_light_right_camera/camera_link']['x']}
+             ${calibration['sensor_kit_base_link']['traffic_light_right_camera/camera_link']['y']}
+             ${calibration['sensor_kit_base_link']['traffic_light_right_camera/camera_link']['z']}"
+        rpy="${calibration['sensor_kit_base_link']['traffic_light_right_camera/camera_link']['roll']}
+             ${calibration['sensor_kit_base_link']['traffic_light_right_camera/camera_link']['pitch']}
+             ${calibration['sensor_kit_base_link']['traffic_light_right_camera/camera_link']['yaw']}"/>
+      <parent link="sensor_kit_base_link"/>
+      <child link="traffic_light_right_camera/camera_link"/>
+    </joint>
+    <link name="traffic_light_right_camera/camera_link"/>
+
+    <joint name="traffic_light_right_camera_optical_link_joint" type="fixed">
+      <origin xyz="0 0 0" rpy="-1.5707963267948966 0 -1.5707963267948966"/>
+      <parent link="traffic_light_right_camera/camera_link"/>
+      <child link="traffic_light_right_camera/camera_optical_link"/>
+    </joint>
+    <link name="traffic_light_right_camera/camera_optical_link"/>
+
+    <joint name="traffic_light_left_camera_link_joint" type="fixed">
+      <origin
+        xyz="${calibration['sensor_kit_base_link']['traffic_light_left_camera/camera_link']['x']}
+             ${calibration['sensor_kit_base_link']['traffic_light_left_camera/camera_link']['y']}
+             ${calibration['sensor_kit_base_link']['traffic_light_left_camera/camera_link']['z']}"
+        rpy="${calibration['sensor_kit_base_link']['traffic_light_left_camera/camera_link']['roll']}
+             ${calibration['sensor_kit_base_link']['traffic_light_left_camera/camera_link']['pitch']}
+             ${calibration['sensor_kit_base_link']['traffic_light_left_camera/camera_link']['yaw']}"/>
+      <parent link="sensor_kit_base_link"/>
+      <child link="traffic_light_left_camera/camera_link"/>
+    </joint>
+    <link name="traffic_light_left_camera/camera_link"/>
+
+    <joint name="traffic_light_left_camera_optical_link_joint" type="fixed">
+      <origin xyz="0 0 0" rpy="-1.5707963267948966 0 -1.5707963267948966"/>
+      <parent link="traffic_light_left_camera/camera_link"/>
+      <child link="traffic_light_left_camera/camera_optical_link"/>
+    </joint>
+    <link name="traffic_light_left_camera/camera_optical_link"/>
+
+    <!-- Surround View Cameras (camera0-5) -->
+    <xacro:macro name="surround_camera" params="name">
+      <!-- Build the calibration key name -->
+      <xacro:property name="camera_link_name" value="${name}/camera_link"/>
+      <xacro:property name="cam_calib" value="${calibration['sensor_kit_base_link'][camera_link_name]}"/>
+
+      <joint name="${name}/camera_link_joint" type="fixed">
+        <origin
+          xyz="${cam_calib['x']}
+               ${cam_calib['y']}
+               ${cam_calib['z']}"
+          rpy="${cam_calib['roll']}
+               ${cam_calib['pitch']}
+               ${cam_calib['yaw']}"/>
+        <parent link="sensor_kit_base_link"/>
+        <child link="${name}/camera_link"/>
+      </joint>
+      <link name="${name}/camera_link"/>
+
+      <joint name="${name}/camera_optical_link_joint" type="fixed">
+        <origin xyz="0 0 0" rpy="-1.5707963267948966 0 -1.5707963267948966"/>
+        <parent link="${name}/camera_link"/>
+        <child link="${name}/camera_optical_link"/>
+      </joint>
+      <link name="${name}/camera_optical_link"/>
+    </xacro:macro>
+
+    <xacro:surround_camera name="camera0"/>
+    <xacro:surround_camera name="camera1"/>
+    <xacro:surround_camera name="camera2"/>
+    <xacro:surround_camera name="camera3"/>
+    <xacro:surround_camera name="camera4"/>
+    <xacro:surround_camera name="camera5"/>
+
+    <!-- ========================================================================== -->
+    <!-- GNSS Sensor -->
+    <!-- ========================================================================== -->
+
+    <joint name="gnss_link_joint" type="fixed">
+      <origin
+        xyz="${calibration['sensor_kit_base_link']['gnss_link']['x']}
+             ${calibration['sensor_kit_base_link']['gnss_link']['y']}
+             ${calibration['sensor_kit_base_link']['gnss_link']['z']}"
+        rpy="${calibration['sensor_kit_base_link']['gnss_link']['roll']}
+             ${calibration['sensor_kit_base_link']['gnss_link']['pitch']}
+             ${calibration['sensor_kit_base_link']['gnss_link']['yaw']}"/>
+      <parent link="sensor_kit_base_link"/>
+      <child link="gnss_link"/>
+    </joint>
+    <link name="gnss_link"/>
+
+    <!-- ========================================================================== -->
+    <!-- IMU Sensor -->
+    <!-- ========================================================================== -->
+
+    <joint name="tamagawa_imu_link_joint" type="fixed">
+      <origin
+        xyz="${calibration['sensor_kit_base_link']['tamagawa/imu_link']['x']}
+             ${calibration['sensor_kit_base_link']['tamagawa/imu_link']['y']}
+             ${calibration['sensor_kit_base_link']['tamagawa/imu_link']['z']}"
+        rpy="${calibration['sensor_kit_base_link']['tamagawa/imu_link']['roll']}
+             ${calibration['sensor_kit_base_link']['tamagawa/imu_link']['pitch']}
+             ${calibration['sensor_kit_base_link']['tamagawa/imu_link']['yaw']}"/>
+      <parent link="sensor_kit_base_link"/>
+      <child link="tamagawa/imu_link"/>
+    </joint>
+    <link name="tamagawa/imu_link"/>
+
+  </xacro:macro>
+
+  <!-- ============================================================================ -->
+  <!-- Default Macro Invocation for Standalone Testing -->
+  <!-- ============================================================================ -->
+  <!--
+    When processed standalone (e.g., for testing or by robot_state_publisher),
+    this invokes the macro using command-line arguments:
+
+    Example: xacro sensor_kit.xacro parent:=base_link x:=0 y:=0 z:=0
+
+    When included by vehicle.xacro, the parent URDF typically invokes this macro
+    explicitly, but this default invocation ensures the URDF works standalone too.
+  -->
+  <xacro:arg name="parent" default="base_link"/>
+  <xacro:arg name="x" default="0.0"/>
+  <xacro:arg name="y" default="0.0"/>
+  <xacro:arg name="z" default="0.0"/>
+  <xacro:arg name="roll" default="0.0"/>
+  <xacro:arg name="pitch" default="0.0"/>
+  <xacro:arg name="yaw" default="0.0"/>
+
+  <xacro:sensor_kit_macro
+    parent="$(arg parent)"
+    x="$(arg x)"
+    y="$(arg y)"
+    z="$(arg z)"
+    roll="$(arg roll)"
+    pitch="$(arg pitch)"
+    yaw="$(arg yaw)"/>
+
+</robot>

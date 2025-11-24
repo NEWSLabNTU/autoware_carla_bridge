@@ -1,0 +1,44 @@
+/**:
+  ros__parameters:
+    # CARLA Vehicle Dimensions
+    #
+    # These parameters define the physical dimensions of the vehicle for Autoware planning,
+    # control, and perception modules. They are loaded once at startup and cached by ~30+
+    # Autoware nodes including control, planning, and perception components.
+    #
+    # Current values are defaults from awsim_labs_vehicle (Lexus-like vehicle).
+    # For CARLA-specific vehicles, these can be extracted using the CARLA extraction
+    # script (to be implemented in Phase 6).
+    #
+    # Reference: autoware_vehicle_info_utils::VehicleInfo
+
+    # Wheel dimensions [meters]
+    # Used for: dead reckoning, velocity estimation, kinematic models
+    wheel_radius: 0.383    # Radius of wheel (ground to wheel center)
+    wheel_width: 0.235     # Lateral width of tire
+
+    # Wheelbase and tread [meters]
+    # Used for: vehicle footprint, collision checking, Ackermann steering model
+    wheel_base: 2.79       # Distance between front and rear axle centers
+    wheel_tread: 1.64      # Distance between left and right wheel centers
+
+    # Vehicle overhangs [meters]
+    # Used for: vehicle bounding box, obstacle avoidance, parking
+    front_overhang: 1.0    # Distance from front axle to vehicle front edge
+    rear_overhang: 1.1     # Distance from rear axle to vehicle rear edge
+    left_overhang: 0.128   # Distance from left wheels to vehicle left edge
+    right_overhang: 0.128  # Distance from right wheels to vehicle right edge
+
+    # Total vehicle dimensions (computed from above):
+    # - Length: wheel_base + front_overhang + rear_overhang = 4.89m
+    # - Width: wheel_tread + left_overhang + right_overhang = 1.896m
+    # - Height: vehicle_height = 2.5m
+
+    # Vehicle height [meters]
+    # Used for: clearance checking, visualization
+    vehicle_height: 2.5
+
+    # Maximum steering angle [radians]
+    # Used for: control limits, path planning, minimum turning radius calculation
+    # 0.70 rad ≈ 40 degrees (tire angle, not steering wheel angle)
+    max_steer_angle: 0.70

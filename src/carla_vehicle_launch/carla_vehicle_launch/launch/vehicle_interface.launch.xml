@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+  <!--
+    CARLA Vehicle Interface Launch File
+
+    This is a minimal vehicle interface launch file for CARLA simulation.
+
+    Design Decision:
+    ================
+    For CARLA simulation, the bridge subscribes directly to /control/command/control_cmd
+    and converts ControlCommand to CARLA VehicleControl internally. This eliminates the
+    need for the raw_vehicle_cmd_converter node since:
+
+    1. CARLA has ideal actuators - no pedal mapping or calibration needed
+    2. Simple linear conversion: acceleration -> throttle/brake, steering_angle -> steer
+    3. Reduces pipeline complexity for simulation use case
+    4. Bridge implements CARLA-specific vehicle control mapping
+
+    Data Flow:
+    ==========
+    Autoware Control → /control/command/control_cmd → Bridge → CARLA VehicleControl
+
+    If actuation-level control is needed in the future (for hardware-in-the-loop testing
+    or comparison with real vehicles), the raw_vehicle_cmd_converter node can be added
+    back here to convert ControlCommand to ActuationCommand.
+
+    Alternative Configuration (not currently used):
+    ===============================================
+    <arg name="config_file" default="$(find-pkg-share carla_vehicle_launch)/config/raw_vehicle_cmd_converter/raw_vehicle_cmd_converter.param.yaml"/>
+
+    <node pkg="autoware_raw_vehicle_cmd_converter" exec="autoware_raw_vehicle_cmd_converter_node" name="raw_vehicle_cmd_converter">
+      <param from="$(var config_file)" allow_substs="true"/>
+      <remap from="~/input/control_cmd" to="/control/command/control_cmd"/>
+      <remap from="~/output/actuation_cmd" to="/control/command/actuation_cmd"/>
+    </node>
+  -->
+</launch>

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+  <!--
+    GNSS Processing Launch File
+
+    Converts GNSS data from bridge to Autoware-compatible pose messages.
+
+    Data Flow:
+    ==========
+    CARLA → Bridge → /sensing/gnss/gnss/nav_sat_fix (NavSatFix)
+                  ↓
+           autoware_gnss_poser
+                  ↓
+           /sensing/gnss/pose (Pose)
+           /sensing/gnss/pose_with_covariance (PoseWithCovariance)
+           /sensing/gnss/fixed (Bool - fix status)
+
+    Why Needed:
+    ===========
+    - Bridge publishes raw GNSS data as NavSatFix (GPS lat/lon/alt)
+    - Autoware localization needs PoseWithCovariance (local ENU coordinates)
+    - autoware_gnss_poser performs the conversion
+
+    Configuration:
+    =============
+    - Uses default gnss_poser parameters (no vehicle-specific config needed)
+    - Automatically converts WGS84 → local ENU frame
+  -->
+
+  <group>
+    <push-ros-namespace namespace="gnss"/>
+
+    <!-- GNSS Poser: NavSatFix → PoseWithCovariance converter -->
+    <node pkg="autoware_gnss_poser" exec="gnss_poser" name="gnss_poser" output="screen">
+      <!-- Input topics -->
+      <remap from="~/input/nav_sat_fix" to="gnss/nav_sat_fix"/>
+      <remap from="~/input/autoware_orientation" to="/sensing/imu/imu_data"/>
+
+      <!-- Output topics -->
+      <remap from="~/output/gnss_pose" to="pose"/>
+      <remap from="~/output/gnss_pose_cov" to="pose_with_covariance"/>
+      <remap from="~/output/gnss_fixed" to="fixed"/>
+
+      <!-- Use default parameters (no vehicle-specific config needed for CARLA) -->
+    </node>
+  </group>
+</launch>
