@@ -6,9 +6,9 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
 
 **Repository**: https://github.com/NEWSLabNTU/ros_zenoh_bridge
 
-**Status**: ✅ Phases 0-3 Complete (50%) - Core migration from Zenoh to rclrs complete with Autoware integration foundation.
+**Status**: ✅ Phases 0-3 Complete + Phase 4 Vehicle Spawning (55%) - Core migration from Zenoh to rclrs complete with modern Autoware API integration.
 
-**New**: ✅ Autonomous driving test scripts (Python/rclpy) - Working end-to-end autonomous driving with modern Autoware APIs.
+**Recent**: ✅ Modern Autoware localization API integration (2025-11-23) - Bridge now spawns vehicles automatically when localization initializes, enabling full end-to-end autonomous driving.
 
 ---
 
@@ -25,6 +25,11 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
   - URDF parsing (26 sensors from sample_sensor_kit)
   - TF2 transform buffer with multi-hop chain traversal
   - ROS ↔ CARLA coordinate conversion
+  - **Modern Autoware localization API integration**:
+    - Subscribes to `/localization/initialization_state` (monitors INITIALIZED state)
+    - Subscribes to `/localization/kinematic_state` (receives vehicle pose)
+    - Spawns vehicle when localization becomes INITIALIZED (state 3)
+    - No backward compatibility with legacy `/initialpose` topic
 - ✅ Responsive shutdown (100ms Ctrl-C exit)
 - ✅ Runtime verified with live Autoware + CARLA
 
@@ -44,9 +49,9 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
   - Suggests valid pose pairs for autonomous driving
 
 ### What's Next (Phase 4)
-- [ ] Vehicle spawning with initial pose from RViz
-- [ ] Sensor attachment with TF2 transforms
-- [ ] Vehicle cleanup on Autoware loss
+- [x] Vehicle spawning with initial pose (via modern Autoware localization API) ✅ 2025-11-23
+- [ ] Sensor attachment with TF2 transforms (partially working, needs refinement)
+- [ ] Vehicle cleanup on Autoware loss (known issue: vehicle destroyed after spawn)
 - [ ] Pose teleportation updates
 - [ ] Sensor parameter configuration
 
@@ -222,6 +227,8 @@ colcon list | grep autoware_vehicle_msgs
 - **color-eyre**: Enhanced error reporting (replaced `anyhow`)
 - **nalgebra**: Math for transforms (must match carla-rust version)
 - **roxmltree**: Lightweight URDF XML parsing
+- **autoware_adapi_v1_msgs**: Modern Autoware API message types (for localization state)
+- **nav_msgs**: Standard ROS navigation messages (for odometry/kinematic state)
 
 ### Coordinate Systems
 - Position: meters ↔ cm, Y-axis flip
@@ -237,6 +244,10 @@ colcon list | grep autoware_vehicle_msgs
 - Node is `Arc<NodeState>` internally (cheap clone)
 - Publishers need `Arc<Publisher>` for thread sharing
 - Automatic serialization (no CDR)
+- **Subscription callbacks**: Use `Arc<std::sync::Mutex<T>>` for shared state between callbacks
+  - Clone the Arc before moving into closures
+  - Example: State monitoring (localization_init_state) and data capture (kinematic_state) in separate callbacks
+  - Subscriptions must be kept alive as struct fields (e.g., `_localization_init_state_sub`)
 
 ### rclpy API (Python - Autonomous Driving Scripts)
 - Use `call_async()` for service calls, followed by `spin_until_future_complete()`
@@ -245,11 +256,25 @@ colcon list | grep autoware_vehicle_msgs
 - QoS profiles: `TRANSIENT_LOCAL` for latched topics, `VOLATILE` for streaming data
 
 ### Modern Autoware API (2024/2025)
-**Service Endpoints**:
+**Service Endpoints** (used by Python scripts):
 - `/api/localization/initialize` - Initialize localization (not `/initialpose` topic)
 - `/api/routing/set_route_points` - Set route to goal
 - `/api/routing/clear_route` - Clear existing route
 - `/api/operation_mode/change_to_autonomous` - Engage autonomous mode (not `change_operation_mode`)
+
+**Topic Endpoints** (used by Rust bridge):
+- `/localization/initialization_state` (autoware_adapi_v1_msgs/LocalizationInitializationState)
+  - State values: 0=UNKNOWN, 1=UNINITIALIZED, 2=INITIALIZING, 3=INITIALIZED
+  - Bridge monitors state changes to trigger vehicle spawning
+- `/localization/kinematic_state` (nav_msgs/Odometry)
+  - Provides current vehicle pose in map frame
+  - Bridge uses this as initial pose when state becomes INITIALIZED
+
+**Bridge Integration**:
+- Bridge subscribes to both topics on startup
+- When localization state transitions to INITIALIZED (3), bridge extracts pose from kinematic state
+- Vehicle spawns at this pose in CARLA
+- No backward compatibility with legacy `/initialpose` topic (removed as of 2025-11-23)
 
 **Important**:
 - Route planning requires poses on **connected lanes** in lanelet2 map
@@ -272,6 +297,20 @@ When using local carla-rust (`path = "..."`), match critical dependency versions
 ---
 
 ## Coding Practices
+
+### Temporary Files
+
+**Always use project's tmp/ directory for temporary files**
+
+```bash
+# Correct - use project tmp/
+$project/tmp/test_file.txt
+
+# Incorrect - don't use system /tmp/
+/tmp/test_file.txt
+```
+
+The project's `tmp/` directory is gitignored and provides better isolation for project-specific temporary files.
 
 ### Error Handling
 
@@ -393,6 +432,11 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 
 ---
 
-**Last Updated**: 2025-11-23
-**Migration Status**: Phases 0-3 Complete (50%)
-**Autonomous Driving Scripts**: ✅ Working (Python/rclpy with modern Autoware APIs)
+**Last Updated**: 2025-11-23 (Session: Modern Autoware API integration)
+**Migration Status**: Phases 0-3 Complete + Phase 4 Vehicle Spawning (55%)
+**Autonomous Driving**: ✅ End-to-end working (Python scripts + Rust bridge with modern Autoware APIs)
+**Recent Changes**:
+- ✅ Bridge now uses modern Autoware localization API exclusively
+- ✅ Removed backward compatibility with legacy `/initialpose` topic
+- ✅ Vehicle spawning triggered by localization state transitions
+- ✅ End-to-end autonomous driving test confirmed working (1.64m final distance to goal)
