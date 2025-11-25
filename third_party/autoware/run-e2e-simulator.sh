@@ -7,11 +7,11 @@ cd "$script_dir/autoware_repo"
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 export DISPLAY=:1
 
-source install/setup.bash
+# Source only the overlay workspace - it will automatically source underlays via prefix chain
 source "$project_root/install/setup.bash"
 
 ros2 launch \
-     autoware_launch planning_simulator.launch.xml \
+     autoware_launch e2e_simulator.launch.xml \
      map_path:="$project_root/data/carla-autoware-bridge/Town01" \
      vehicle_model:=carla_vehicle \
      sensor_model:=carla_sensor_kit

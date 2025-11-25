@@ -5,36 +5,31 @@
 
     This URDF defines sensor link frames that the CARLA bridge reads to spawn and configure
     sensors in CARLA simulation. The bridge parses this URDF from the /robot_description
-    topic and uses it to:    1. Detect which sensors to spawn in CARLA (by link name patterns)
-    2. Position sensors relative to the vehicle (from TF transforms)
-    3. Configure sensor types and parameters
+    topic and uses it to (1) detect which sensors to spawn in CARLA by link name patterns,
+    (2) position sensors relative to the vehicle from TF transforms, and
+    (3) configure sensor types and parameters.
 
-    Sensor Detection (from bridge urdf_parser.rs):
-    =============================================
-    The bridge classifies sensors by link name patterns:
-    - "camera", "rgb" → Camera RGB
-    - "lidar", "velodyne", "pointcloud", "laser" → LiDAR
-    - "imu", "inertial" → IMU
-    - "gnss", "gps" → GNSS
+    Sensor Detection (from bridge urdf_parser.rs)
+    The bridge classifies sensors by link name patterns as follows
+    - "camera", "rgb" becomes Camera RGB
+    - "lidar", "velodyne", "pointcloud", "laser" becomes LiDAR
+    - "imu", "inertial" becomes IMU
+    - "gnss", "gps" becomes GNSS
 
-    Sensor List (awsim_labs configuration):
-    ========================================
-    - 3 LiDARs: velodyne_top, velodyne_left, velodyne_right
-    - 8 Cameras: traffic_light_right/left, camera0-5
-    - 1 GNSS: gnss_link
-    - 1 IMU: tamagawa/imu_link
+    Sensor List (awsim_labs configuration)
+    - 3 LiDARs (velodyne_top, velodyne_left, velodyne_right)
+    - 8 Cameras (traffic_light_right/left, camera0-5)
+    - 1 GNSS (gnss_link)
+    - 1 IMU (tamagawa/imu_link)
 
-    Physical Simulation:
-    ===================
-    Unlike real sensor kits, these definitions are metadata-only. CARLA handles:
-    - Actual sensor spawning and attachment
-    - Sensor data generation (images, point clouds, IMU, GNSS)
-    - Ray tracing and physics simulation
+    Physical Simulation
+    Unlike real sensor kits, these definitions are metadata-only. CARLA handles
+    actual sensor spawning and attachment, sensor data generation (images, point
+    clouds, IMU, GNSS), and ray tracing and physics simulation.
 
-    Customization:
-    =============
-    To modify sensor positions, edit config/sensor_kit_calibration.yaml
-    To add/remove sensors, edit this file AND update calibration.yaml
+    Customization
+    To modify sensor positions, edit config/sensor_kit_calibration.yaml file.
+    To add or remove sensors, edit this file AND update calibration.yaml file.
   -->
 
   <!-- Configuration directory for calibration files -->

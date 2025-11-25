@@ -16,7 +16,7 @@
   <!-- Vehicle body visualization -->
   <link name="base_link">
     <visual>
-      <!-- Position mesh: center at wheelbase/2 (rear axle is base_link origin) -->
+      <!-- Position mesh at center of wheelbase/2 (rear axle is base_link origin) -->
       <origin xyz="${vehicle_info['/**']['ros__parameters']['wheel_base']/2.0} 0 0" rpy="${pi/2.0} 0 ${pi}"/>
       <geometry>
         <!-- Lexus RX450h mesh from AWSIM Labs (can be replaced with CARLA-specific mesh) -->
