@@ -30,7 +30,7 @@ help:
     @echo "  just carla status <version> <port> Check CARLA status"
     @echo ""
     @echo "Autoware Simulator:"
-    @echo "  just autoware start         Start Autoware planning simulator"
+    @echo "  just autoware start         Start Autoware simulator"
     @echo "  just autoware restart       Restart Autoware"
     @echo "  just autoware stop          Stop Autoware"
     @echo "  just autoware logs [args...]  View Autoware logs"
@@ -203,47 +203,7 @@ carla command *ARGS:
                 echo "Example: just carla start 0.9.16 2000"
                 exit 1
             fi
-            VERSION="$1"
-            PORT="$2"
-
-            # Check if DISPLAY is set
-            if [ -z "$DISPLAY" ]; then
-                echo "Error: DISPLAY environment variable is not set"
-                echo "Please set DISPLAY (e.g., export DISPLAY=:1)"
-                exit 1
-            fi
-
-            # Check if run script exists
-            RUN_SCRIPT="$(pwd)/third_party/carla/run-$VERSION.sh"
-            if [ ! -f "$RUN_SCRIPT" ]; then
-                echo "Error: CARLA run script not found: $RUN_SCRIPT"
-                echo "Available versions: 0.9.14, 0.9.15, 0.9.16"
-                echo "Please configure symlinks in third_party/carla/"
-                exit 1
-            fi
-
-            # Use a unique transient unit name to avoid conflicts with template units
-            UNIT_NAME="carla-run-$VERSION-$PORT"
-
-            # Stop any existing unit (running or not) and reset failed state
-            echo "Ensuring no existing $UNIT_NAME unit..."
-            systemctl --user stop "$UNIT_NAME" 2>/dev/null || true
-            systemctl --user reset-failed "$UNIT_NAME" 2>/dev/null || true
-            sleep 0.5
-
-            echo "Starting CARLA $VERSION on port $PORT with DISPLAY=$DISPLAY..."
-
-            # Start CARLA using systemd-run with the run script
-            systemd-run --user \
-                --unit="$UNIT_NAME" \
-                --setenv=DISPLAY="$DISPLAY" \
-                --setenv=CARLA_PORT="$PORT" \
-                bash "$RUN_SCRIPT"
-
-            echo "CARLA $VERSION started on port $PORT"
-            echo "Use 'just carla status $VERSION $PORT' to check status"
-            echo "Use 'just carla logs $VERSION $PORT' to view logs"
-            echo "Use 'just carla stop $VERSION $PORT' to stop"
+            ./scripts/carla_start.sh "$1" "$2"
             ;;
 
         stop)
@@ -251,17 +211,7 @@ carla command *ARGS:
                 echo "Usage: just carla stop <version> <port>"
                 exit 1
             fi
-            VERSION="$1"
-            PORT="$2"
-            UNIT_NAME="carla-run-$VERSION-$PORT"
-
-            if systemctl --user is-active --quiet "$UNIT_NAME"; then
-                echo "Stopping CARLA $VERSION on port $PORT..."
-                systemctl --user stop "$UNIT_NAME"
-                echo "CARLA stopped"
-            else
-                echo "CARLA $VERSION is not running on port $PORT"
-            fi
+            ./scripts/carla_stop.sh "$1" "$2"
             ;;
 
         logs)
@@ -304,107 +254,28 @@ carla command *ARGS:
             ;;
     esac
 
-# Autoware planning simulator management: just autoware {start|stop|logs|status} [ARGS...]
+# Autoware simulator management: just autoware {start|stop|logs|status} [ARGS...]
 autoware command *ARGS:
     #!/usr/bin/env bash
     set -e
     set -- {{ARGS}}
 
-    UNIT_NAME="autoware-planning-simulator"
+    UNIT_NAME="autoware-simulator"
 
     case "{{command}}" in
         start)
-            RUN_SCRIPT="$(pwd)/third_party/autoware/run-planning-simulation.sh"
-
-            if [ ! -f "$RUN_SCRIPT" ]; then
-                echo "Error: Autoware run script not found: $RUN_SCRIPT"
-                echo "Please configure third_party/autoware/run-planning-simulation.sh"
-                exit 1
-            fi
-
-            # Stop any existing unit and reset failed state
-            echo "Ensuring no existing $UNIT_NAME unit..."
-            systemctl --user stop "$UNIT_NAME" 2>/dev/null || true
-            systemctl --user reset-failed "$UNIT_NAME" 2>/dev/null || true
-            sleep 0.5
-
-            echo "Starting Autoware planning simulator..."
-
-            # Build setenv arguments for ROS environment variables
-            SETENV_ARGS=()
-            if [ -n "$RMW_IMPLEMENTATION" ]; then
-                SETENV_ARGS+=(--setenv=RMW_IMPLEMENTATION="$RMW_IMPLEMENTATION")
-            fi
-            if [ -n "$ROS_DOMAIN_ID" ]; then
-                SETENV_ARGS+=(--setenv=ROS_DOMAIN_ID="$ROS_DOMAIN_ID")
-            fi
-            if [ -n "$ROS_LOCALHOST_ONLY" ]; then
-                SETENV_ARGS+=(--setenv=ROS_LOCALHOST_ONLY="$ROS_LOCALHOST_ONLY")
-            fi
-
-            # Start Autoware using systemd-run with the run script
-            systemd-run --user \
-                --unit="$UNIT_NAME" \
-                "${SETENV_ARGS[@]}" \
-                bash "$RUN_SCRIPT"
-
-            echo "Autoware planning simulator started"
-            echo "Use 'just autoware status' to check status"
-            echo "Use 'just autoware logs' to view logs"
-            echo "Use 'just autoware stop' to stop"
+            ./scripts/autoware_start.sh
             ;;
 
         restart)
-            RUN_SCRIPT="$(pwd)/third_party/autoware/run-planning-simulation.sh"
-
-            if [ ! -f "$RUN_SCRIPT" ]; then
-                echo "Error: Autoware run script not found: $RUN_SCRIPT"
-                echo "Please configure third_party/autoware/run-planning-simulation.sh"
-                exit 1
-            fi
-
-            echo "=== Restarting Autoware Planning Simulator ==="
-
-            # Stop and cleanup
-            echo "Stopping Autoware (if running)..."
-            systemctl --user stop "$UNIT_NAME" 2>/dev/null || true
-            systemctl --user reset-failed "$UNIT_NAME" 2>/dev/null || true
+            echo "=== Restarting Autoware Simulator ==="
+            just autoware stop
             sleep 2
-
-            # Start
-            echo "Starting Autoware planning simulator..."
-
-            # Build setenv arguments for ROS environment variables
-            SETENV_ARGS=()
-            if [ -n "$RMW_IMPLEMENTATION" ]; then
-                SETENV_ARGS+=(--setenv=RMW_IMPLEMENTATION="$RMW_IMPLEMENTATION")
-            fi
-            if [ -n "$ROS_DOMAIN_ID" ]; then
-                SETENV_ARGS+=(--setenv=ROS_DOMAIN_ID="$ROS_DOMAIN_ID")
-            fi
-            if [ -n "$ROS_LOCALHOST_ONLY" ]; then
-                SETENV_ARGS+=(--setenv=ROS_LOCALHOST_ONLY="$ROS_LOCALHOST_ONLY")
-            fi
-
-            # Start Autoware using systemd-run with the run script
-            systemd-run --user \
-                --unit="$UNIT_NAME" \
-                "${SETENV_ARGS[@]}" \
-                bash "$RUN_SCRIPT"
-
-            echo "Autoware planning simulator restarted"
-            echo "Use 'just autoware status' to check status"
-            echo "Use 'just autoware logs' to view logs"
+            just autoware start
             ;;
 
         stop)
-            if systemctl --user is-active --quiet "$UNIT_NAME"; then
-                echo "Stopping Autoware planning simulator..."
-                systemctl --user stop "$UNIT_NAME"
-                echo "Autoware stopped"
-            else
-                echo "Autoware is not running"
-            fi
+            ./scripts/autoware_stop.sh
             ;;
 
         logs)
@@ -412,7 +283,7 @@ autoware command *ARGS:
             ;;
 
         status)
-            echo "=== Autoware Planning Simulator Status ==="
+            echo "=== Autoware Simulator Status ==="
             systemctl --user status "$UNIT_NAME" --no-pager || true
             echo ""
             echo "=== Recent logs ==="
@@ -423,9 +294,9 @@ autoware command *ARGS:
             echo "Usage: just autoware {start|restart|stop|logs|status} [ARGS...]"
             echo ""
             echo "Commands:"
-            echo "  start              Start Autoware planning simulator"
-            echo "  restart            Restart Autoware planning simulator"
-            echo "  stop               Stop Autoware planning simulator"
+            echo "  start              Start Autoware simulator"
+            echo "  restart            Restart Autoware simulator"
+            echo "  stop               Stop Autoware simulator"
             echo "  logs [args...]     View Autoware logs"
             echo "  status             Check Autoware status"
             exit 1
@@ -441,126 +312,15 @@ demo command *ARGS:
     # Default configuration
     CARLA_VERSION="${CARLA_VERSION:-0.9.16}"
     CARLA_PORT="${CARLA_PORT:-2000}"
-    BRIDGE_PORT="${BRIDGE_PORT:-2000}"
 
     # Unit names
     CARLA_UNIT="carla-run-$CARLA_VERSION-$CARLA_PORT"
-    AUTOWARE_UNIT="autoware-planning-simulator"
+    AUTOWARE_UNIT="autoware-simulator"
     BRIDGE_UNIT="autoware-carla-bridge"
 
     case "{{command}}" in
         start)
-            echo "=== Starting Demo Environment ==="
-            echo "CARLA Version: $CARLA_VERSION, Port: $CARLA_PORT"
-            echo ""
-
-            # Check if DISPLAY is set for CARLA
-            if [ -z "$DISPLAY" ]; then
-                echo "Error: DISPLAY environment variable is not set"
-                echo "Please set DISPLAY (e.g., export DISPLAY=:1)"
-                exit 1
-            fi
-
-            # Check if GNU Parallel is available
-            if ! command -v parallel &> /dev/null; then
-                echo "Error: GNU Parallel is not installed"
-                echo "Please install it: sudo apt install parallel"
-                exit 1
-            fi
-
-            echo "=== Phase 1: Starting CARLA and Autoware in Parallel ==="
-            echo ""
-
-            # Define function for starting CARLA
-            start_carla() {
-                local CARLA_VERSION=$1
-                local CARLA_PORT=$2
-
-                echo "[CARLA] Starting CARLA $CARLA_VERSION on port $CARLA_PORT..."
-                just carla start "$CARLA_VERSION" "$CARLA_PORT" > /tmp/demo-carla-start.log 2>&1
-
-                # Wait for CARLA to be ready
-                echo "[CARLA] Waiting for CARLA to be ready..."
-                for i in {1..60}; do
-                    if timeout 3 python3 -c "import carla; client = carla.Client('127.0.0.1', $CARLA_PORT); client.set_timeout(2.0); client.get_world()" 2>/dev/null; then
-                        echo "[CARLA] ✓ CARLA is ready (${i}s elapsed)"
-                        break
-                    fi
-                    sleep 1
-                done
-
-                # Configure CARLA
-                echo "[CARLA] Configuring CARLA (Town01, synchronous mode)..."
-                python3 "$(pwd)/scripts/setup_carla.py" --port "$CARLA_PORT" --map Town01 --sync --timeout 60
-                echo "[CARLA] ✓ CARLA configured successfully"
-            }
-            export -f start_carla
-
-            # Define function for starting Autoware
-            start_autoware() {
-                echo "[Autoware] Starting Autoware planning simulator..."
-                just autoware start > /tmp/demo-autoware-start.log 2>&1
-                echo "[Autoware] Autoware started"
-
-                # Wait for Autoware to initialize
-                echo "[Autoware] Waiting for Autoware to initialize..."
-                sleep 15
-
-                # Check if Autoware services are available
-                echo "[Autoware] Checking Autoware services..."
-                for i in {1..10}; do
-                    if timeout 3 ros2 service list 2>/dev/null | grep -q "/api/localization/initialize"; then
-                        echo "[Autoware] ✓ Autoware services are ready"
-                        break
-                    fi
-                    sleep 1
-                done
-            }
-            export -f start_autoware
-
-            # Run both tasks in parallel using GNU Parallel
-            echo "Starting CARLA and Autoware in parallel..."
-            parallel --line-buffer --halt now,fail=1 ::: \
-                "start_carla $CARLA_VERSION $CARLA_PORT" \
-                "start_autoware"
-
-            if [ $? -ne 0 ]; then
-                echo "✗ Failed to start services. Check logs:"
-                echo "  - CARLA:    /tmp/demo-carla-start.log"
-                echo "  - Autoware: /tmp/demo-autoware-start.log"
-                exit 1
-            fi
-
-            echo "✓ Both CARLA and Autoware are ready"
-            echo ""
-
-            # Start Bridge
-            echo "=== Phase 2: Starting Bridge ==="
-            just bridge start "$BRIDGE_PORT"
-
-            # Wait for bridge to be ready to receive initial pose
-            # Note: Bridge won't publish vehicle status until initial pose is set
-            echo "Waiting for bridge to initialize..."
-            sleep 5
-
-            echo "✓ Bridge started and ready"
-            echo ""
-
-            echo "=== Demo Environment Started Successfully ==="
-            echo ""
-            echo "All services are now running:"
-            echo "  - CARLA:    just carla status $CARLA_VERSION $CARLA_PORT"
-            echo "  - Autoware: just autoware status"
-            echo "  - Bridge:   just bridge status"
-            echo ""
-            echo "Next steps:"
-            echo "  1. Run: just drive           # Run autonomous driving"
-            echo "  2. Watch logs: just bridge logs -f"
-            echo ""
-            echo "Management commands:"
-            echo "  - just demo status   # Check all services"
-            echo "  - just demo logs     # View all logs"
-            echo "  - just demo stop     # Stop all services"
+            ./scripts/demo_start.sh
             ;;
 
         restart)
@@ -571,23 +331,7 @@ demo command *ARGS:
             ;;
 
         stop)
-            echo "=== Stopping Demo Environment ==="
-            echo ""
-
-            # Stop in reverse order using just commands
-            echo "Step 1/3: Stopping bridge..."
-            just bridge stop
-            echo ""
-
-            echo "Step 2/3: Stopping Autoware..."
-            just autoware stop
-            echo ""
-
-            echo "Step 3/3: Stopping CARLA..."
-            just carla stop "$CARLA_VERSION" "$CARLA_PORT"
-            echo ""
-
-            echo "=== Demo Environment Stopped ==="
+            ./scripts/demo_stop.sh
             ;;
 
         status)
@@ -596,7 +340,7 @@ demo command *ARGS:
             echo "--- CARLA Simulator ---"
             systemctl --user status "$CARLA_UNIT" --no-pager || echo "CARLA is not running"
             echo ""
-            echo "--- Autoware Planning Simulator ---"
+            echo "--- Autoware Simulator ---"
             systemctl --user status "$AUTOWARE_UNIT" --no-pager || echo "Autoware is not running"
             echo ""
             echo "--- Autoware-CARLA Bridge ---"
