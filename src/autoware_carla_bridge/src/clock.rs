@@ -6,7 +6,7 @@ use std::{
 use crate::error::Result;
 
 pub struct SimulatorClock {
-    publisher_clock: Arc<rclrs::Publisher<builtin_interfaces::msg::Time>>,
+    publisher_clock: Arc<rclrs::Publisher<rclrs::vendor::rosgraph_msgs::msg::Clock>>,
 }
 
 impl SimulatorClock {
@@ -21,7 +21,7 @@ impl SimulatorClock {
 
     pub fn publish_clock(&self, timestamp: Option<f64>) -> Result<()> {
         let time = if let Some(sec) = timestamp {
-            builtin_interfaces::msg::Time {
+            rclrs::vendor::builtin_interfaces::msg::Time {
                 sec: sec.floor() as i32,
                 nanosec: (sec.fract() * 1_000_000_000_f64) as u32,
             }
@@ -30,13 +30,16 @@ impl SimulatorClock {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("Unable to get current time");
-            builtin_interfaces::msg::Time {
+            rclrs::vendor::builtin_interfaces::msg::Time {
                 sec: now.as_secs() as i32,
                 nanosec: now.subsec_nanos(),
             }
         };
 
-        self.publisher_clock.publish(time)?;
+        // Wrap the time in a Clock message (ROS 2 standard for /clock topic)
+        let clock_msg = rclrs::vendor::rosgraph_msgs::msg::Clock { clock: time };
+
+        self.publisher_clock.publish(clock_msg)?;
         Ok(())
     }
 }
