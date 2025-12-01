@@ -1,6 +1,7 @@
 mod autoware;
 mod autoware_detection;
 mod bridge;
+mod bridge_config;
 mod carla_vehicle;
 mod clock;
 mod coordinate_conversion;
@@ -112,13 +113,13 @@ struct Opts {
     #[clap(long, default_value_t = 60)]
     pub autoware_timeout: u64,
 
-    /// Timeout in seconds to wait for initial pose from RViz (0 = wait forever)
-    #[clap(long, default_value_t = 0)]
-    pub pose_timeout: u64,
-
     /// Path to CARLA sensor configuration file (YAML)
     #[clap(long, default_value = "config/carla_sensors.yaml")]
     pub sensor_config: String,
+
+    /// Path to bridge configuration file (YAML) - contains spawn pose
+    #[clap(long, default_value = "config/bridge.yaml")]
+    pub bridge_config: String,
 }
 
 fn main() -> Result<()> {
@@ -232,20 +233,9 @@ fn main() -> Result<()> {
         );
     }
 
-    // === Step 5: Wait for Autoware localization to initialize ===
-    tracing::info!("Waiting for Autoware localization to initialize...");
-    tracing::info!("(Initialize via /api/localization/initialize service)");
-
-    let pose_timeout = if opts.pose_timeout == 0 {
-        None
-    } else {
-        Some(Duration::from_secs(opts.pose_timeout))
-    };
-
-    autoware.wait_for_initial_pose(pose_timeout, &running, &mut executor)?;
-
-    // Get initial pose from Autoware
-    let initial_pose = autoware.take_initial_pose()?;
+    // === Step 5: Load bridge configuration ===
+    let bridge_config = bridge_config::BridgeConfig::from_file(&opts.bridge_config)?;
+    let initial_pose = bridge_config.to_isometry();
 
     // === Step 6: Load CARLA sensor configuration ===
     let carla_config = match sensor_config::CarlaConfig::from_file(&opts.sensor_config) {
@@ -293,8 +283,10 @@ fn main() -> Result<()> {
     tracing::info!("=== Bridge running ===");
 
     // Track consecutive timeouts to detect CARLA connection issues
+    // NOTE: Higher threshold (60s) to account for CARLA initialization time after spawning sensors.
+    // Spawning 26 sensors can cause CARLA to pause for 30-60 seconds while setting up.
     let mut consecutive_timeouts = 0;
-    const MAX_CONSECUTIVE_TIMEOUTS: u32 = 5;
+    const MAX_CONSECUTIVE_TIMEOUTS: u32 = 60;
 
     // === Main Loop ===
     while running.load(Ordering::SeqCst) {
