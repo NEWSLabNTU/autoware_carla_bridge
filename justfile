@@ -36,6 +36,13 @@ help:
     @echo "  just autoware logs [args...]  View Autoware logs"
     @echo "  just autoware status        Check Autoware status"
     @echo ""
+    @echo "Vehicle Monitor (GUI):"
+    @echo "  just monitor start          Start vehicle monitor GUI"
+    @echo "  just monitor restart        Restart monitor"
+    @echo "  just monitor stop           Stop monitor"
+    @echo "  just monitor logs [args...]   View monitor logs"
+    @echo "  just monitor status         Check monitor status"
+    @echo ""
     @echo "Demo Environment (All-in-One):"
     @echo "  just demo start             Start CARLA + Autoware + Bridge"
     @echo "  just demo restart           Restart all services"
@@ -303,6 +310,182 @@ autoware command *ARGS:
             ;;
     esac
 
+# Vehicle monitor (GUI) management: just monitor {start|restart|stop|logs|status} [ARGS...]
+monitor command *ARGS:
+    #!/usr/bin/env bash
+    set -e
+    set -- {{ARGS}}
+
+    UNIT_NAME="carla-vehicle-monitor"
+    MONITOR_DIR="$(pwd)"
+
+    case "{{command}}" in
+        start)
+            # Check if DISPLAY is set
+            if [ -z "$DISPLAY" ]; then
+                echo "Error: DISPLAY environment variable not set"
+                echo "Set DISPLAY (e.g., export DISPLAY=:1) and try again"
+                exit 1
+            fi
+
+            # Build the binary first
+            echo "Building manual_control..."
+            export CARLA_VERSION={{carla_version}}
+            cargo build --manifest-path src/manual_control/Cargo.toml --release 2>&1 | grep -E "(Compiling|Finished|error)" || true
+
+            # Check if binary exists
+            if [ ! -f "src/manual_control/target/release/manual_control" ]; then
+                echo "Error: Failed to build manual_control binary"
+                echo "Try running: cargo build --manifest-path src/manual_control/Cargo.toml --release"
+                exit 1
+            fi
+
+            # Stop any existing unit and reset failed state
+            echo "Ensuring no existing $UNIT_NAME unit..."
+            systemctl --user stop "$UNIT_NAME" 2>/dev/null || true
+            systemctl --user reset-failed "$UNIT_NAME" 2>/dev/null || true
+            sleep 0.5
+
+            echo "Starting CARLA vehicle monitor GUI..."
+            echo "Display: $DISPLAY"
+
+            # Start monitor using systemd-run - run the binary directly
+            systemd-run --user \
+                --unit="$UNIT_NAME" \
+                --working-directory="$MONITOR_DIR" \
+                bash -c "\
+                    export DISPLAY=$DISPLAY && \
+                    export CARLA_VERSION={{carla_version}} && \
+                    ./src/manual_control/target/release/manual_control"
+
+            echo "Vehicle monitor started"
+            echo "Use 'just monitor status' to check status"
+            echo "Use 'just monitor logs' to view logs"
+            echo "Use 'just monitor stop' to stop"
+            ;;
+
+        restart)
+            echo "=== Restarting Vehicle Monitor ==="
+            just monitor stop
+            sleep 1
+            just monitor start
+            ;;
+
+        stop)
+            if systemctl --user is-active --quiet "$UNIT_NAME"; then
+                echo "Stopping vehicle monitor..."
+                systemctl --user stop "$UNIT_NAME"
+                echo "Monitor stopped"
+            else
+                echo "Monitor is not running"
+            fi
+            ;;
+
+        logs)
+            journalctl --user -u "$UNIT_NAME" {{ARGS}}
+            ;;
+
+        status)
+            echo "=== Vehicle Monitor Status ==="
+            systemctl --user status "$UNIT_NAME" --no-pager || true
+            echo ""
+            echo "=== Recent logs ==="
+            journalctl --user -u "$UNIT_NAME" -n 20 --no-pager
+            ;;
+
+        *)
+            echo "Usage: just monitor {start|restart|stop|logs|status} [ARGS...]"
+            echo ""
+            echo "Commands:"
+            echo "  start              Start vehicle monitor GUI"
+            echo "  restart            Restart monitor"
+            echo "  stop               Stop monitor"
+            echo "  logs [args...]     View monitor logs"
+            echo "  status             Check monitor status"
+            echo ""
+            echo "Requirements:"
+            echo "  - CARLA must be running"
+            echo "  - Bridge must be running (spawns the vehicle)"
+            echo "  - DISPLAY environment variable must be set"
+            exit 1
+            ;;
+    esac
+
+# Scenario management: just scenario {start|stop|logs|status|restart} [ARGS...]
+scenario command *ARGS:
+    #!/usr/bin/env bash
+    set -e
+    set -- {{ARGS}}
+
+    UNIT_NAME="carla-demo-scenario"
+    SCENARIO_SCRIPT="$(pwd)/scripts/demo_scenario.py"
+    CARLA_PORT="${CARLA_PORT:-2000}"
+
+    case "{{command}}" in
+        start)
+            # Check if scenario script exists
+            if [ ! -f "$SCENARIO_SCRIPT" ]; then
+                echo "Error: Scenario script not found at $SCENARIO_SCRIPT"
+                exit 1
+            fi
+
+            # Stop any existing unit and reset failed state
+            systemctl --user stop "$UNIT_NAME" 2>/dev/null || true
+            systemctl --user reset-failed "$UNIT_NAME" 2>/dev/null || true
+
+            # Start scenario using systemd-run
+            echo "Starting CARLA demo scenario on port $CARLA_PORT..."
+            systemd-run --user \
+                --unit="$UNIT_NAME" \
+                --working-directory="$(pwd)" \
+                python3 -u "$SCENARIO_SCRIPT" --port "$CARLA_PORT"
+
+            echo "Demo scenario started"
+            echo "Use 'just scenario status' to check status"
+            echo "Use 'just scenario logs' to view logs"
+            echo "Use 'just scenario stop' to stop"
+            ;;
+
+        restart)
+            echo "=== Restarting Demo Scenario ==="
+            just scenario stop
+            sleep 1
+            just scenario start
+            ;;
+
+        stop)
+            echo "Stopping demo scenario..."
+            systemctl --user stop "$UNIT_NAME" 2>/dev/null || echo "Scenario is not running"
+            ;;
+
+        status)
+            systemctl --user status "$UNIT_NAME" --no-pager 2>/dev/null || echo "Scenario is not running"
+            ;;
+
+        logs)
+            journalctl --user -u "$UNIT_NAME" {{ARGS}}
+            ;;
+
+        *)
+            echo "Usage: just scenario {start|stop|logs|status|restart} [ARGS...]"
+            echo ""
+            echo "Commands:"
+            echo "  start              Start demo scenario (simulation ticker)"
+            echo "  restart            Restart scenario"
+            echo "  stop               Stop scenario"
+            echo "  logs [args...]     View scenario logs"
+            echo "  status             Check scenario status"
+            echo ""
+            echo "Environment variables:"
+            echo "  CARLA_PORT         CARLA port (default: 2000)"
+            echo ""
+            echo "Note: The scenario script ticks the CARLA simulation and"
+            echo "      reports actor counts. It should be started after CARLA"
+            echo "      and before the bridge."
+            exit 1
+            ;;
+    esac
+
 # Demo environment management: just demo {start|restart|stop|status|logs} [ARGS...]
 demo command *ARGS:
     #!/usr/bin/env bash
@@ -315,6 +498,7 @@ demo command *ARGS:
 
     # Unit names
     CARLA_UNIT="carla-run-$CARLA_VERSION-$CARLA_PORT"
+    SCENARIO_UNIT="carla-demo-scenario"
     AUTOWARE_UNIT="autoware-simulator"
     BRIDGE_UNIT="autoware-carla-bridge"
 
@@ -340,6 +524,9 @@ demo command *ARGS:
             echo "--- CARLA Simulator ---"
             systemctl --user status "$CARLA_UNIT" --no-pager || echo "CARLA is not running"
             echo ""
+            echo "--- Demo Scenario (Ticker) ---"
+            systemctl --user status "$SCENARIO_UNIT" --no-pager || echo "Scenario is not running"
+            echo ""
             echo "--- Autoware Simulator ---"
             systemctl --user status "$AUTOWARE_UNIT" --no-pager || echo "Autoware is not running"
             echo ""
@@ -349,11 +536,12 @@ demo command *ARGS:
 
         logs)
             echo "=== Demo Environment Logs (all services) ==="
-            echo "Services: CARLA, Autoware, Bridge"
+            echo "Services: CARLA, Scenario, Autoware, Bridge"
             echo "Press Ctrl-C to exit (if following logs with -f)"
             echo ""
             journalctl --user \
                 -u "$CARLA_UNIT" \
+                -u "$SCENARIO_UNIT" \
                 -u "$AUTOWARE_UNIT" \
                 -u "$BRIDGE_UNIT" \
                 {{ARGS}}

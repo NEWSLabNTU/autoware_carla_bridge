@@ -13,16 +13,24 @@ echo "=== Stopping Demo Environment ==="
 echo ""
 
 # Stop in reverse order
-echo "Step 1/3: Stopping bridge..."
+echo "Step 1/5: Stopping monitor..."
 cd "$PROJECT_ROOT"
+just monitor stop
+echo ""
+
+echo "Step 2/5: Stopping bridge..."
 just bridge stop
 echo ""
 
-echo "Step 2/3: Stopping Autoware..."
+echo "Step 3/5: Stopping demo scenario..."
+just scenario stop
+echo ""
+
+echo "Step 4/5: Stopping Autoware..."
 "$SCRIPT_DIR/autoware_stop.sh"
 echo ""
 
-echo "Step 3/3: Stopping CARLA..."
+echo "Step 5/5: Stopping CARLA..."
 "$SCRIPT_DIR/carla_stop.sh" "$CARLA_VERSION" "$CARLA_PORT"
 echo ""
 

@@ -48,11 +48,6 @@ start_carla() {
         fi
         sleep 1
     done
-
-    # Configure CARLA
-    echo "[CARLA] Configuring CARLA (Town01, synchronous mode)..."
-    python3 "$SCRIPT_DIR/setup_carla.py" --port "$CARLA_PORT" --map Town01 --sync --timeout 60
-    echo "[CARLA] ✓ CARLA configured successfully"
 }
 export -f start_carla
 
@@ -97,9 +92,17 @@ fi
 echo "✓ Both CARLA and Autoware are ready"
 echo ""
 
-# Start Bridge
-echo "=== Phase 2: Starting Bridge ==="
+# Start Scenario (simulation ticker)
+echo "=== Phase 2: Starting Demo Scenario ==="
 cd "$PROJECT_ROOT"
+just scenario start
+echo "Waiting for scenario to configure CARLA..."
+sleep 3
+echo "✓ Scenario started and CARLA configured"
+echo ""
+
+# Start Bridge
+echo "=== Phase 3: Starting Bridge ==="
 just bridge start "$BRIDGE_PORT"
 
 # Wait for bridge to be ready to receive initial pose
@@ -109,12 +112,20 @@ sleep 5
 echo "✓ Bridge started and ready"
 echo ""
 
+# Start Monitor
+echo "=== Phase 4: Starting Monitor ==="
+just monitor start
+echo "✓ Monitor started"
+echo ""
+
 echo "=== Demo Environment Started Successfully ==="
 echo ""
 echo "All services are now running:"
 echo "  - CARLA:    just carla status $CARLA_VERSION $CARLA_PORT"
+echo "  - Scenario: just scenario status"
 echo "  - Autoware: just autoware status"
 echo "  - Bridge:   just bridge status"
+echo "  - Monitor:  just monitor status"
 echo ""
 echo "Next steps:"
 echo "  1. Run: just drive           # Run autonomous driving"
