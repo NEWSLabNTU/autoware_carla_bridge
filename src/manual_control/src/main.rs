@@ -1,13 +1,14 @@
-//! CARLA Manual Control - Complete Interactive Example
+//! CARLA Vehicle Monitor - Autoware Bridge Companion
 //!
-//! This is the flagship example demonstrating the full capabilities of carla-rust.
+//! This tool monitors a vehicle spawned by the Autoware-CARLA bridge.
+//! It attaches to an existing vehicle in CARLA and displays its state.
 //!
 //! ## Features
 //!
-//! - **Full Vehicle Control**: WASD/arrow keys for throttle, brake, steer
+//! - **Vehicle Monitoring**: Attaches to bridge-spawned vehicle (no control commands)
 //! - **Multiple Sensors**: 14 camera/sensor types, 5 camera positions
 //! - **Real-time HUD**: FPS, speed, location, compass, IMU, GNSS, collision graph
-//! - **Advanced Controls**: Manual transmission, lights, Ackermann steering
+//! - **Camera Controls**: Switch camera types and positions
 //! - **World Manipulation**: Weather cycling, map layer management
 //! - **Recording/Replay**: Full session recording and playback
 //! - **Interactive UI**: Help overlay, notifications, telemetry display
@@ -25,16 +26,24 @@
 //! ## Running
 //!
 //! ```bash
-//! # Ensure CARLA simulator is running
-//! cargo run --example manual_control
+//! # Prerequisites:
+//! # 1. CARLA simulator must be running
+//! # 2. Autoware-CARLA bridge must be running (spawns the vehicle)
 //!
-//! # With custom settings
-//! cargo run --example manual_control -- --sync --autopilot
+//! cargo run --bin manual_control
+//!
+//! # The tool will attach to the first vehicle found in CARLA
+//! # (should be the one spawned by the bridge)
 //! ```
 //!
 //! ## Controls
 //!
-//! Press **H** in-game to see all controls (Phase 12.2 TODO).
+//! - **TAB**: Switch camera position
+//! - **H**: Toggle help overlay
+//! - **F1**: Toggle HUD
+//! - **ESC**: Quit
+//!
+//! Note: Vehicle control (WASD, autopilot) is disabled - the vehicle is controlled by Autoware.
 
 // Module declarations
 mod camera;
@@ -132,20 +141,20 @@ async fn main() -> Result<()> {
     let mut help = self::ui::HelpText::new(config.width as f32, config.height as f32);
 
     info!("✓ All components initialized");
-    info!("Press WASD/Arrow keys to control vehicle");
-    info!("Press P to toggle autopilot");
+    info!("=== CARLA Vehicle Monitor ===");
+    info!("Monitoring bridge-controlled vehicle (no control commands sent)");
     info!("Press TAB to cycle camera positions");
+    info!("Press H for help overlay");
     info!("Press ESC to quit");
 
     // ✅ Subphase 12.1.2, 12.2, 12.3, and 12.4: Main game loop
     loop {
         let delta_time = get_frame_time();
 
-        // ✅ Subphase 12.3.1: Parse continuous vehicle keys (WASD/arrows)
-        keyboard.parse_vehicle_keys(delta_time);
-
-        // ✅ Subphase 12.3.1: Apply vehicle control
-        keyboard.apply_control(&mut world)?;
+        // NOTE: Vehicle control disabled - this is a monitoring tool only
+        // The vehicle is controlled by Autoware via the bridge
+        // keyboard.parse_vehicle_keys(delta_time);
+        // keyboard.apply_control(&mut world)?;
 
         // ✅ Subphase 12.3.2: Parse keyboard events (P for autopilot, ESC to quit)
         // ✅ Subphase 12.10: Recording and replay (Ctrl+R, Ctrl+P, Ctrl+Minus/Plus, R)

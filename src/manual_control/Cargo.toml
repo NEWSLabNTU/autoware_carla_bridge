@@ -6,8 +6,8 @@ description = "CARLA Manual Control - Interactive vehicle control with multiple 
 license = "Apache-2.0"
 
 [dependencies]
-# CARLA client
-carla.workspace = true
+# CARLA client (version must match workspace)
+carla = "0.13.0"
 
 # Graphics and UI
 macroquad = "0.4"

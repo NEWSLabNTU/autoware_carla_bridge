@@ -1,16 +1,21 @@
 //! World management module
 //!
 //! The World struct is responsible for:
-//! - Vehicle spawning and respawning
+//! - Vehicle attachment (finds and attaches to existing vehicle spawned by bridge)
 //! - All sensor management (collision, lane invasion, GNSS, IMU, radar, camera)
 //! - Weather cycling with presets
 //! - Map layer management
 //! - Recording state tracking
 //! - Advanced features (radar, doors, constant velocity, telemetry)
 //!
+//! ## Monitoring Mode
+//!
+//! This tool does NOT spawn vehicles. It attaches to an existing vehicle in CARLA
+//! (typically spawned by the Autoware-CARLA bridge) and monitors its state.
+//!
 //! ## Phase 13 Implementation
 //!
-//! - ✅ Phase 1.2: Vehicle spawning and basic management
+//! - ✅ Phase 1.2: Vehicle attachment and basic management
 //! - ✅ Phase 5: Sensor spawning (IMU, GNSS, collision, lane invasion)
 //! - ✅ Phase 9: Weather and map layer control
 //! - ✅ Phase 10: Recording state management
@@ -198,88 +203,53 @@ pub struct World {
 }
 
 impl World {
-    /// Create a new World and spawn player vehicle
+    /// Create a new World and attach to existing player vehicle
     ///
-    /// ✅ Subphase 12.1.2: Vehicle Spawning and Basic Display
+    /// This finds the first vehicle in the CARLA world and attaches to it.
+    /// The vehicle should be spawned by the Autoware-CARLA bridge.
+    ///
+    /// Returns an error if no vehicles are found in the world.
     pub fn new(client: &Client, config: &crate::Config) -> Result<Self> {
         let mut world = client.world();
 
-        // Get blueprint library
-        let blueprint_library = world.blueprint_library();
+        // Find existing vehicle in the world instead of spawning a new one
+        info!("Searching for existing vehicle in CARLA world...");
 
-        // Debug: Count total blueprints
-        let total_count = blueprint_library.iter().count();
-        info!(
-            "Blueprint library contains {} total blueprints",
-            total_count
-        );
+        // In synchronous mode, wait for a tick to get fresh world state
+        info!("Waiting for world tick to get current state...");
+        let _ = world.wait_for_tick();
 
-        // Filter for vehicle blueprints (default: "vehicle.*")
-        // Use starts_with instead of contains for more reliable matching
-        let vehicle_blueprints: Vec<_> = blueprint_library
+        let actors = world.actors();
+        info!("Found {} total actors in world", actors.len());
+
+        // Find vehicles matching the filter
+        let vehicles: Vec<_> = actors
             .iter()
-            .filter(|bp| bp.id().starts_with("vehicle."))
+            .filter_map(|actor| Vehicle::try_from(actor.clone()).ok())
             .collect();
 
-        info!("Found {} vehicle blueprints", vehicle_blueprints.len());
+        info!("Found {} vehicles", vehicles.len());
 
-        if vehicle_blueprints.is_empty() {
-            // Print some sample blueprint IDs for debugging
-            info!("Sample blueprint IDs:");
-            for (i, bp) in blueprint_library.iter().take(10).enumerate() {
-                info!("  {}: {}", i, bp.id());
-            }
-
+        if vehicles.is_empty() {
             return Err(eyre!(
-                "No vehicle blueprints found. Total blueprints: {}, Filter: {}",
-                total_count,
-                config.filter
+                "No vehicles found in CARLA world. Please spawn a vehicle first using the bridge."
             ));
         }
 
-        // Choose a random vehicle blueprint
-        let blueprint = vehicle_blueprints[0].clone(); // For now, use first vehicle
-        info!("Selected vehicle blueprint: {}", blueprint.id());
+        // Use the first vehicle found (should be the one spawned by the bridge)
+        let player = vehicles[0].clone();
 
-        // Get spawn points from the map
-        let map = world.map();
-        let spawn_points = map.recommended_spawn_points();
+        info!(
+            "✓ Attached to existing vehicle: ID {}, Type: {}",
+            player.id(),
+            player.type_id()
+        );
 
-        if spawn_points.is_empty() {
-            return Err(eyre!("No spawn points available on this map"));
-        }
-
-        // Try multiple spawn points until one succeeds
-        let mut player = None;
-        for (i, spawn_point) in spawn_points.iter().take(10).enumerate() {
-            info!("Trying to spawn vehicle at spawn point {}", i);
-            match world.spawn_actor(&blueprint, spawn_point) {
-                Ok(actor) => {
-                    player = Some(
-                        Vehicle::try_from(actor)
-                            .map_err(|_| eyre!("Failed to convert to vehicle"))?,
-                    );
-                    info!(
-                        "✓ Vehicle spawned successfully at spawn point {}: ID {}",
-                        i,
-                        player.as_ref().unwrap().id()
-                    );
-                    break;
-                }
-                Err(e) => {
-                    info!("Spawn point {} failed: {:?}, trying next...", i, e);
-                }
-            }
-        }
-
-        let player = player
-            .ok_or_else(|| eyre!("Failed to spawn vehicle at any of the first 10 spawn points"))?;
-
-        // Enable autopilot if requested
-        if config.autopilot {
-            player.set_autopilot(true);
-            info!("✓ Autopilot enabled");
-        }
+        let transform = player.transform();
+        info!(
+            "  Position: ({:.2}, {:.2}, {:.2})",
+            transform.location.x, transform.location.y, transform.location.z
+        );
 
         let weather_presets = get_weather_presets();
         let map_layers = vec![
@@ -379,12 +349,14 @@ impl World {
     // pub fn toggle_constant_velocity(&mut self) {}
     // pub fn toggle_vehicle_telemetry(&mut self) {}
 
-    /// Cleanup - destroy all actors
+    /// Cleanup - detach from vehicle (don't destroy it)
+    ///
+    /// Note: We don't destroy the vehicle because it's owned by the bridge.
+    /// We just clear our reference to it.
     pub fn destroy(&mut self) {
-        // TODO: Destroy all sensors
-        if let Some(ref player) = self.player {
-            info!("Destroying player vehicle...");
-            player.destroy();
+        // TODO: Destroy all sensors we spawned
+        if self.player.is_some() {
+            info!("Detaching from vehicle (not destroying - owned by bridge)");
         }
         self.player = None;
     }
