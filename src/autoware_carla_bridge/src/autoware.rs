@@ -45,8 +45,12 @@ pub struct Autoware {
     // to publish vehicle status from CARLA to Autoware.
     #[allow(dead_code)]
     pub_actuation_status: Arc<rclrs::Publisher<tier4_vehicle_msgs::msg::ActuationStatusStamped>>,
-    #[allow(dead_code)]
+
+    /// Publisher for vehicle velocity status
     pub_velocity_status: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::VelocityReport>>,
+
+    /// Publisher for vehicle motion state (STOPPED/STARTING/MOVING)
+    pub_motion_state: Arc<rclrs::Publisher<autoware_adapi_v1_msgs::msg::MotionState>>,
     #[allow(dead_code)]
     pub_steering_status: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::SteeringReport>>,
     #[allow(dead_code)]
@@ -142,7 +146,13 @@ impl Autoware {
         tracing::info!("Initializing Autoware coordinator...");
 
         // Create AutowareDetector (monitors /robot_description)
-        let detector = AutowareDetector::new(node.clone(), None, None)?;
+        // NOTE: Long health timeout (1 hour) because /robot_description is a latched topic
+        // that's only published once at startup, not a continuous heartbeat.
+        let detector = AutowareDetector::new(
+            node.clone(),
+            None, // detection_timeout: use default (60s)
+            Some(std::time::Duration::from_secs(3600)), // health_timeout: 1 hour
+        )?;
 
         // Create TFBuffer (subscribes to /tf_static)
         let tf_buffer = TFBuffer::new(node.clone())?;
@@ -164,6 +174,12 @@ impl Autoware {
         let pub_velocity_status = Arc::new(
             node.create_publisher::<autoware_vehicle_msgs::msg::VelocityReport>(
                 "vehicle/status/velocity_status".reliable(),
+            )?,
+        );
+
+        let pub_motion_state = Arc::new(
+            node.create_publisher::<autoware_adapi_v1_msgs::msg::MotionState>(
+                "/api/motion/state".transient_local(),
             )?,
         );
 
@@ -272,7 +288,8 @@ impl Autoware {
         let localization_init_state = Arc::new(std::sync::Mutex::new(0u16)); // 0 = UNKNOWN
         let localization_init_state_cb = localization_init_state.clone();
         let initial_pose_from_localization = initial_pose.clone();
-        let localization_kinematic_state: Arc<std::sync::Mutex<Option<nav_msgs::msg::Odometry>>> = Arc::new(std::sync::Mutex::new(None));
+        let localization_kinematic_state: Arc<std::sync::Mutex<Option<nav_msgs::msg::Odometry>>> =
+            Arc::new(std::sync::Mutex::new(None));
         let localization_kinematic_state_for_init = localization_kinematic_state.clone();
 
         let localization_init_state_sub = Arc::new(
@@ -336,6 +353,7 @@ impl Autoware {
             // === Vehicle Status Publishers ===
             pub_actuation_status,
             pub_velocity_status,
+            pub_motion_state,
             pub_steering_status,
             pub_gear_status,
             pub_control_mode,
@@ -603,8 +621,15 @@ impl Autoware {
     /// The pose is set when /localization/initialization_state becomes INITIALIZED (3)
     /// and /localization/kinematic_state is available.
     ///
+    /// During the wait, this method ticks CARLA and publishes clock messages to advance
+    /// simulation time, which is required for Autoware's vehicle stop checker.
+    ///
     /// # Arguments
     /// * `timeout` - Optional timeout duration. None means wait forever.
+    /// * `running` - Atomic flag for graceful shutdown
+    /// * `executor` - ROS executor for processing callbacks
+    /// * `world` - Mutable reference to CARLA world for ticking simulation
+    /// * `sim_clock` - Clock publisher for publishing simulation time
     ///
     /// # Returns
     /// Result indicating success or timeout error
@@ -613,19 +638,50 @@ impl Autoware {
         timeout: Option<std::time::Duration>,
         running: &std::sync::Arc<std::sync::atomic::AtomicBool>,
         executor: &mut rclrs::Executor,
+        world: &mut carla::client::World,
+        sim_clock: &crate::clock::SimulatorClock,
     ) -> Result<()> {
         tracing::info!("Waiting for Autoware localization to initialize...");
-        tracing::info!(
-            "(Initialize via /api/localization/initialize service)"
-        );
+        tracing::info!("(Initialize via /api/localization/initialize service)");
 
         let start = std::time::Instant::now();
 
         loop {
+            // Check for shutdown request
+            if !running.load(std::sync::atomic::Ordering::SeqCst) {
+                tracing::info!("Shutdown requested while waiting for initial pose");
+                return Err(crate::error::BridgeError::AutowareIssue(
+                    "Shutdown requested".to_string(),
+                ));
+            }
+
+            // Tick CARLA to advance simulation time (synchronous mode)
+            // This actively drives the simulation forward
+            world.tick();
+
+            // Get current simulation time from CARLA
+            let snapshot = world.snapshot();
+            let timestamp = snapshot.timestamp();
+            let sim_time = timestamp.elapsed_seconds;
+
+            // Publish clock to advance ROS simulation time
+            if let Err(e) = sim_clock.publish_clock(Some(sim_time)) {
+                tracing::warn!("Failed to publish clock: {}", e);
+            }
+
             // Spin executor to process ROS callbacks (localization state subscriptions)
             executor.spin(
-                rclrs::SpinOptions::spin_once().timeout(std::time::Duration::from_millis(100)),
+                rclrs::SpinOptions::spin_once().timeout(std::time::Duration::from_millis(10)),
             );
+
+            // Publish zero velocity and stopped motion state
+            // This allows Autoware's pose_initializer to accept initialization requests
+            if let Err(e) = self.publish_zero_velocity(sim_time) {
+                tracing::warn!("Failed to publish zero velocity: {}", e);
+            }
+            if let Err(e) = self.publish_stopped_motion_state(sim_time) {
+                tracing::warn!("Failed to publish motion state: {}", e);
+            }
 
             if self.has_initial_pose() {
                 tracing::info!("Initial pose received!");
@@ -817,6 +873,65 @@ impl Autoware {
         tf_msg.transforms.push(transform);
 
         self.pub_tf.publish(&tf_msg)?;
+
+        Ok(())
+    }
+
+    /// Publish zero velocity status
+    ///
+    /// Publishes a velocity status message with zero velocity to indicate the vehicle is stopped.
+    /// This is used before the vehicle spawns to allow Autoware's pose_initializer to accept
+    /// initialization requests (it requires the vehicle to be stopped).
+    ///
+    /// # Arguments
+    /// * `sim_time` - CARLA simulation time in seconds (from world.snapshot().timestamp().elapsed_seconds)
+    ///
+    /// # Returns
+    /// Result indicating success or error
+    pub fn publish_zero_velocity(&self, sim_time: f64) -> Result<()> {
+        let mut velocity_msg = autoware_vehicle_msgs::msg::VelocityReport::default();
+
+        // Set timestamp to CARLA simulation time
+        // This is CRITICAL: Autoware uses simulation time from /clock topic.
+        // The bridge publishes to /clock, so it must use CARLA's simulation time directly.
+        velocity_msg.header.stamp.sec = sim_time.floor() as i32;
+        velocity_msg.header.stamp.nanosec = (sim_time.fract() * 1_000_000_000_f64) as u32;
+
+        // Set frame_id
+        velocity_msg.header.frame_id = "base_link".to_string();
+
+        // All velocities are zero (default values from VelocityReport::default())
+        velocity_msg.longitudinal_velocity = 0.0;
+        velocity_msg.lateral_velocity = 0.0;
+        velocity_msg.heading_rate = 0.0;
+
+        self.pub_velocity_status.publish(&velocity_msg)?;
+
+        Ok(())
+    }
+
+    /// Publish stopped motion state
+    ///
+    /// Publishes a motion state message with STOPPED state to indicate the vehicle is not moving.
+    /// This is required in addition to zero velocity because Autoware checks both velocity AND
+    /// motion state when determining if the vehicle is stopped (for localization initialization).
+    ///
+    /// # Arguments
+    /// * `sim_time` - CARLA simulation time in seconds (from world.snapshot().timestamp().elapsed_seconds)
+    ///
+    /// # Returns
+    /// Result indicating success or error
+    pub fn publish_stopped_motion_state(&self, sim_time: f64) -> Result<()> {
+        let mut motion_state_msg = autoware_adapi_v1_msgs::msg::MotionState::default();
+
+        // Set timestamp to CARLA simulation time
+        motion_state_msg.stamp.sec = sim_time.floor() as i32;
+        motion_state_msg.stamp.nanosec = (sim_time.fract() * 1_000_000_000_f64) as u32;
+
+        // Set state to STOPPED (value = 1)
+        motion_state_msg.state = 1; // STOPPED = 1
+
+        self.pub_motion_state.publish(&motion_state_msg)?;
 
         Ok(())
     }
