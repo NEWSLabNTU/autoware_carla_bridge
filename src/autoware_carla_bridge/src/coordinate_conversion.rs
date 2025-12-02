@@ -13,23 +13,23 @@
 /// - **X-axis**: Forward
 /// - **Y-axis**: Right
 /// - **Z-axis**: Up
-/// - **Units**: centimeters
+/// - **Units**: **meters** (both Rust and Python APIs use meters)
 /// - **Rotation**: Degrees
 ///
 /// ## Key Transformations
 ///
 /// ### Position (ROS → CARLA)
 /// ```text
-/// CARLA_x = ROS_x * 100.0      // meters to centimeters
-/// CARLA_y = -ROS_y * 100.0     // left-handed conversion + scale
-/// CARLA_z = ROS_z * 100.0      // meters to centimeters
+/// CARLA_x = ROS_x       // meters (no unit conversion)
+/// CARLA_y = -ROS_y      // left-handed conversion (Y-axis flip)
+/// CARLA_z = ROS_z       // meters (no unit conversion)
 /// ```
 ///
 /// ### Position (CARLA → ROS)
 /// ```text
-/// ROS_x = CARLA_x / 100.0      // centimeters to meters
-/// ROS_y = -CARLA_y / 100.0     // left-handed conversion + scale
-/// ROS_z = CARLA_z / 100.0      // centimeters to meters
+/// ROS_x = CARLA_x       // meters (no unit conversion)
+/// ROS_y = -CARLA_y      // left-handed conversion (Y-axis flip)
+/// ROS_z = CARLA_z       // meters (no unit conversion)
 /// ```
 ///
 /// ### Rotation (ROS → CARLA)
@@ -48,13 +48,13 @@
 use nalgebra::{Quaternion, Vector3};
 use std::f64::consts::PI;
 
-/// Convert position from ROS (meters, right-handed) to CARLA (cm, left-handed)
+/// Convert position from ROS (meters, right-handed) to CARLA (meters, left-handed)
 ///
 /// # Arguments
 /// * `ros_position` - Position in ROS coordinate system (meters)
 ///
 /// # Returns
-/// Position in CARLA coordinate system (centimeters)
+/// Position in CARLA coordinate system (meters)
 ///
 /// # Example
 /// ```
@@ -63,22 +63,22 @@ use std::f64::consts::PI;
 ///
 /// let ros_pos = Vector3::new(1.0, 2.0, 3.0); // 1m forward, 2m left, 3m up
 /// let carla_pos = ros_to_carla_position(&ros_pos);
-/// assert_eq!(carla_pos.x, 100.0); // 1m = 100cm
-/// assert_eq!(carla_pos.y, -200.0); // 2m left → -200cm right (Y-axis flip)
-/// assert_eq!(carla_pos.z, 300.0); // 3m = 300cm
+/// assert_eq!(carla_pos.x, 1.0); // Forward: no change
+/// assert_eq!(carla_pos.y, -2.0); // 2m left → -2m right (Y-axis flip)
+/// assert_eq!(carla_pos.z, 3.0); // Up: no change
 /// ```
 pub fn ros_to_carla_position(ros_position: &Vector3<f64>) -> Vector3<f64> {
     Vector3::new(
-        ros_position.x * 100.0,  // Forward: meters to cm
-        -ros_position.y * 100.0, // Left → Right: Y-axis flip + scale
-        ros_position.z * 100.0,  // Up: meters to cm
+        ros_position.x,  // Forward: meters (no unit conversion)
+        -ros_position.y, // Left → Right: Y-axis flip
+        ros_position.z,  // Up: meters (no unit conversion)
     )
 }
 
-/// Convert position from CARLA (cm, left-handed) to ROS (meters, right-handed)
+/// Convert position from CARLA (meters, left-handed) to ROS (meters, right-handed)
 ///
 /// # Arguments
-/// * `carla_position` - Position in CARLA coordinate system (centimeters)
+/// * `carla_position` - Position in CARLA coordinate system (meters)
 ///
 /// # Returns
 /// Position in ROS coordinate system (meters)
@@ -88,17 +88,17 @@ pub fn ros_to_carla_position(ros_position: &Vector3<f64>) -> Vector3<f64> {
 /// use autoware_carla_bridge::coordinate_conversion::carla_to_ros_position;
 /// use nalgebra::Vector3;
 ///
-/// let carla_pos = Vector3::new(100.0, -200.0, 300.0);
+/// let carla_pos = Vector3::new(1.0, -2.0, 3.0); // 1m forward, 2m right, 3m up
 /// let ros_pos = carla_to_ros_position(&carla_pos);
-/// assert_eq!(ros_pos.x, 1.0); // 100cm = 1m
-/// assert_eq!(ros_pos.y, 2.0); // -200cm right → 2m left (Y-axis flip)
-/// assert_eq!(ros_pos.z, 3.0); // 300cm = 3m
+/// assert_eq!(ros_pos.x, 1.0); // Forward: no change
+/// assert_eq!(ros_pos.y, 2.0); // -2m right → 2m left (Y-axis flip)
+/// assert_eq!(ros_pos.z, 3.0); // Up: no change
 /// ```
 pub fn carla_to_ros_position(carla_position: &Vector3<f64>) -> Vector3<f64> {
     Vector3::new(
-        carla_position.x / 100.0,  // Forward: cm to meters
-        -carla_position.y / 100.0, // Right → Left: Y-axis flip + scale
-        carla_position.z / 100.0,  // Up: cm to meters
+        carla_position.x,  // Forward: meters (no unit conversion)
+        -carla_position.y, // Right → Left: Y-axis flip
+        carla_position.z,  // Up: meters (no unit conversion)
     )
 }
 
@@ -280,6 +280,107 @@ pub fn euler_to_quaternion(roll: f64, pitch: f64, yaw: f64) -> Quaternion<f64> {
     )
 }
 
+/// Convert CARLA Transform to ROS Isometry3 (high-level pose conversion)
+///
+/// Converts a complete CARLA pose (position + orientation) to ROS coordinate system.
+/// This is the preferred function for converting poses between systems.
+///
+/// # Arguments
+/// * `carla_transform` - CARLA transform (meters, degrees, left-handed)
+///
+/// # Returns
+/// ROS transform as Isometry3<f32> (meters, radians, right-handed)
+///
+/// # Example
+/// ```ignore
+/// use carla::geom::{Transform, Location, Rotation};
+///
+/// let carla_tf = Transform {
+///     location: Location { x: 100.0, y: -200.0, z: 50.0 },
+///     rotation: Rotation { roll: 0.0, pitch: 0.0, yaw: -90.0 },
+/// };
+/// let ros_iso = carla_transform_to_ros_isometry(&carla_tf);
+/// ```
+///
+/// NOTE: Reserved for future use when converting CARLA states back to ROS
+#[allow(dead_code)]
+pub fn carla_transform_to_ros_isometry(
+    carla_transform: &carla::geom::Transform,
+) -> nalgebra::Isometry3<f32> {
+    // Convert position: Y-axis flip, no unit conversion (meters to meters)
+    let ros_position = nalgebra::Translation3::new(
+        carla_transform.location.x,  // Forward: no change
+        -carla_transform.location.y, // Right → Left: Y-axis flip
+        carla_transform.location.z,  // Up: no change
+    );
+
+    // Convert rotation: degrees to radians, sign flips for right-handed system
+    let (ros_roll, ros_pitch, ros_yaw) = carla_to_ros_rotation(
+        carla_transform.rotation.roll as f64,
+        carla_transform.rotation.pitch as f64,
+        carla_transform.rotation.yaw as f64,
+    );
+
+    // Create quaternion from euler angles
+    let ros_quat_f64 = euler_to_quaternion(ros_roll, ros_pitch, ros_yaw);
+    let ros_rotation = nalgebra::UnitQuaternion::new_normalize(nalgebra::Quaternion::new(
+        ros_quat_f64.w as f32,
+        ros_quat_f64.i as f32,
+        ros_quat_f64.j as f32,
+        ros_quat_f64.k as f32,
+    ));
+
+    nalgebra::Isometry3::from_parts(ros_position, ros_rotation)
+}
+
+/// Convert ROS Isometry3 to CARLA Transform (high-level pose conversion)
+///
+/// Converts a complete ROS pose (position + orientation) to CARLA coordinate system.
+/// This is the preferred function for converting poses between systems.
+///
+/// # Arguments
+/// * `ros_isometry` - ROS transform as Isometry3<f32> (meters, radians, right-handed)
+///
+/// # Returns
+/// CARLA transform (meters, degrees, left-handed)
+///
+/// # Example
+/// ```ignore
+/// use nalgebra::{Isometry3, Translation3, UnitQuaternion};
+///
+/// let ros_iso = Isometry3::from_parts(
+///     Translation3::new(1.0, 2.0, 0.5),
+///     UnitQuaternion::from_euler_angles(0.0, 0.0, 1.57),
+/// );
+/// let carla_tf = ros_isometry_to_carla_transform(&ros_iso);
+/// ```
+pub fn ros_isometry_to_carla_transform(
+    ros_isometry: &nalgebra::Isometry3<f32>,
+) -> carla::geom::Transform {
+    // Convert position: Y-axis flip, no unit conversion (meters to meters)
+    let carla_location = carla::geom::Location {
+        x: ros_isometry.translation.x,  // Forward: no change
+        y: -ros_isometry.translation.y, // Left → Right: Y-axis flip
+        z: ros_isometry.translation.z,  // Up: no change
+    };
+
+    // Convert rotation: extract euler angles, convert to degrees, apply sign flips
+    let (roll, pitch, yaw) = ros_isometry.rotation.euler_angles();
+    let (carla_roll, carla_pitch, carla_yaw) =
+        ros_to_carla_rotation(roll as f64, pitch as f64, yaw as f64);
+
+    let carla_rotation = carla::geom::Rotation {
+        roll: carla_roll as f32,
+        pitch: carla_pitch as f32,
+        yaw: carla_yaw as f32,
+    };
+
+    carla::geom::Transform {
+        location: carla_location,
+        rotation: carla_rotation,
+    }
+}
+
 /// Convert linear velocity from CARLA (m/s, left-handed) to ROS (m/s, right-handed)
 ///
 /// CARLA velocities are already in m/s, so we only need to flip the Y-axis
@@ -381,20 +482,21 @@ mod tests {
 
     #[test]
     fn test_ros_to_carla_position() {
-        // Test forward, left, up
+        // Test forward, left, up: 1m forward, 2m left, 3m up → 1m forward, 2m right, 3m up
         let ros_pos = Vector3::new(1.0, 2.0, 3.0);
         let carla_pos = ros_to_carla_position(&ros_pos);
-        assert_eq!(carla_pos.x, 100.0);
-        assert_eq!(carla_pos.y, -200.0); // Y-axis flip
-        assert_eq!(carla_pos.z, 300.0);
+        assert_eq!(carla_pos.x, 1.0);
+        assert_eq!(carla_pos.y, -2.0); // Y-axis flip: left → right
+        assert_eq!(carla_pos.z, 3.0);
     }
 
     #[test]
     fn test_carla_to_ros_position() {
-        let carla_pos = Vector3::new(100.0, -200.0, 300.0);
+        // Test forward, right, up: 1m forward, 2m right, 3m up → 1m forward, 2m left, 3m up
+        let carla_pos = Vector3::new(1.0, -2.0, 3.0);
         let ros_pos = carla_to_ros_position(&carla_pos);
         assert_eq!(ros_pos.x, 1.0);
-        assert_eq!(ros_pos.y, 2.0); // Y-axis flip back
+        assert_eq!(ros_pos.y, 2.0); // Y-axis flip back: right → left
         assert_eq!(ros_pos.z, 3.0);
     }
 

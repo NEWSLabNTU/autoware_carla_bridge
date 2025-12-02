@@ -10,7 +10,6 @@ use crate::{
 };
 use carla::{
     client::{ActorBase, Sensor, Vehicle, World},
-    geom::Transform,
     rpc::AttachmentType,
 };
 use std::collections::HashMap;
@@ -49,7 +48,7 @@ impl CarlaVehicle {
         carla_config: &CarlaConfig,
     ) -> Result<Self> {
         tracing::info!(
-            "Spawning vehicle at ({:.2}, {:.2}, {:.2})",
+            "Initial pose from Autoware (ROS coords): x={:.2}, y={:.2}, z={:.2}",
             initial_pose.translation.x,
             initial_pose.translation.y,
             initial_pose.translation.z
@@ -58,6 +57,14 @@ impl CarlaVehicle {
         // Spawn vehicle
         let vehicle = Self::spawn_vehicle(world, vehicle_blueprint, initial_pose)?;
 
+        // Log actual spawned position in CARLA
+        let spawned_transform = vehicle.transform();
+        tracing::info!(
+            "Vehicle spawned in CARLA (CARLA coords): x={:.1}, y={:.1}, z={:.1}",
+            spawned_transform.location.x,
+            spawned_transform.location.y,
+            spawned_transform.location.z
+        );
         tracing::info!("Vehicle spawned successfully: ID={}", vehicle.id());
 
         // Spawn sensors
@@ -97,13 +104,43 @@ impl CarlaVehicle {
             ))
         })?;
 
-        // Convert nalgebra Isometry3 to CARLA Transform
-        let carla_transform = Transform::from_na(initial_pose);
+        // Convert ROS pose to CARLA transform using centralized helper
+        let carla_transform =
+            crate::coordinate_conversion::ros_isometry_to_carla_transform(initial_pose);
 
-        // Spawn vehicle
+        tracing::info!(
+            "Coordinate conversion: ROS({:.2}, {:.2}, {:.2}) → CARLA({:.1}, {:.1}, {:.1})",
+            initial_pose.translation.x,
+            initial_pose.translation.y,
+            initial_pose.translation.z,
+            carla_transform.location.x,
+            carla_transform.location.y,
+            carla_transform.location.z
+        );
+
+        // Log the exact transform we're about to pass to CARLA
+        tracing::info!(
+            "Calling spawn_actor with transform: loc=({:.1}, {:.1}, {:.1}), rot=(r:{:.1}, p:{:.1}, y:{:.1})",
+            carla_transform.location.x,
+            carla_transform.location.y,
+            carla_transform.location.z,
+            carla_transform.rotation.roll,
+            carla_transform.rotation.pitch,
+            carla_transform.rotation.yaw
+        );
+
+        // Spawn vehicle at the requested transform
         let actor = world
             .spawn_actor(&vehicle_bp, &carla_transform)
             .map_err(|e| BridgeError::AutowareIssue(format!("Failed to spawn vehicle: {}", e)))?;
+
+        // IMPORTANT: In synchronous mode, we must wait for a tick to allow CARLA to process
+        // the spawn. Without this, querying the actor's position immediately returns (0,0,0).
+        tracing::debug!("Waiting for tick to process spawn...");
+        world.wait_for_tick().map_err(|e| {
+            tracing::error!("Failed to wait for tick after spawn: {}", e);
+            BridgeError::CarlaIssue("Failed to wait for tick after spawning vehicle")
+        })?;
 
         let vehicle = match actor.into_kinds() {
             carla::client::ActorKind::Vehicle(v) => v,
@@ -241,8 +278,20 @@ impl CarlaVehicle {
                 }
             };
 
-            // Convert to CARLA Transform
-            let carla_transform = Transform::from_na(&na_transform);
+            // Convert ROS sensor transform to CARLA transform using centralized helper
+            let carla_transform =
+                crate::coordinate_conversion::ros_isometry_to_carla_transform(&na_transform);
+
+            tracing::info!(
+                "Sensor '{}' transform: ROS({:.3}, {:.3}, {:.3}) → CARLA({:.1}, {:.1}, {:.1})",
+                config.link_name,
+                na_transform.translation.x,
+                na_transform.translation.y,
+                na_transform.translation.z,
+                carla_transform.location.x,
+                carla_transform.location.y,
+                carla_transform.location.z
+            );
 
             // Spawn sensor attached to vehicle
             let sensor_actor = world
