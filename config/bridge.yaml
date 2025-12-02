@@ -6,7 +6,7 @@ spawn_pose:
   position:
     x: 190.77        # meters (CARLA X coordinate)
     y: -130.10       # meters (CARLA Y coordinate)
-    z: 0.0           # meters (CARLA Z coordinate, typically 0.0)
+    z: 0.3           # meters (CARLA Z coordinate, minimum 0.3m to avoid ground collision)
 
   orientation:
     yaw: 175.81      # degrees (CARLA rotation around Z-axis)
