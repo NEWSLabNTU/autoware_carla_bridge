@@ -12,3 +12,9 @@ spawn_pose:
     yaw: 175.81      # degrees (CARLA rotation around Z-axis)
     # Note: Only yaw is used for vehicle spawning
     #       Roll and pitch are set to 0 by CARLA
+
+# Direct localization publishing
+# Set to true to publish vehicle pose directly to /localization/kinematic_state
+# (bypasses Autoware localization - useful for testing)
+# Ground truth is always published to /carla/ground_truth/* for debug/evaluation
+publish_direct_localization: false

@@ -13,6 +13,12 @@ use crate::error::{BridgeError, Result};
 pub struct BridgeConfig {
     /// Initial vehicle spawn pose (mandatory)
     pub spawn_pose: SpawnPose,
+
+    /// Publish pose directly to /localization/kinematic_state (bypasses Autoware localization)
+    /// Ground truth is always published to /carla/ground_truth/* for debug/evaluation
+    /// Set to true for testing without Autoware localization
+    #[serde(default)]
+    pub publish_direct_localization: bool,
 }
 
 /// Vehicle spawn pose configuration (CARLA coordinates)
@@ -68,6 +74,14 @@ impl BridgeConfig {
             config.spawn_pose.position.y,
             config.spawn_pose.position.z,
             config.spawn_pose.orientation.yaw
+        );
+        tracing::info!(
+            "Direct localization publishing: {}",
+            if config.publish_direct_localization {
+                "enabled"
+            } else {
+                "disabled"
+            }
         );
 
         Ok(config)

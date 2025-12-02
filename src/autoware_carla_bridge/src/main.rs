@@ -1,7 +1,7 @@
 mod autoware;
 mod autoware_detection;
 mod bridge;
-mod bridge_config;
+pub mod bridge_config;
 mod carla_vehicle;
 mod clock;
 mod coordinate_conversion;
@@ -179,9 +179,14 @@ fn main() -> Result<()> {
     // Create clock publisher
     let simulator_clock = SimulatorClock::new(node.clone())?;
 
-    // === Step 3: Create Autoware coordinator and wait for Autoware ===
+    // === Step 3: Load bridge configuration ===
+    let bridge_config = bridge_config::BridgeConfig::from_file(&opts.bridge_config)?;
+    let initial_pose = bridge_config.to_isometry();
+
+    // === Step 4: Create Autoware coordinator and wait for Autoware ===
     tracing::info!("Creating Autoware coordinator...");
-    let mut autoware = autoware::Autoware::new(node.clone())?;
+    let mut autoware =
+        autoware::Autoware::new(node.clone(), bridge_config.publish_direct_localization)?;
 
     tracing::info!("Waiting for Autoware to start...");
     tracing::info!("(Start Autoware planning simulator with sample_sensor_kit)");
@@ -233,11 +238,7 @@ fn main() -> Result<()> {
         );
     }
 
-    // === Step 5: Load bridge configuration ===
-    let bridge_config = bridge_config::BridgeConfig::from_file(&opts.bridge_config)?;
-    let initial_pose = bridge_config.to_isometry();
-
-    // === Step 6: Load CARLA sensor configuration ===
+    // === Step 5: Load CARLA sensor configuration ===
     let carla_config = match sensor_config::CarlaConfig::from_file(&opts.sensor_config) {
         Ok(config) => config,
         Err(e) => {
@@ -251,7 +252,7 @@ fn main() -> Result<()> {
         }
     };
 
-    // === Step 7: Spawn vehicle and sensors in CARLA ===
+    // === Step 6: Spawn vehicle and sensors in CARLA ===
     tracing::info!("Spawning vehicle and sensors in CARLA...");
     let mut carla_vehicle = CarlaVehicle::new(
         &mut world,
@@ -269,12 +270,12 @@ fn main() -> Result<()> {
 
     tracing::info!("Vehicle and sensors spawned successfully!");
 
-    // === Step 8: Create sensor bridges ===
+    // === Step 7: Create sensor bridges ===
     tracing::info!("Creating sensor bridges...");
     let _sensor_bridges = create_sensor_bridges(node.clone(), &carla_vehicle, &autoware)?;
     tracing::info!("Created {} sensor bridges", _sensor_bridges.len());
 
-    // === Step 9: Create vehicle control bridge ===
+    // === Step 8: Create vehicle control bridge ===
     tracing::info!("Creating vehicle control bridge...");
     let vehicle_control =
         vehicle_control::VehicleControlBridge::new(node.clone(), vehicle_shared.clone())?;
@@ -400,8 +401,9 @@ fn main() -> Result<()> {
             nanosec: ((sec - sec.floor()) * 1e9) as u32,
         };
 
-        // Publish localization
-        autoware.publish_localization(
+        // Publish ground truth (debug/evaluation only)
+        // Following AWSIM convention: Autoware's localization computes pose from sensor data
+        autoware.publish_ground_truth(
             &ros_timestamp,
             &[position.x, position.y, position.z],
             &[orientation.w, orientation.i, orientation.j, orientation.k],

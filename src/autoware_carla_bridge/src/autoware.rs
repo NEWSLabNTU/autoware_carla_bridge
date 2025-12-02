@@ -33,12 +33,26 @@ pub struct Autoware {
     /// Parsed sensor configurations from URDF
     sensor_configs: Vec<SensorConfig>,
 
-    // === Localization Publishers ===
-    /// Publisher for vehicle localization (Odometry)
-    pub_localization: Arc<rclrs::Publisher<nav_msgs::msg::Odometry>>,
+    // === Pose Publishing Configuration ===
+    /// Whether to publish pose directly to /localization/kinematic_state
+    /// Ground truth is always published to /carla/ground_truth/* for debug/evaluation
+    publish_direct_localization: bool,
 
-    /// Publisher for TF transforms
-    pub_tf: Arc<rclrs::Publisher<tf2_msgs::msg::TFMessage>>,
+    // === Ground Truth Publishers (Always Active) ===
+    /// Publisher for ground truth pose (always published for debug/evaluation)
+    /// Following AWSIM convention - we provide sensor data and let Autoware's
+    /// localization compute the pose. This is always published for debugging/evaluation.
+    pub_ground_truth: Arc<rclrs::Publisher<nav_msgs::msg::Odometry>>,
+
+    /// Publisher for ground truth TF transforms (always published for debug/evaluation)
+    pub_ground_truth_tf: Arc<rclrs::Publisher<tf2_msgs::msg::TFMessage>>,
+
+    // === Direct Localization Publishers (Optional) ===
+    /// Publisher for localization pose (bypasses Autoware localization when enabled)
+    pub_localization: Option<Arc<rclrs::Publisher<nav_msgs::msg::Odometry>>>,
+
+    /// Publisher for TF transforms (bypasses Autoware TF when enabled)
+    pub_tf: Option<Arc<rclrs::Publisher<tf2_msgs::msg::TFMessage>>>,
 
     // === Vehicle Status Publishers ===
     // NOTE: These publishers are created but not yet used. They will be used in future phases
@@ -47,9 +61,13 @@ pub struct Autoware {
     pub_actuation_status: Arc<rclrs::Publisher<tier4_vehicle_msgs::msg::ActuationStatusStamped>>,
 
     /// Publisher for vehicle velocity status
+    /// NOTE: Reserved for future Phase 4+ features
+    #[allow(dead_code)]
     pub_velocity_status: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::VelocityReport>>,
 
     /// Publisher for vehicle motion state (STOPPED/STARTING/MOVING)
+    /// NOTE: Reserved for future Phase 4+ features
+    #[allow(dead_code)]
     pub_motion_state: Arc<rclrs::Publisher<autoware_adapi_v1_msgs::msg::MotionState>>,
     #[allow(dead_code)]
     pub_steering_status: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::SteeringReport>>,
@@ -93,9 +111,13 @@ pub struct Autoware {
     // === Localization State Monitoring ===
     /// Localization initialization state (from /localization/initialization_state)
     /// State values: 0=UNKNOWN, 1=UNINITIALIZED, 2=INITIALIZING, 3=INITIALIZED
+    /// NOTE: Updated by callback, reserved for future Phase 4+ features
+    #[allow(dead_code)]
     localization_init_state: Arc<std::sync::Mutex<u16>>,
 
     /// Current kinematic state from localization (from /localization/kinematic_state)
+    /// NOTE: Updated by callback, reserved for future Phase 4+ features
+    #[allow(dead_code)]
     localization_kinematic_state: Arc<std::sync::Mutex<Option<nav_msgs::msg::Odometry>>>,
 
     /// Subscription to /localization/initialization_state (kept alive)
@@ -139,30 +161,66 @@ impl Autoware {
     ///
     /// # Arguments
     /// * `node` - ROS node handle for subscriptions and publishers
+    /// * `publish_direct_localization` - Whether to publish directly to /localization/kinematic_state
+    ///   Ground truth is always published to /carla/ground_truth/*
     ///
     /// # Returns
     /// Result containing Autoware instance or error
-    pub fn new(node: rclrs::Node) -> Result<Self> {
+    pub fn new(node: rclrs::Node, publish_direct_localization: bool) -> Result<Self> {
         tracing::info!("Initializing Autoware coordinator...");
+        tracing::info!(
+            "Direct localization publishing: {}",
+            if publish_direct_localization {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
 
         // Create AutowareDetector (monitors /robot_description)
         // NOTE: Long health timeout (1 hour) because /robot_description is a latched topic
         // that's only published once at startup, not a continuous heartbeat.
         let detector = AutowareDetector::new(
             node.clone(),
-            None, // detection_timeout: use default (60s)
+            None,                                       // detection_timeout: use default (60s)
             Some(std::time::Duration::from_secs(3600)), // health_timeout: 1 hour
         )?;
 
         // Create TFBuffer (subscribes to /tf_static)
         let tf_buffer = TFBuffer::new(node.clone())?;
 
-        // Create localization publishers
-        let pub_localization = Arc::new(node.create_publisher::<nav_msgs::msg::Odometry>(
-            "/localization/kinematic_state".reliable(),
-        )?);
+        // Create ground truth publishers (always published for debug/evaluation)
+        // Following AWSIM convention: we provide sensor data and let Autoware's localization
+        // compute the pose. Ground truth is always published for debugging and evaluation.
+        let pub_ground_truth =
+            Arc::new(node.create_publisher::<nav_msgs::msg::Odometry>(
+                "/carla/ground_truth/odom".reliable(),
+            )?);
 
-        let pub_tf = Arc::new(node.create_publisher::<tf2_msgs::msg::TFMessage>("/tf".reliable())?);
+        let pub_ground_truth_tf = Arc::new(
+            node.create_publisher::<tf2_msgs::msg::TFMessage>("/carla/ground_truth/tf".reliable())?,
+        );
+
+        tracing::info!("Ground truth publishers created (always active):");
+        tracing::info!("  - /carla/ground_truth/odom (Odometry)");
+        tracing::info!("  - /carla/ground_truth/tf (TF)");
+
+        // Create direct localization publishers if enabled
+        let (pub_localization, pub_tf) = if publish_direct_localization {
+            tracing::info!(
+                "Creating direct localization publishers (bypasses Autoware localization):"
+            );
+            let loc = Arc::new(node.create_publisher::<nav_msgs::msg::Odometry>(
+                "/localization/kinematic_state".reliable(),
+            )?);
+            let tf = Arc::new(node.create_publisher::<tf2_msgs::msg::TFMessage>("/tf".reliable())?);
+            tracing::info!("  - /localization/kinematic_state (Odometry)");
+            tracing::info!("  - /tf (TF)");
+            (Some(loc), Some(tf))
+        } else {
+            tracing::info!("Autoware localization will compute pose from sensor data");
+            (None, None)
+        };
 
         // Create vehicle status publishers
         let pub_actuation_status = Arc::new(
@@ -346,7 +404,14 @@ impl Autoware {
             tf_buffer,
             sensor_configs: Vec::new(), // Will be populated by parse_sensors()
 
-            // === Localization Publishers ===
+            // === Pose Publishing Configuration ===
+            publish_direct_localization,
+
+            // === Ground Truth Publishers (Always Active) ===
+            pub_ground_truth,
+            pub_ground_truth_tf,
+
+            // === Direct Localization Publishers (Optional) ===
             pub_localization,
             pub_tf,
 
@@ -611,6 +676,9 @@ impl Autoware {
     ///
     /// # Returns
     /// Boolean indicating if initial pose is available
+    ///
+    /// NOTE: Reserved for future Phase 4+ features
+    #[allow(dead_code)]
     pub fn has_initial_pose(&self) -> bool {
         self.initial_pose.lock().unwrap().is_some()
     }
@@ -633,6 +701,9 @@ impl Autoware {
     ///
     /// # Returns
     /// Result indicating success or timeout error
+    ///
+    /// NOTE: Reserved for future Phase 4+ features
+    #[allow(dead_code)]
     pub fn wait_for_initial_pose(
         &self,
         timeout: Option<std::time::Duration>,
@@ -728,6 +799,9 @@ impl Autoware {
     ///
     /// # Returns
     /// Result containing the initial pose or error if not available
+    ///
+    /// NOTE: Reserved for future Phase 4+ features
+    #[allow(dead_code)]
     pub fn take_initial_pose(&self) -> Result<nalgebra::Isometry3<f32>> {
         self.initial_pose.lock().unwrap().take().ok_or_else(|| {
             crate::error::BridgeError::AutowareIssue("No initial pose available".to_string())
@@ -810,9 +884,16 @@ impl Autoware {
 
     // === Vehicle Status Publishing ===
 
-    /// Publish vehicle localization (odometry and TF)
+    /// Publish ground truth pose (for debugging/evaluation only)
     ///
-    /// Publishes the vehicle's pose, twist, and transform to Autoware's localization system.
+    /// Publishes the vehicle's ground truth pose and twist from CARLA.
+    /// The publishing behavior depends on the pose_publishing_mode:
+    ///
+    /// - Direct mode: Publishes to `/localization/kinematic_state` and `/tf` (main localization topics)
+    /// - GroundTruth mode: Publishes to `/carla/ground_truth/odom` and `/carla/ground_truth/tf` (debug topics)
+    ///
+    /// In GroundTruth mode, following AWSIM convention: we provide sensor data (LiDAR, GNSS, IMU)
+    /// and let Autoware's localization module (NDT + EKF) compute the vehicle pose from those sensors.
     ///
     /// # Arguments
     /// * `timestamp` - ROS timestamp for the message
@@ -823,7 +904,7 @@ impl Autoware {
     ///
     /// # Returns
     /// Result indicating success or error
-    pub fn publish_localization(
+    pub fn publish_ground_truth(
         &self,
         timestamp: &builtin_interfaces::msg::Time,
         position: &[f64; 3],
@@ -854,10 +935,7 @@ impl Autoware {
         odom.twist.twist.angular.y = angular_velocity[1];
         odom.twist.twist.angular.z = angular_velocity[2];
 
-        // Publish odometry
-        self.pub_localization.publish(&odom)?;
-
-        // Create and publish TF
+        // Create TF message
         let mut tf_msg = tf2_msgs::msg::TFMessage::default();
         let mut transform = geometry_msgs::msg::TransformStamped::default();
         transform.header.stamp = timestamp.clone();
@@ -872,7 +950,19 @@ impl Autoware {
         transform.transform.rotation.z = orientation[3];
         tf_msg.transforms.push(transform);
 
-        self.pub_tf.publish(&tf_msg)?;
+        // Always publish ground truth (for debug/evaluation)
+        self.pub_ground_truth.publish(&odom)?;
+        self.pub_ground_truth_tf.publish(&tf_msg)?;
+
+        // Also publish to direct localization topics if enabled
+        if self.publish_direct_localization {
+            if let Some(pub_loc) = &self.pub_localization {
+                pub_loc.publish(&odom)?;
+            }
+            if let Some(pub_tf) = &self.pub_tf {
+                pub_tf.publish(&tf_msg)?;
+            }
+        }
 
         Ok(())
     }
@@ -888,6 +978,9 @@ impl Autoware {
     ///
     /// # Returns
     /// Result indicating success or error
+    ///
+    /// NOTE: Reserved for future Phase 4+ features
+    #[allow(dead_code)]
     pub fn publish_zero_velocity(&self, sim_time: f64) -> Result<()> {
         let mut velocity_msg = autoware_vehicle_msgs::msg::VelocityReport::default();
 
@@ -921,6 +1014,9 @@ impl Autoware {
     ///
     /// # Returns
     /// Result indicating success or error
+    ///
+    /// NOTE: Reserved for future Phase 4+ features
+    #[allow(dead_code)]
     pub fn publish_stopped_motion_state(&self, sim_time: f64) -> Result<()> {
         let mut motion_state_msg = autoware_adapi_v1_msgs::msg::MotionState::default();
 
