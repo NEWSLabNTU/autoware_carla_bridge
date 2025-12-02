@@ -294,6 +294,42 @@ colcon list | grep autoware_vehicle_msgs
 ### Dependency Synchronization
 When using local carla-rust (`path = "..."`), match critical dependency versions (nalgebra, ndarray) to avoid type incompatibility errors.
 
+### URDF/Xacro XML Comments - CRITICAL
+
+**NEVER use colons in URDF/Xacro XML comments**
+
+ROS 2 launch validates the robot_description parameter as YAML, and colons in XML comments trigger YAML key-value syntax interpretation, causing parsing failures.
+
+**Failure Example**:
+```xml
+<!-- NOTE: This causes an error -->
+<!-- Example: This also fails -->
+<!-- Position: center at wheelbase/2 -->
+```
+
+**Error Message**:
+```
+mapping values are not allowed here
+  in "<unicode string>", line XX, column YY:
+      NOTE: This causes an error ...
+          ^
+```
+
+**Correct Usage**:
+```xml
+<!-- NOTE - This works fine -->
+<!-- Example - This also works -->
+<!-- Position - center at wheelbase/2 -->
+```
+
+**Files Affected**:
+- `src/carla_vehicle_launch/carla_vehicle_description/urdf/vehicle.xacro`
+- `src/carla_sensor_kit_launch/carla_sensor_kit_description/urdf/sensor_kit.xacro`
+
+**Impact**: robot_state_publisher crashes → no /robot_description published → bridge can't detect Autoware → vehicle fails to spawn → localization can't initialize → "The vehicle is not stopped" error
+
+**Root Cause**: ROS 2 launch system parses robot_description as YAML before passing to robot_state_publisher. Colons are interpreted as YAML mapping syntax regardless of being inside XML comments.
+
 ---
 
 ## Coding Practices
