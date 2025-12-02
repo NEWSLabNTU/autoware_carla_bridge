@@ -19,6 +19,7 @@ help:
     @echo ""
     @echo "Bridge Control:"
     @echo "  just bridge start [port]    Start bridge (default port: 2000)"
+    @echo "  just bridge restart [port]  Restart bridge"
     @echo "  just bridge stop            Stop bridge"
     @echo "  just bridge logs [args...]  View bridge logs"
     @echo "  just bridge status          Check bridge status"
@@ -114,6 +115,14 @@ bridge command *ARGS:
             echo "Use 'just bridge stop' to stop"
             ;;
 
+        restart)
+            PORT="${1:-2000}"
+            echo "=== Restarting Autoware-CARLA Bridge ==="
+            just bridge stop
+            sleep 2
+            just bridge start "$PORT"
+            ;;
+
         stop)
             if systemctl --user is-active --quiet "$UNIT_NAME"; then
                 echo "Stopping Autoware-CARLA bridge..."
@@ -137,10 +146,11 @@ bridge command *ARGS:
             ;;
 
         *)
-            echo "Usage: just bridge {start|stop|logs|status} [ARGS...]"
+            echo "Usage: just bridge {start|restart|stop|logs|status} [ARGS...]"
             echo ""
             echo "Commands:"
             echo "  start [port]       Start bridge (default port: 2000)"
+            echo "  restart [port]     Restart bridge"
             echo "  stop               Stop bridge"
             echo "  logs [args...]     View bridge logs"
             echo "  status             Check bridge status"
