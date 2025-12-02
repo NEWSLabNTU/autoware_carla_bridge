@@ -27,7 +27,7 @@ use carla::client::{ActorBase, Client};
 use carla_vehicle::CarlaVehicle;
 use clap::Parser;
 use clock::SimulatorClock;
-use error::{BridgeError, Result};
+use error::Result;
 use rclrs::CreateBasicExecutor;
 
 /// Create sensor bridges for all sensors spawned by CarlaVehicle
@@ -163,7 +163,37 @@ fn main() -> Result<()> {
         opts.carla_address,
         opts.carla_port
     );
-    let client = Client::connect(&opts.carla_address, opts.carla_port, None);
+
+    // Retry connecting to CARLA in an infinite loop
+    let client = loop {
+        match std::panic::catch_unwind(|| {
+            Client::connect(&opts.carla_address, opts.carla_port, None)
+        }) {
+            Ok(client) => {
+                // Try to access world to verify connection is working
+                match std::panic::catch_unwind(|| client.world()) {
+                    Ok(_) => {
+                        tracing::info!("Connected to CARLA successfully");
+                        break client;
+                    }
+                    Err(_) => {
+                        tracing::warn!("CARLA connection failed, retrying in 2 seconds...");
+                        std::thread::sleep(Duration::from_secs(2));
+                    }
+                }
+            }
+            Err(_) => {
+                tracing::warn!("Failed to connect to CARLA, retrying in 2 seconds...");
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        }
+
+        // Check for Ctrl-C during retry
+        if !running.load(Ordering::SeqCst) {
+            tracing::info!("Shutdown requested while connecting to CARLA");
+            return Ok(());
+        }
+    };
 
     // Load map if specified, otherwise use current map
     let mut world = if let Some(ref map_name) = opts.map_name {
@@ -173,8 +203,6 @@ fn main() -> Result<()> {
         tracing::info!("Using current CARLA map");
         client.world()
     };
-
-    tracing::info!("Connected to CARLA successfully");
 
     // Create clock publisher
     let simulator_clock = SimulatorClock::new(node.clone())?;
@@ -190,34 +218,43 @@ fn main() -> Result<()> {
 
     tracing::info!("Waiting for Autoware to start...");
     tracing::info!("(Start Autoware planning simulator with sample_sensor_kit)");
+    tracing::info!("Listening for /robot_description topic...");
 
-    let autoware_timeout = if opts.autoware_timeout == 0 {
-        None
-    } else {
-        Some(Duration::from_secs(opts.autoware_timeout))
-    };
-
-    // Wait for Autoware with timeout
+    // Wait for Autoware indefinitely (user controls timeout via Ctrl-C)
+    // Note: autoware_timeout CLI parameter is ignored for robustness
     let start_time = std::time::Instant::now();
+    let mut last_log_time = std::time::Instant::now();
+    let mut attempt_count = 0u32;
+
     loop {
         // Spin executor to process ROS callbacks (e.g., /robot_description subscription)
         executor.spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(100)));
 
         if autoware.is_alive() {
+            tracing::info!(
+                "Autoware detected after {} attempts ({:.1}s)",
+                attempt_count,
+                start_time.elapsed().as_secs_f32()
+            );
             break;
+        }
+
+        attempt_count += 1;
+
+        // Log progress every 5 seconds
+        if last_log_time.elapsed() >= Duration::from_secs(5) {
+            tracing::info!(
+                "Still waiting for Autoware... (attempt {}, {:.0}s elapsed)",
+                attempt_count,
+                start_time.elapsed().as_secs_f32()
+            );
+            tracing::info!("  Expecting /robot_description topic with URDF data");
+            last_log_time = std::time::Instant::now();
         }
 
         if !running.load(Ordering::SeqCst) {
             tracing::info!("Shutdown requested while waiting for Autoware");
             return Ok(());
-        }
-
-        if let Some(timeout) = autoware_timeout {
-            if start_time.elapsed() >= timeout {
-                return Err(BridgeError::AutowareIssue(
-                    "Timeout waiting for Autoware to start".to_string(),
-                ));
-            }
         }
     }
 
