@@ -229,33 +229,5 @@
 
   </xacro:macro>
 
-  <!-- ============================================================================ -->
-  <!-- Default Macro Invocation for Standalone Testing -->
-  <!-- ============================================================================ -->
-  <!--
-    When processed standalone (e.g., for testing or by robot_state_publisher),
-    this invokes the macro using command-line arguments:
-
-    Example: xacro sensor_kit.xacro parent:=base_link x:=0 y:=0 z:=0
-
-    When included by vehicle.xacro, the parent URDF typically invokes this macro
-    explicitly, but this default invocation ensures the URDF works standalone too.
-  -->
-  <xacro:arg name="parent" default="base_link"/>
-  <xacro:arg name="x" default="0.0"/>
-  <xacro:arg name="y" default="0.0"/>
-  <xacro:arg name="z" default="0.0"/>
-  <xacro:arg name="roll" default="0.0"/>
-  <xacro:arg name="pitch" default="0.0"/>
-  <xacro:arg name="yaw" default="0.0"/>
-
-  <xacro:sensor_kit_macro
-    parent="$(arg parent)"
-    x="$(arg x)"
-    y="$(arg y)"
-    z="$(arg z)"
-    roll="$(arg roll)"
-    pitch="$(arg pitch)"
-    yaw="$(arg yaw)"/>
 
 </robot>
