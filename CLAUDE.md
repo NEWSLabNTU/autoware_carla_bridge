@@ -30,6 +30,11 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
     - Subscribes to `/localization/kinematic_state` (receives vehicle pose)
     - Spawns vehicle when localization becomes INITIALIZED (state 3)
     - No backward compatibility with legacy `/initialpose` topic
+- ✅ **Connection robustness** (2025-12-03):
+  - Infinite retry loops for CARLA connection with panic catching
+  - Infinite wait for Autoware detection with executor spinning
+  - Graceful Ctrl-C handling during retry/wait phases
+  - Progress logging (CARLA: every 2s, Autoware: every 5s)
 - ✅ Responsive shutdown (100ms Ctrl-C exit)
 - ✅ Runtime verified with live Autoware + CARLA
 
@@ -330,6 +335,8 @@ mapping values are not allowed here
 
 **Root Cause**: ROS 2 launch system parses robot_description as YAML before passing to robot_state_publisher. Colons are interpreted as YAML mapping syntax regardless of being inside XML comments.
 
+**Fixed** (2025-12-03): Removed problematic commented-out sections (lines 232-265 in sensor_kit.xacro) that contained colon-heavy documentation about default macro invocation. Even commented XML sections can cause YAML parsing failures.
+
 ---
 
 ## Coding Practices
@@ -468,11 +475,20 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 
 ---
 
-**Last Updated**: 2025-11-23 (Session: Modern Autoware API integration)
+**Last Updated**: 2025-12-03 (Session: Connection robustness & URDF/YAML fixes)
 **Migration Status**: Phases 0-3 Complete + Phase 4 Vehicle Spawning (55%)
 **Autonomous Driving**: ✅ End-to-end working (Python scripts + Rust bridge with modern Autoware APIs)
 **Recent Changes**:
-- ✅ Bridge now uses modern Autoware localization API exclusively
-- ✅ Removed backward compatibility with legacy `/initialpose` topic
-- ✅ Vehicle spawning triggered by localization state transitions
-- ✅ End-to-end autonomous driving test confirmed working (1.64m final distance to goal)
+- ✅ **Connection robustness improvements** (2025-12-03):
+  - Infinite retry loops for CARLA connection with panic catching (main.rs:167-196)
+  - Infinite wait for Autoware detection with executor spinning (main.rs:223-259)
+  - Graceful Ctrl-C handling during all wait phases
+  - Progress logging every 2-5 seconds
+- ✅ **URDF/YAML parsing fixes** (2025-12-03):
+  - Fixed duplicate link error in sensor_kit.xacro
+  - Removed colon-containing XML comments causing YAML parsing failures
+  - Demo environment stability verified (all services running)
+- ✅ Bridge now uses modern Autoware localization API exclusively (2025-11-23)
+- ✅ Removed backward compatibility with legacy `/initialpose` topic (2025-11-23)
+- ✅ Vehicle spawning triggered by localization state transitions (2025-11-23)
+- ✅ End-to-end autonomous driving test confirmed working (2025-11-23)
