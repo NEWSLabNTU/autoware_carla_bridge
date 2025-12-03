@@ -338,15 +338,13 @@ monitor command *ARGS:
                 exit 1
             fi
 
-            # Build the binary first
-            echo "Building manual_control..."
-            export CARLA_VERSION={{carla_version}}
-            cargo build --manifest-path src/manual_control/Cargo.toml --release 2>&1 | grep -E "(Compiling|Finished|error)" || true
+            # Binary path from colcon build
+            BINARY="$MONITOR_DIR/install/manual_control/lib/manual_control/manual_control"
 
             # Check if binary exists
-            if [ ! -f "src/manual_control/target/release/manual_control" ]; then
-                echo "Error: Failed to build manual_control binary"
-                echo "Try running: cargo build --manifest-path src/manual_control/Cargo.toml --release"
+            if [ ! -f "$BINARY" ]; then
+                echo "Error: manual_control binary not found at $BINARY"
+                echo "Run 'just build' first"
                 exit 1
             fi
 
@@ -359,14 +357,14 @@ monitor command *ARGS:
             echo "Starting CARLA vehicle monitor GUI..."
             echo "Display: $DISPLAY"
 
-            # Start monitor using systemd-run - run the binary directly
+            # Start monitor using systemd-run
             systemd-run --user \
                 --unit="$UNIT_NAME" \
                 --working-directory="$MONITOR_DIR" \
                 bash -c "\
                     export DISPLAY=$DISPLAY && \
                     export CARLA_VERSION={{carla_version}} && \
-                    ./src/manual_control/target/release/manual_control"
+                    $BINARY"
 
             echo "Vehicle monitor started"
             echo "Use 'just monitor status' to check status"
@@ -529,19 +527,22 @@ demo command *ARGS:
             ;;
 
         status)
-            echo "=== Demo Environment Status ==="
-            echo ""
-            echo "--- CARLA Simulator ---"
-            systemctl --user status "$CARLA_UNIT" --no-pager || echo "CARLA is not running"
-            echo ""
-            echo "--- Demo Scenario (Ticker) ---"
-            systemctl --user status "$SCENARIO_UNIT" --no-pager || echo "Scenario is not running"
-            echo ""
-            echo "--- Autoware Simulator ---"
-            systemctl --user status "$AUTOWARE_UNIT" --no-pager || echo "Autoware is not running"
-            echo ""
-            echo "--- Autoware-CARLA Bridge ---"
-            systemctl --user status "$BRIDGE_UNIT" --no-pager || echo "Bridge is not running"
+            # One-line status for each service
+            get_status() {
+                local unit="$1"
+                local name="$2"
+                local state=$(systemctl --user is-active "$unit" 2>/dev/null || echo "inactive")
+                case "$state" in
+                    active)   printf "%-20s \033[32m●\033[0m %s\n" "$name" "running" ;;
+                    failed)   printf "%-20s \033[31m●\033[0m %s\n" "$name" "failed" ;;
+                    *)        printf "%-20s \033[90m○\033[0m %s\n" "$name" "stopped" ;;
+                esac
+            }
+            echo "=== Demo Status ==="
+            get_status "$CARLA_UNIT" "CARLA"
+            get_status "$SCENARIO_UNIT" "Scenario"
+            get_status "$AUTOWARE_UNIT" "Autoware"
+            get_status "$BRIDGE_UNIT" "Bridge"
             ;;
 
         logs)
