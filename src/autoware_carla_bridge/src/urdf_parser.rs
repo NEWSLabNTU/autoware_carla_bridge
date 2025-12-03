@@ -119,10 +119,18 @@ fn classify_sensor_type(link_name: &str) -> Option<SensorType> {
     }
 
     // LiDAR patterns
+    // Note: "top", "left", "right" match Autoware's standard LiDAR naming convention
+    // (e.g., /sensing/lidar/top/, /sensing/lidar/left/, /sensing/lidar/right/)
     if name_lower.contains("lidar")
         || name_lower.contains("velodyne")
         || name_lower.contains("pointcloud")
         || name_lower.contains("laser")
+        || name_lower == "top"
+        || name_lower == "top_base_link"
+        || name_lower == "left"
+        || name_lower == "left_base_link"
+        || name_lower == "right"
+        || name_lower == "right_base_link"
     {
         return Some(SensorType::LidarRayCast);
     }
