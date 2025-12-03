@@ -3,10 +3,11 @@
 CARLA Demo Scenario
 
 This script manages the CARLA simulation for the Autoware-CARLA bridge demo.
-It connects to CARLA, loads the Town01 map, sets asynchronous mode, and acts
-as the simulation ticker when in synchronous mode.
+It connects to CARLA, loads the Town01 map, and configures asynchronous mode
+for maximum simulation performance.
 
-The script runs in a loop and reports the number of actors in the world.
+In asynchronous mode, CARLA runs as fast as possible without waiting for
+client ticks, which provides higher frame rates for sensor data.
 """
 
 import argparse
@@ -89,15 +90,15 @@ class DemoScenario:
                 print(f"Map {self.map_name} already loaded")
                 self.world = current_world
 
-            # Set to synchronous mode with fixed time step
-            # This allows the bridge to control ticking via wait_for_tick()
+            # Set to asynchronous mode for maximum performance
+            # CARLA runs as fast as possible, bridge reads data as available
             settings = self.world.get_settings()
-            settings.synchronous_mode = True
-            settings.fixed_delta_seconds = 0.05  # 20 Hz
+            settings.synchronous_mode = False
+            settings.fixed_delta_seconds = None  # Variable time step
             self.world.apply_settings(settings)
 
-            print("✓ Configured CARLA in synchronous mode (20 Hz)")
-            print("  Bridge will wait for ticks, this script will provide them")
+            print("✓ Configured CARLA in asynchronous mode")
+            print("  CARLA will run at maximum speed")
 
             return True
 
@@ -106,41 +107,33 @@ class DemoScenario:
             return False
 
     def run(self) -> None:
-        """Run the scenario loop"""
-        print("\n=== Demo Scenario Running ===")
+        """Run the scenario monitoring loop"""
+        print("\n=== Demo Scenario Running (Async Mode) ===")
         print("Press Ctrl+C to stop\n")
 
-        tick_count = 0
         try:
             while True:
-                # Tick the simulation to advance one frame
-                # This unblocks any wait_for_tick() calls in the bridge
-                self.world.tick()
-                tick_count += 1
+                # In async mode, just monitor the world state
+                actors = self.world.get_actors()
+                vehicles = actors.filter('vehicle.*')
+                sensors = actors.filter('sensor.*')
+                walkers = actors.filter('walker.*')
 
-                # Get world state and print status every second (20 ticks)
-                if tick_count % 20 == 0:
-                    actors = self.world.get_actors()
-                    vehicles = actors.filter('vehicle.*')
-                    sensors = actors.filter('sensor.*')
-                    walkers = actors.filter('walker.*')
+                # Get vehicle position if available
+                vehicle_pos_str = ""
+                if len(vehicles) > 0:
+                    vehicle = vehicles[0]
+                    transform = vehicle.get_transform()
+                    loc = transform.location
+                    vehicle_pos_str = f" | Pos: ({loc.x:.1f}, {loc.y:.1f}, {loc.z:.1f})"
 
-                    # Get vehicle position if available
-                    vehicle_pos_str = ""
-                    if len(vehicles) > 0:
-                        vehicle = vehicles[0]
-                        transform = vehicle.get_transform()
-                        loc = transform.location
-                        vehicle_pos_str = f" | Pos: ({loc.x:.1f}, {loc.y:.1f}, {loc.z:.1f})"
+                print(f"[Monitor] Actors: {len(actors):3d} | "
+                      f"Vehicles: {len(vehicles):2d} | "
+                      f"Sensors: {len(sensors):2d} | "
+                      f"Walkers: {len(walkers):2d}{vehicle_pos_str}")
 
-                    print(f"[Tick {tick_count:5d}] Actors: {len(actors):3d} | "
-                          f"Vehicles: {len(vehicles):2d} | "
-                          f"Sensors: {len(sensors):2d} | "
-                          f"Walkers: {len(walkers):2d}{vehicle_pos_str}")
-
-                # Small delay to control tick rate
-                # The actual rate is controlled by fixed_delta_seconds
-                time.sleep(0.05)
+                # Status update every second
+                time.sleep(1.0)
 
         except KeyboardInterrupt:
             print("\n\n=== Stopping Demo Scenario ===")
