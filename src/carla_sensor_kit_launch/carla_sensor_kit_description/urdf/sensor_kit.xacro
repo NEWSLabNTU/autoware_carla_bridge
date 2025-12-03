@@ -16,11 +16,14 @@
     - "imu", "inertial" becomes IMU
     - "gnss", "gps" becomes GNSS
 
-    Sensor List (awsim_labs configuration)
-    - 3 LiDARs (velodyne_top, velodyne_left, velodyne_right)
-    - 8 Cameras (traffic_light_right/left, camera0-5)
+    Sensor List (MINIMAL configuration for performance)
+    - 1 LiDAR (velodyne_top only)
+    - 1 Camera (camera0 front only)
     - 1 GNSS (gnss_link)
     - 1 IMU (tamagawa/imu_link)
+
+    NOTE - Reduced from full awsim_labs config (3 LiDARs, 8 cameras) to improve
+    CARLA tick rate. See docs/issues-auto-button-disabled.md for details.
 
     Physical Simulation
     Unlike real sensor kits, these definitions are metadata-only. CARLA handles
@@ -49,6 +52,7 @@
     <!-- ========================================================================== -->
     <!-- LiDAR Sensors -->
     <!-- ========================================================================== -->
+    <!-- MINIMAL CONFIG - Only top LiDAR enabled for performance -->
 
     <!-- Top LiDAR (VLS-128 equivalent) - Primary 360° coverage -->
     <joint name="velodyne_top_base_link_joint" type="fixed">
@@ -72,94 +76,23 @@
     </joint>
     <link name="velodyne_top"/>
 
-    <!-- Left LiDAR (VLP-16 equivalent) - Left side coverage -->
+    <!-- DISABLED - Left and Right LiDARs removed for performance
     <joint name="velodyne_left_base_link_joint" type="fixed">
-      <origin
-        xyz="${calibration['sensor_kit_base_link']['velodyne_left_base_link']['x']}
-             ${calibration['sensor_kit_base_link']['velodyne_left_base_link']['y']}
-             ${calibration['sensor_kit_base_link']['velodyne_left_base_link']['z']}"
-        rpy="${calibration['sensor_kit_base_link']['velodyne_left_base_link']['roll']}
-             ${calibration['sensor_kit_base_link']['velodyne_left_base_link']['pitch']}
-             ${calibration['sensor_kit_base_link']['velodyne_left_base_link']['yaw']}"/>
-      <parent link="sensor_kit_base_link"/>
-      <child link="velodyne_left_base_link"/>
+      ...
     </joint>
-    <link name="velodyne_left_base_link"/>
-
-    <joint name="velodyne_left_joint" type="fixed">
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <parent link="velodyne_left_base_link"/>
-      <child link="velodyne_left"/>
-    </joint>
-    <link name="velodyne_left"/>
-
-    <!-- Right LiDAR (VLP-16 equivalent) - Right side coverage -->
     <joint name="velodyne_right_base_link_joint" type="fixed">
-      <origin
-        xyz="${calibration['sensor_kit_base_link']['velodyne_right_base_link']['x']}
-             ${calibration['sensor_kit_base_link']['velodyne_right_base_link']['y']}
-             ${calibration['sensor_kit_base_link']['velodyne_right_base_link']['z']}"
-        rpy="${calibration['sensor_kit_base_link']['velodyne_right_base_link']['roll']}
-             ${calibration['sensor_kit_base_link']['velodyne_right_base_link']['pitch']}
-             ${calibration['sensor_kit_base_link']['velodyne_right_base_link']['yaw']}"/>
-      <parent link="sensor_kit_base_link"/>
-      <child link="velodyne_right_base_link"/>
+      ...
     </joint>
-    <link name="velodyne_right_base_link"/>
-
-    <joint name="velodyne_right_joint" type="fixed">
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <parent link="velodyne_right_base_link"/>
-      <child link="velodyne_right"/>
-    </joint>
-    <link name="velodyne_right"/>
+    -->
 
     <!-- ========================================================================== -->
     <!-- Camera Sensors -->
     <!-- ========================================================================== -->
+    <!-- MINIMAL CONFIG - Only camera0 (front) enabled for performance -->
 
-    <!-- Traffic Light Recognition Cameras -->
-    <joint name="traffic_light_right_camera_link_joint" type="fixed">
-      <origin
-        xyz="${calibration['sensor_kit_base_link']['traffic_light_right_camera/camera_link']['x']}
-             ${calibration['sensor_kit_base_link']['traffic_light_right_camera/camera_link']['y']}
-             ${calibration['sensor_kit_base_link']['traffic_light_right_camera/camera_link']['z']}"
-        rpy="${calibration['sensor_kit_base_link']['traffic_light_right_camera/camera_link']['roll']}
-             ${calibration['sensor_kit_base_link']['traffic_light_right_camera/camera_link']['pitch']}
-             ${calibration['sensor_kit_base_link']['traffic_light_right_camera/camera_link']['yaw']}"/>
-      <parent link="sensor_kit_base_link"/>
-      <child link="traffic_light_right_camera/camera_link"/>
-    </joint>
-    <link name="traffic_light_right_camera/camera_link"/>
+    <!-- DISABLED - Traffic Light Recognition Cameras removed for performance -->
 
-    <joint name="traffic_light_right_camera_optical_link_joint" type="fixed">
-      <origin xyz="0 0 0" rpy="-1.5707963267948966 0 -1.5707963267948966"/>
-      <parent link="traffic_light_right_camera/camera_link"/>
-      <child link="traffic_light_right_camera/camera_optical_link"/>
-    </joint>
-    <link name="traffic_light_right_camera/camera_optical_link"/>
-
-    <joint name="traffic_light_left_camera_link_joint" type="fixed">
-      <origin
-        xyz="${calibration['sensor_kit_base_link']['traffic_light_left_camera/camera_link']['x']}
-             ${calibration['sensor_kit_base_link']['traffic_light_left_camera/camera_link']['y']}
-             ${calibration['sensor_kit_base_link']['traffic_light_left_camera/camera_link']['z']}"
-        rpy="${calibration['sensor_kit_base_link']['traffic_light_left_camera/camera_link']['roll']}
-             ${calibration['sensor_kit_base_link']['traffic_light_left_camera/camera_link']['pitch']}
-             ${calibration['sensor_kit_base_link']['traffic_light_left_camera/camera_link']['yaw']}"/>
-      <parent link="sensor_kit_base_link"/>
-      <child link="traffic_light_left_camera/camera_link"/>
-    </joint>
-    <link name="traffic_light_left_camera/camera_link"/>
-
-    <joint name="traffic_light_left_camera_optical_link_joint" type="fixed">
-      <origin xyz="0 0 0" rpy="-1.5707963267948966 0 -1.5707963267948966"/>
-      <parent link="traffic_light_left_camera/camera_link"/>
-      <child link="traffic_light_left_camera/camera_optical_link"/>
-    </joint>
-    <link name="traffic_light_left_camera/camera_optical_link"/>
-
-    <!-- Surround View Cameras (camera0-5) -->
+    <!-- Surround View Cameras - Only camera0 enabled -->
     <xacro:macro name="surround_camera" params="name">
       <!-- Build the calibration key name -->
       <xacro:property name="camera_link_name" value="${name}/camera_link"/>
@@ -186,12 +119,15 @@
       <link name="${name}/camera_optical_link"/>
     </xacro:macro>
 
+    <!-- Only front camera enabled -->
     <xacro:surround_camera name="camera0"/>
+    <!-- DISABLED - camera1-5 removed for performance
     <xacro:surround_camera name="camera1"/>
     <xacro:surround_camera name="camera2"/>
     <xacro:surround_camera name="camera3"/>
     <xacro:surround_camera name="camera4"/>
     <xacro:surround_camera name="camera5"/>
+    -->
 
     <!-- ========================================================================== -->
     <!-- GNSS Sensor -->
