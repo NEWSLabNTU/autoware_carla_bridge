@@ -716,8 +716,11 @@ impl Autoware {
         tracing::info!("(Initialize via /api/localization/initialize service)");
 
         let start = std::time::Instant::now();
+        let loop_duration = std::time::Duration::from_millis(50); // 20Hz
 
         loop {
+            let loop_start = std::time::Instant::now();
+
             // Check for shutdown request
             if !running.load(std::sync::atomic::Ordering::SeqCst) {
                 tracing::info!("Shutdown requested while waiting for initial pose");
@@ -726,16 +729,15 @@ impl Autoware {
                 ));
             }
 
-            // Tick CARLA to advance simulation time (synchronous mode)
-            // This actively drives the simulation forward
-            world.tick();
+            // Wait for next tick (sync mode) or timeout (async mode)
+            let _ = world.wait_for_tick_or_timeout(loop_duration);
 
             // Get current simulation time from CARLA
             let snapshot = world.snapshot();
             let timestamp = snapshot.timestamp();
             let sim_time = timestamp.elapsed_seconds;
 
-            // Publish clock to advance ROS simulation time
+            // Publish clock
             if let Err(e) = sim_clock.publish_clock(Some(sim_time)) {
                 tracing::warn!("Failed to publish clock: {}", e);
             }
@@ -773,6 +775,13 @@ impl Autoware {
                         "Timeout waiting for initial pose".to_string(),
                     ));
                 }
+            }
+
+            // Rate limiting: sleep until next scheduled iteration
+            let next_iteration = loop_start + loop_duration;
+            let now = std::time::Instant::now();
+            if next_iteration > now {
+                std::thread::sleep(next_iteration - now);
             }
         }
     }

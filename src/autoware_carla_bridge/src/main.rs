@@ -320,14 +320,18 @@ fn main() -> Result<()> {
 
     tracing::info!("=== Bridge running ===");
 
-    // Track consecutive timeouts to detect CARLA connection issues
-    // NOTE: Higher threshold (60s) to account for CARLA initialization time after spawning sensors.
-    // Spawning 26 sensors can cause CARLA to pause for 30-60 seconds while setting up.
-    let mut consecutive_timeouts = 0;
-    const MAX_CONSECUTIVE_TIMEOUTS: u32 = 60;
+    // Main loop timing: 20Hz (50ms per iteration)
+    // Used for rate limiting in async mode
+    const LOOP_RATE_HZ: u64 = 20;
+    let loop_duration = Duration::from_millis(1000 / LOOP_RATE_HZ);
 
     // === Main Loop ===
+    // Works in both sync and async modes:
+    // - Sync mode: wait_for_tick blocks until CARLA ticks
+    // - Async mode: wait_for_tick times out, rate limiting prevents busy loop
     while running.load(Ordering::SeqCst) {
+        let loop_start = std::time::Instant::now();
+
         // Check Autoware health
         autoware.health_check();
         if !autoware.is_alive() {
@@ -356,25 +360,9 @@ fn main() -> Result<()> {
             break;
         }
 
-        // Wait for next CARLA tick with short timeout to allow responsive shutdown
-        match world.wait_for_tick_or_timeout(Duration::from_secs(1)) {
-            Some(_) => {
-                consecutive_timeouts = 0;
-            }
-            None => {
-                // Timeout - check if we should continue waiting
-                consecutive_timeouts += 1;
-
-                if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS {
-                    tracing::error!(
-                        "Reached {} consecutive timeouts. CARLA may be unresponsive.",
-                        MAX_CONSECUTIVE_TIMEOUTS
-                    );
-                    break;
-                }
-                continue;
-            }
-        }
+        // Wait for next CARLA tick (sync mode) or timeout (async mode)
+        // Short timeout allows responsive shutdown and works for async mode
+        let _ = world.wait_for_tick_or_timeout(loop_duration);
 
         // Get current simulation time
         let snapshot = world.snapshot();
@@ -450,6 +438,14 @@ fn main() -> Result<()> {
 
         // Publish vehicle status (velocity, steering, control mode)
         vehicle_control.publish_status(sec)?;
+
+        // Rate limiting: sleep until next scheduled iteration
+        // This prevents timing drift from accumulating
+        let next_iteration = loop_start + loop_duration;
+        let now = std::time::Instant::now();
+        if next_iteration > now {
+            std::thread::sleep(next_iteration - now);
+        }
     }
 
     tracing::info!("Cleaning up...");

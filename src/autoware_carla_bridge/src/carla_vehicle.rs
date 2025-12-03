@@ -134,13 +134,10 @@ impl CarlaVehicle {
             .spawn_actor(&vehicle_bp, &carla_transform)
             .map_err(|e| BridgeError::AutowareIssue(format!("Failed to spawn vehicle: {}", e)))?;
 
-        // IMPORTANT: In synchronous mode, we must wait for a tick to allow CARLA to process
-        // the spawn. Without this, querying the actor's position immediately returns (0,0,0).
-        tracing::debug!("Waiting for tick to process spawn...");
-        world.wait_for_tick().map_err(|e| {
-            tracing::error!("Failed to wait for tick after spawn: {}", e);
-            BridgeError::CarlaIssue("Failed to wait for tick after spawning vehicle")
-        })?;
+        // Wait for CARLA to process the spawn before querying actor state
+        // Works for both sync mode (waits for tick) and async mode (times out after 100ms)
+        tracing::debug!("Waiting for CARLA to process spawn...");
+        let _ = world.wait_for_tick_or_timeout(std::time::Duration::from_millis(100));
 
         let vehicle = match actor.into_kinds() {
             carla::client::ActorKind::Vehicle(v) => v,
