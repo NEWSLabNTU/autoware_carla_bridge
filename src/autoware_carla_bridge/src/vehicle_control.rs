@@ -19,11 +19,13 @@ use std::sync::{Arc, Mutex};
 /// - Publishes `/vehicle/status/velocity_status` (VelocityReport)
 /// - Publishes `/vehicle/status/steering_status` (SteeringReport)
 /// - Publishes `/vehicle/status/control_mode` (ControlModeReport)
+/// - Publishes `/vehicle/status/gear_status` (GearReport)
 pub struct VehicleControlBridge {
     // Publishers
     velocity_pub: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::VelocityReport>>,
     steering_pub: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::SteeringReport>>,
     control_mode_pub: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::ControlModeReport>>,
+    gear_pub: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::GearReport>>,
 
     // Subscriber stored to keep it alive
     _control_sub: Arc<rclrs::Subscription<tier4_vehicle_msgs::msg::ActuationCommandStamped>>,
@@ -49,6 +51,8 @@ impl VehicleControlBridge {
         let control_mode_pub =
             Arc::new(node.create_publisher("/vehicle/status/control_mode".reliable())?);
 
+        let gear_pub = Arc::new(node.create_publisher("/vehicle/status/gear_status".reliable())?);
+
         // Create control command subscriber
         let vehicle_for_callback = vehicle.clone();
         let control_sub = Arc::new(node.create_subscription(
@@ -65,11 +69,13 @@ impl VehicleControlBridge {
         tracing::info!("  Publishing: /vehicle/status/velocity_status");
         tracing::info!("  Publishing: /vehicle/status/steering_status");
         tracing::info!("  Publishing: /vehicle/status/control_mode");
+        tracing::info!("  Publishing: /vehicle/status/gear_status");
 
         Ok(Self {
             velocity_pub,
             steering_pub,
             control_mode_pub,
+            gear_pub,
             _control_sub: control_sub,
             vehicle,
         })
@@ -181,11 +187,21 @@ impl VehicleControlBridge {
 
             // Publish ControlModeReport (always AUTONOMOUS in simulation)
             let control_mode = autoware_vehicle_msgs::msg::ControlModeReport {
-                stamp: ros_timestamp,
+                stamp: ros_timestamp.clone(),
                 mode: 1, // AUTONOMOUS = 1
             };
 
             self.control_mode_pub.publish(&control_mode)?;
+
+            // Publish GearReport (always DRIVE for forward motion)
+            // CARLA VehicleControl has a 'reverse' field, but for simulation
+            // we default to DRIVE gear as Autoware expects this for autonomous mode
+            let gear_report = autoware_vehicle_msgs::msg::GearReport {
+                stamp: ros_timestamp,
+                report: autoware_vehicle_msgs::msg::GearReport::DRIVE,
+            };
+
+            self.gear_pub.publish(&gear_report)?;
 
             tracing::trace!(
                 "Published vehicle status: vel={:.2} m/s, steer={:.3} rad",
