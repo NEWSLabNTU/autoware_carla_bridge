@@ -211,10 +211,21 @@ fn main() -> Result<()> {
     let bridge_config = bridge_config::BridgeConfig::from_file(&opts.bridge_config)?;
     let initial_pose = bridge_config.to_isometry();
 
+    // Prepare spawn pose in ROS coordinates for auto-init if enabled
+    let spawn_pose_ros = if bridge_config.auto_initialize_localization {
+        Some(bridge_config.to_ros_pose_with_covariance())
+    } else {
+        None
+    };
+
     // === Step 4: Create Autoware coordinator and wait for Autoware ===
     tracing::info!("Creating Autoware coordinator...");
-    let mut autoware =
-        autoware::Autoware::new(node.clone(), bridge_config.publish_direct_localization)?;
+    let mut autoware = autoware::Autoware::new(
+        node.clone(),
+        bridge_config.publish_direct_localization,
+        bridge_config.auto_initialize_localization,
+        spawn_pose_ros,
+    )?;
 
     tracing::info!("Waiting for Autoware to start...");
     tracing::info!("(Start Autoware planning simulator with sample_sensor_kit)");
@@ -371,6 +382,34 @@ fn main() -> Result<()> {
 
         // Publish clock
         simulator_clock.publish_clock(Some(sec))?;
+
+        // Spin executor to process ROS callbacks (subscriptions)
+        executor.spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(10)));
+
+        // === Auto-initialization for NDT localization ===
+        // Publish zero velocity and motion state (required for pose_initializer)
+        if let Err(e) = autoware.publish_zero_velocity(sec as f64) {
+            tracing::debug!("Failed to publish zero velocity: {}", e);
+        }
+        if let Err(e) = autoware.publish_stopped_motion_state(sec as f64) {
+            tracing::debug!("Failed to publish motion state: {}", e);
+        }
+
+        // Publish GNSS pose (bypasses gnss_poser for local projector maps)
+        // This provides the initial pose to pose_initializer for NDT alignment
+        if let Err(e) = autoware.publish_gnss_pose(sec as f64) {
+            tracing::debug!("Failed to publish GNSS pose: {}", e);
+        }
+
+        // Check if we should trigger localization init
+        if autoware.increment_localization_warmup() {
+            if let Err(e) = autoware.trigger_localization_init(sec as f64) {
+                tracing::warn!("Failed to trigger localization init: {}", e);
+            }
+        }
+
+        // Update localization init status from subscription
+        autoware.update_localization_init_status();
 
         // Get vehicle transform and velocity from CARLA
         let transform = vehicle.transform();

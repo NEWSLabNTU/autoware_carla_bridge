@@ -6,10 +6,25 @@ use rclrs::IntoPrimitiveOptions;
 use crate::{
     autoware_detection::AutowareDetector,
     bridge::sensor_bridge::SensorType,
-    error::Result,
+    error::{BridgeError, Result},
     tf_bridge::TFBuffer,
     urdf_parser::{parse_urdf_sensors, SensorConfig},
 };
+
+/// Tracks localization initialization state for auto-init feature
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalizationInitStatus {
+    /// Not started - waiting for warmup
+    Pending,
+    /// Warmup in progress
+    WarmingUp { ticks: u32 },
+    /// Service call initiated
+    Requested,
+    /// Successfully initialized
+    Initialized,
+    /// Failed to initialize
+    Failed,
+}
 
 /// Main Autoware ROS communication coordinator
 ///
@@ -37,6 +52,23 @@ pub struct Autoware {
     /// Whether to publish pose directly to /localization/kinematic_state
     /// Ground truth is always published to /carla/ground_truth/* for debug/evaluation
     publish_direct_localization: bool,
+
+    /// Whether to auto-initialize localization via service call
+    auto_initialize_localization: bool,
+
+    /// Service client for localization initialization
+    localization_init_client:
+        Option<Arc<rclrs::Client<autoware_adapi_v1_msgs::srv::InitializeLocalization>>>,
+
+    /// Auto-initialization status
+    localization_init_status: std::sync::Mutex<LocalizationInitStatus>,
+
+    /// Spawn pose for auto-initialization (converted to ROS coordinates)
+    spawn_pose_ros: Option<geometry_msgs::msg::PoseWithCovarianceStamped>,
+
+    /// Publisher for GNSS pose (bypasses gnss_poser for local projector maps)
+    /// Published to /sensing/gnss/pose_with_covariance for pose_initializer
+    pub_gnss_pose: Option<Arc<rclrs::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>>>,
 
     // === Ground Truth Publishers (Always Active) ===
     /// Publisher for ground truth pose (always published for debug/evaluation)
@@ -163,14 +195,29 @@ impl Autoware {
     /// * `node` - ROS node handle for subscriptions and publishers
     /// * `publish_direct_localization` - Whether to publish directly to /localization/kinematic_state
     ///   Ground truth is always published to /carla/ground_truth/*
+    /// * `auto_initialize_localization` - Whether to auto-initialize via service call
+    /// * `spawn_pose_ros` - Optional spawn pose in ROS coordinates for auto-initialization
     ///
     /// # Returns
     /// Result containing Autoware instance or error
-    pub fn new(node: rclrs::Node, publish_direct_localization: bool) -> Result<Self> {
+    pub fn new(
+        node: rclrs::Node,
+        publish_direct_localization: bool,
+        auto_initialize_localization: bool,
+        spawn_pose_ros: Option<geometry_msgs::msg::PoseWithCovarianceStamped>,
+    ) -> Result<Self> {
         tracing::info!("Initializing Autoware coordinator...");
         tracing::info!(
             "Direct localization publishing: {}",
             if publish_direct_localization {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+        tracing::info!(
+            "Auto-initialize localization: {}",
+            if auto_initialize_localization {
                 "enabled"
             } else {
                 "disabled"
@@ -220,6 +267,33 @@ impl Autoware {
         } else {
             tracing::info!("Autoware localization will compute pose from sensor data");
             (None, None)
+        };
+
+        // Create localization init service client if auto-init is enabled
+        let localization_init_client = if auto_initialize_localization {
+            tracing::info!("Creating localization init service client:");
+            tracing::info!("  - /api/localization/initialize");
+            Some(Arc::new(
+                node.create_client::<autoware_adapi_v1_msgs::srv::InitializeLocalization>(
+                    "/api/localization/initialize",
+                )?,
+            ))
+        } else {
+            None
+        };
+
+        // Create GNSS pose publisher if auto-init is enabled
+        // This bypasses gnss_poser which fails with local projector type maps
+        let pub_gnss_pose = if auto_initialize_localization {
+            tracing::info!("Creating GNSS pose publisher (bypasses gnss_poser for local maps):");
+            tracing::info!("  - /sensing/gnss/pose_with_covariance");
+            Some(Arc::new(
+                node.create_publisher::<geometry_msgs::msg::PoseWithCovarianceStamped>(
+                    "/sensing/gnss/pose_with_covariance".reliable(),
+                )?,
+            ))
+        } else {
+            None
         };
 
         // Create vehicle status publishers
@@ -406,6 +480,11 @@ impl Autoware {
 
             // === Pose Publishing Configuration ===
             publish_direct_localization,
+            auto_initialize_localization,
+            localization_init_client,
+            localization_init_status: std::sync::Mutex::new(LocalizationInitStatus::Pending),
+            spawn_pose_ros,
+            pub_gnss_pose,
 
             // === Ground Truth Publishers (Always Active) ===
             pub_ground_truth,
@@ -1042,5 +1121,216 @@ impl Autoware {
         self.pub_motion_state.publish(&motion_state_msg)?;
 
         Ok(())
+    }
+
+    /// Publish GNSS pose for localization initialization
+    ///
+    /// This bypasses gnss_poser (which fails with local projector type maps)
+    /// by publishing the spawn pose directly to /sensing/gnss/pose_with_covariance.
+    /// The pose_initializer subscribes to this topic to get the initial GNSS pose
+    /// for NDT alignment.
+    ///
+    /// This should be called during the warmup phase before triggering localization init.
+    ///
+    /// # Arguments
+    /// * `sim_time` - CARLA simulation time in seconds
+    ///
+    /// # Returns
+    /// Result indicating success or error
+    pub fn publish_gnss_pose(&self, sim_time: f64) -> Result<()> {
+        // Only publish if auto-init is enabled and we have a publisher
+        let publisher = match &self.pub_gnss_pose {
+            Some(p) => p,
+            None => return Ok(()), // Auto-init disabled, nothing to do
+        };
+
+        let spawn_pose = match &self.spawn_pose_ros {
+            Some(p) => p,
+            None => return Ok(()), // No spawn pose configured
+        };
+
+        // Clone and update timestamp
+        let mut msg = spawn_pose.clone();
+        msg.header.stamp.sec = sim_time.floor() as i32;
+        msg.header.stamp.nanosec = (sim_time.fract() * 1_000_000_000_f64) as u32;
+
+        publisher.publish(&msg)?;
+
+        Ok(())
+    }
+
+    // === Auto-Initialization Methods ===
+
+    /// Get the current localization auto-init status
+    #[allow(dead_code)]
+    pub fn get_localization_init_status(&self) -> LocalizationInitStatus {
+        *self.localization_init_status.lock().unwrap()
+    }
+
+    /// Increment the warmup counter for localization auto-initialization
+    ///
+    /// This should be called once per main loop iteration. After sufficient
+    /// warmup ticks (to allow sensors to start publishing), the service
+    /// call will be triggered.
+    ///
+    /// Returns true if the service call should be triggered this tick.
+    pub fn increment_localization_warmup(&self) -> bool {
+        if !self.auto_initialize_localization {
+            return false;
+        }
+
+        let mut status = self.localization_init_status.lock().unwrap();
+        match *status {
+            LocalizationInitStatus::Pending => {
+                *status = LocalizationInitStatus::WarmingUp { ticks: 1 };
+                false
+            }
+            LocalizationInitStatus::WarmingUp { ticks } => {
+                // Wait for 100 ticks (~5 seconds at 20Hz) before triggering
+                const WARMUP_TICKS: u32 = 100;
+                if ticks >= WARMUP_TICKS {
+                    tracing::info!(
+                        "Localization warmup complete ({} ticks), triggering initialization",
+                        ticks
+                    );
+                    *status = LocalizationInitStatus::Requested;
+                    true
+                } else {
+                    *status = LocalizationInitStatus::WarmingUp { ticks: ticks + 1 };
+                    if ticks % 20 == 0 {
+                        tracing::debug!("Localization warmup: {}/{} ticks", ticks, WARMUP_TICKS);
+                    }
+                    false
+                }
+            }
+            _ => false, // Already requested, initialized, or failed
+        }
+    }
+
+    /// Trigger the localization initialization service call
+    ///
+    /// This is a non-blocking call that sends the request to the service.
+    /// The response is handled asynchronously.
+    pub fn trigger_localization_init(&self, sim_time: f64) -> Result<()> {
+        let client = match &self.localization_init_client {
+            Some(c) => c,
+            None => {
+                return Err(BridgeError::AutowareIssue(
+                    "Localization init client not available".to_string(),
+                ));
+            }
+        };
+
+        let spawn_pose = match &self.spawn_pose_ros {
+            Some(p) => p.clone(),
+            None => {
+                return Err(BridgeError::AutowareIssue(
+                    "Spawn pose not available for localization init".to_string(),
+                ));
+            }
+        };
+
+        // Check if service is available
+        match client.service_is_ready() {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::warn!("Localization init service not ready, will retry...");
+                // Reset to warmup state to retry
+                *self.localization_init_status.lock().unwrap() =
+                    LocalizationInitStatus::WarmingUp { ticks: 80 }; // Retry after 1 second
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::warn!("Failed to check service ready: {}, will retry...", e);
+                *self.localization_init_status.lock().unwrap() =
+                    LocalizationInitStatus::WarmingUp { ticks: 80 };
+                return Ok(());
+            }
+        }
+
+        // Create request
+        let mut request = autoware_adapi_v1_msgs::srv::InitializeLocalization_Request::default();
+
+        // Update timestamp to current sim time
+        let mut pose_with_time = spawn_pose;
+        pose_with_time.header.stamp.sec = sim_time.floor() as i32;
+        pose_with_time.header.stamp.nanosec = (sim_time.fract() * 1_000_000_000_f64) as u32;
+
+        // The pose field is a bounded sequence with max 1 element
+        request.pose.push(pose_with_time);
+
+        tracing::info!(
+            "Calling /api/localization/initialize with pose: ({:.2}, {:.2}, {:.2})",
+            request.pose[0].pose.pose.position.x,
+            request.pose[0].pose.pose.position.y,
+            request.pose[0].pose.pose.position.z
+        );
+
+        // Send request (fire-and-forget - we monitor status via subscription)
+        let result: Result<
+            rclrs::Promise<autoware_adapi_v1_msgs::srv::InitializeLocalization_Response>,
+            _,
+        > = client.call(&request);
+        match result {
+            Ok(_promise) => {
+                tracing::info!("Localization init request sent successfully");
+                // Note: We don't wait for response here, the localization_init_state
+                // subscription will detect when initialization is complete
+                // The _promise is dropped, which is fine - we use the topic-based status monitoring
+            }
+            Err(e) => {
+                tracing::error!("Failed to send localization init request: {}", e);
+                *self.localization_init_status.lock().unwrap() = LocalizationInitStatus::Failed;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if localization has been initialized (from /localization/initialization_state)
+    ///
+    /// Returns true if state == 3 (INITIALIZED)
+    #[allow(dead_code)]
+    pub fn is_localization_initialized(&self) -> bool {
+        *self.localization_init_state.lock().unwrap() == 3
+    }
+
+    /// Update localization init status based on state subscription
+    ///
+    /// Call this periodically to update the status based on the
+    /// /localization/initialization_state topic.
+    pub fn update_localization_init_status(&self) {
+        if !self.auto_initialize_localization {
+            return;
+        }
+
+        let current_status = *self.localization_init_status.lock().unwrap();
+        let state = *self.localization_init_state.lock().unwrap();
+
+        match current_status {
+            LocalizationInitStatus::Requested => {
+                if state == 3 {
+                    // INITIALIZED
+                    tracing::info!("Localization initialization confirmed (state=3)");
+                    *self.localization_init_status.lock().unwrap() =
+                        LocalizationInitStatus::Initialized;
+                } else if state == 1 {
+                    // UNINITIALIZED - init failed or was reset
+                    tracing::warn!("Localization initialization failed (state=1), will retry");
+                    *self.localization_init_status.lock().unwrap() =
+                        LocalizationInitStatus::WarmingUp { ticks: 80 }; // Retry after 1 second
+                }
+            }
+            LocalizationInitStatus::Initialized => {
+                if state != 3 {
+                    // Localization lost, may need to re-initialize
+                    tracing::warn!(
+                        "Localization state changed from INITIALIZED to {} - may need re-init",
+                        state
+                    );
+                }
+            }
+            _ => {}
+        }
     }
 }
