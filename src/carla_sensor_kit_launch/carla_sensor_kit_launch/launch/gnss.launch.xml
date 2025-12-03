@@ -41,7 +41,8 @@
       <remap from="~/output/gnss_pose_cov" to="pose_with_covariance"/>
       <remap from="~/output/gnss_fixed" to="fixed"/>
 
-      <!-- Use default parameters (no vehicle-specific config needed for CARLA) -->
+      <!-- Load required parameters -->
+      <param from="$(find-pkg-share autoware_gnss_poser)/config/gnss_poser.param.yaml"/>
     </node>
   </group>
 </launch>
