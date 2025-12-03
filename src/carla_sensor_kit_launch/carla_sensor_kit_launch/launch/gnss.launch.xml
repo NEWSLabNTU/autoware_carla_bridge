@@ -7,7 +7,7 @@
 
     Data Flow:
     ==========
-    CARLA → Bridge → /sensing/gnss/gnss/nav_sat_fix (NavSatFix)
+    CARLA → Bridge → /sensing/gnss/carla/gnss_link/nav_sat_fix (NavSatFix)
                   ↓
            autoware_gnss_poser
                   ↓
@@ -33,8 +33,9 @@
     <!-- GNSS Poser: NavSatFix → PoseWithCovariance converter -->
     <node pkg="autoware_gnss_poser" exec="gnss_poser" name="gnss_poser" output="screen">
       <!-- Input topics -->
-      <remap from="~/input/nav_sat_fix" to="gnss/nav_sat_fix"/>
-      <remap from="~/input/autoware_orientation" to="/sensing/imu/imu_data"/>
+      <!-- Bridge publishes to /sensing/gnss/carla/gnss_link/nav_sat_fix (sensor name from URDF) -->
+      <remap from="fix" to="carla/gnss_link/nav_sat_fix"/>
+      <remap from="autoware_orientation" to="/sensing/imu/carla/imu_link/imu_raw"/>
 
       <!-- Output topics -->
       <remap from="~/output/gnss_pose" to="pose"/>

@@ -55,7 +55,8 @@
     <!-- MINIMAL CONFIG - Only top LiDAR enabled for performance -->
 
     <!-- Top LiDAR (VLS-128 equivalent) - Primary 360° coverage -->
-    <joint name="velodyne_top_base_link_joint" type="fixed">
+    <!-- Named "top" to match Autoware's expected topic namespace /sensing/lidar/top/... -->
+    <joint name="top_base_link_joint" type="fixed">
       <origin
         xyz="${calibration['sensor_kit_base_link']['velodyne_top_base_link']['x']}
              ${calibration['sensor_kit_base_link']['velodyne_top_base_link']['y']}
@@ -64,17 +65,17 @@
              ${calibration['sensor_kit_base_link']['velodyne_top_base_link']['pitch']}
              ${calibration['sensor_kit_base_link']['velodyne_top_base_link']['yaw']}"/>
       <parent link="sensor_kit_base_link"/>
-      <child link="velodyne_top_base_link"/>
+      <child link="top_base_link"/>
     </joint>
-    <link name="velodyne_top_base_link"/>
+    <link name="top_base_link"/>
 
     <!-- Actual sensor frame (optical frame) -->
-    <joint name="velodyne_top_joint" type="fixed">
+    <joint name="top_joint" type="fixed">
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <parent link="velodyne_top_base_link"/>
-      <child link="velodyne_top"/>
+      <parent link="top_base_link"/>
+      <child link="top"/>
     </joint>
-    <link name="velodyne_top"/>
+    <link name="top"/>
 
     <!-- DISABLED - Left and Right LiDARs removed for performance
     <joint name="velodyne_left_base_link_joint" type="fixed">
@@ -133,35 +134,35 @@
     <!-- GNSS Sensor -->
     <!-- ========================================================================== -->
 
-    <joint name="gnss_link_joint" type="fixed">
+    <joint name="carla_gnss_link_joint" type="fixed">
       <origin
-        xyz="${calibration['sensor_kit_base_link']['gnss_link']['x']}
-             ${calibration['sensor_kit_base_link']['gnss_link']['y']}
-             ${calibration['sensor_kit_base_link']['gnss_link']['z']}"
-        rpy="${calibration['sensor_kit_base_link']['gnss_link']['roll']}
-             ${calibration['sensor_kit_base_link']['gnss_link']['pitch']}
-             ${calibration['sensor_kit_base_link']['gnss_link']['yaw']}"/>
+        xyz="${calibration['sensor_kit_base_link']['carla/gnss_link']['x']}
+             ${calibration['sensor_kit_base_link']['carla/gnss_link']['y']}
+             ${calibration['sensor_kit_base_link']['carla/gnss_link']['z']}"
+        rpy="${calibration['sensor_kit_base_link']['carla/gnss_link']['roll']}
+             ${calibration['sensor_kit_base_link']['carla/gnss_link']['pitch']}
+             ${calibration['sensor_kit_base_link']['carla/gnss_link']['yaw']}"/>
       <parent link="sensor_kit_base_link"/>
-      <child link="gnss_link"/>
+      <child link="carla/gnss_link"/>
     </joint>
-    <link name="gnss_link"/>
+    <link name="carla/gnss_link"/>
 
     <!-- ========================================================================== -->
     <!-- IMU Sensor -->
     <!-- ========================================================================== -->
 
-    <joint name="tamagawa_imu_link_joint" type="fixed">
+    <joint name="carla_imu_link_joint" type="fixed">
       <origin
-        xyz="${calibration['sensor_kit_base_link']['tamagawa/imu_link']['x']}
-             ${calibration['sensor_kit_base_link']['tamagawa/imu_link']['y']}
-             ${calibration['sensor_kit_base_link']['tamagawa/imu_link']['z']}"
-        rpy="${calibration['sensor_kit_base_link']['tamagawa/imu_link']['roll']}
-             ${calibration['sensor_kit_base_link']['tamagawa/imu_link']['pitch']}
-             ${calibration['sensor_kit_base_link']['tamagawa/imu_link']['yaw']}"/>
+        xyz="${calibration['sensor_kit_base_link']['carla/imu_link']['x']}
+             ${calibration['sensor_kit_base_link']['carla/imu_link']['y']}
+             ${calibration['sensor_kit_base_link']['carla/imu_link']['z']}"
+        rpy="${calibration['sensor_kit_base_link']['carla/imu_link']['roll']}
+             ${calibration['sensor_kit_base_link']['carla/imu_link']['pitch']}
+             ${calibration['sensor_kit_base_link']['carla/imu_link']['yaw']}"/>
       <parent link="sensor_kit_base_link"/>
-      <child link="tamagawa/imu_link"/>
+      <child link="carla/imu_link"/>
     </joint>
-    <link name="tamagawa/imu_link"/>
+    <link name="carla/imu_link"/>
 
   </xacro:macro>
 
