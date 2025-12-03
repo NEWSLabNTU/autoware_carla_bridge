@@ -488,11 +488,14 @@ impl Autoware {
                 self.list_imu.insert(sensor_name.clone(), imu_key);
             }
             SensorType::LidarRayCast => {
-                let lidar_key = format!("sensing/lidar/{sensor_name}/pointcloud");
+                // Publish to pointcloud_before_sync to feed into Autoware's pointcloud_preprocessor
+                // This bypasses velodyne drivers (not needed for simulation)
+                let lidar_key = format!("sensing/lidar/{sensor_name}/pointcloud_before_sync");
                 self.list_lidar.insert(sensor_name.clone(), lidar_key);
             }
             SensorType::LidarRayCastSemantic => {
-                let lidar_key = format!("sensing/lidar/{sensor_name}/pointcloud");
+                // Publish to pointcloud_before_sync to feed into Autoware's pointcloud_preprocessor
+                let lidar_key = format!("sensing/lidar/{sensor_name}/pointcloud_before_sync");
                 self.list_lidar_semantics
                     .insert(sensor_name.clone(), lidar_key);
             }

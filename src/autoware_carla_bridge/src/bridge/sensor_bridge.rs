@@ -1,5 +1,6 @@
 use std::{convert::Infallible, mem, str::FromStr, sync::Arc};
 
+use bytemuck::{Pod, Zeroable};
 use carla::{
     client::{ActorBase, Sensor},
     sensor::{
@@ -20,6 +21,67 @@ use crate::{
     types::{GnssService, GnssStatus, PointFieldType},
     utils,
 };
+
+/// Autoware 2025 PointXYZIRC format (16 bytes per point)
+///
+/// This struct matches Autoware's expected point cloud format for NDT localization.
+/// Fields: x, y, z (float32), intensity (uint8), return_type (uint8), channel (uint16)
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[repr(C, packed)]
+struct PointXYZIRC {
+    x: f32,
+    y: f32,
+    z: f32,
+    intensity: u8,
+    return_type: u8,
+    channel: u16,
+}
+
+impl PointXYZIRC {
+    const POINT_STEP: u32 = 16;
+
+    /// Create PointCloud2 field definitions for this point format
+    fn point_fields() -> Vec<sensor_msgs::msg::PointField> {
+        vec![
+            sensor_msgs::msg::PointField {
+                name: "x".to_string(),
+                offset: 0,
+                datatype: PointFieldType::FLOAT32 as u8,
+                count: 1,
+            },
+            sensor_msgs::msg::PointField {
+                name: "y".to_string(),
+                offset: 4,
+                datatype: PointFieldType::FLOAT32 as u8,
+                count: 1,
+            },
+            sensor_msgs::msg::PointField {
+                name: "z".to_string(),
+                offset: 8,
+                datatype: PointFieldType::FLOAT32 as u8,
+                count: 1,
+            },
+            sensor_msgs::msg::PointField {
+                name: "intensity".to_string(),
+                offset: 12,
+                datatype: PointFieldType::UINT8 as u8,
+                count: 1,
+            },
+            sensor_msgs::msg::PointField {
+                name: "return_type".to_string(),
+                offset: 13,
+                datatype: PointFieldType::UINT8 as u8,
+                count: 1,
+            },
+            sensor_msgs::msg::PointField {
+                name: "channel".to_string(),
+                offset: 14,
+                datatype: PointFieldType::UINT16 as u8,
+                count: 1,
+            },
+        ]
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SensorType {
@@ -430,52 +492,55 @@ fn publish_lidar(
         return Ok(());
     }
 
-    let point_step = mem::size_of_val(&lidar_data[0]) as u32;
-    let data: Vec<_> = lidar_data
-        .iter()
-        .flat_map(|det| {
-            let (x, y, z) = (det.point.x, det.point.y, det.point.z);
-            let intensity = det.intensity;
-            [y, x, z, intensity]
-        })
-        .flat_map(|elem| elem.to_ne_bytes())
-        .collect();
-    let row_step = data.len() as u32;
+    // Get channel information from CARLA's LidarMeasurement
+    let channel_count = measure.channel_count();
 
-    let fields = vec![
-        sensor_msgs::msg::PointField {
-            name: "x".to_string(),
-            offset: 0,
-            datatype: PointFieldType::FLOAT32 as u8,
-            count: 1,
-        },
-        sensor_msgs::msg::PointField {
-            name: "y".to_string(),
-            offset: 4,
-            datatype: PointFieldType::FLOAT32 as u8,
-            count: 1,
-        },
-        sensor_msgs::msg::PointField {
-            name: "z".to_string(),
-            offset: 8,
-            datatype: PointFieldType::FLOAT32 as u8,
-            count: 1,
-        },
-        sensor_msgs::msg::PointField {
-            name: "intensity".to_string(),
-            offset: 12,
-            datatype: PointFieldType::FLOAT32 as u8,
-            count: 1,
-        },
-    ];
+    // Build channel boundaries: cumulative point counts per channel
+    // This allows us to determine which channel each point belongs to
+    let mut channel_boundaries: Vec<usize> = Vec::with_capacity(channel_count + 1);
+    channel_boundaries.push(0);
+    for ch in 0..channel_count {
+        let prev = *channel_boundaries.last().unwrap();
+        let count = measure.point_count(ch).unwrap_or(0);
+        channel_boundaries.push(prev + count);
+    }
+
+    // Convert CARLA points to Autoware PointXYZIRC format using declarative struct
+    let points: Vec<PointXYZIRC> = lidar_data
+        .iter()
+        .enumerate()
+        .map(|(idx, det)| {
+            // Determine channel index by finding which boundary range contains this point
+            let channel = channel_boundaries
+                .windows(2)
+                .position(|w| idx >= w[0] && idx < w[1])
+                .unwrap_or(0) as u16;
+
+            PointXYZIRC {
+                // Use CARLA coordinates directly (no Y-axis flip)
+                // The pointcloud map was created with CARLA's native coordinate system
+                x: det.point.x,
+                y: det.point.y,
+                z: det.point.z,
+                // Convert float intensity [0.0-1.0] to uint8 [0-255]
+                intensity: (det.intensity.clamp(0.0, 1.0) * 255.0) as u8,
+                return_type: 0, // Single return
+                channel,
+            }
+        })
+        .collect();
+
+    // Use bytemuck for zero-copy serialization
+    let data: Vec<u8> = bytemuck::cast_slice(&points).to_vec();
+    let row_step = data.len() as u32;
 
     let lidar_msg = sensor_msgs::msg::PointCloud2 {
         header,
         height: 1,
-        width: lidar_data.len() as u32,
-        fields,
+        width: points.len() as u32,
+        fields: PointXYZIRC::point_fields(),
         is_bigendian: utils::is_bigendian(),
-        point_step,
+        point_step: PointXYZIRC::POINT_STEP,
         row_step,
         data,
         is_dense: true,
@@ -499,13 +564,15 @@ fn publish_semantic_lidar(
     let data: Vec<_> = lidar_data
         .iter()
         .flat_map(|det| {
+            // Use CARLA coordinates directly (no Y-axis flip)
+            // The pointcloud map was created with CARLA's native coordinate system
             let (x, y, z) = (det.point.x, det.point.y, det.point.z);
             let cos_inc_angle = det.cos_inc_angle;
             let object_idx = det.object_idx;
             let object_tag = det.object_tag;
             [
-                y.to_ne_bytes(),
                 x.to_ne_bytes(),
+                y.to_ne_bytes(),
                 z.to_ne_bytes(),
                 cos_inc_angle.to_ne_bytes(),
                 object_idx.to_ne_bytes(),
