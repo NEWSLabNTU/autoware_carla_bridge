@@ -25,55 +25,66 @@ use std::{
 
 use carla::client::{ActorBase, Client};
 use carla_vehicle::CarlaVehicle;
-use clap::Parser;
 use clock::SimulatorClock;
 use error::Result;
 use rclrs::CreateBasicExecutor;
 
 /// Create sensor bridges for all sensors spawned by CarlaVehicle
 ///
-/// This iterates over the sensor configurations and creates a SensorBridge
-/// for each sensor that was spawned in CARLA. The bridges handle CARLA
-/// sensor callbacks and publish data to ROS topics.
+/// This iterates over the sensor types (derived from VehicleConfig blueprints)
+/// and creates a SensorBridge for each sensor that was spawned in CARLA.
+/// The bridges handle CARLA sensor callbacks and publish data to ROS topics.
 fn create_sensor_bridges(
     node: rclrs::Node,
     carla_vehicle: &CarlaVehicle,
     autoware: &autoware::Autoware,
 ) -> Result<Vec<SensorBridge>> {
-    let sensor_configs = carla_vehicle.get_sensor_configs();
+    let sensor_types = carla_vehicle.get_sensor_types();
     let sensors = carla_vehicle.get_sensors();
     let mut bridges = Vec::new();
 
-    for config in sensor_configs {
+    for (link_name, sensor_type) in sensor_types {
         // Get the sensor actor from the HashMap
-        let sensor = match sensors.get(&config.link_name) {
+        let sensor = match sensors.get(link_name) {
             Some(s) => s.clone(),
             None => {
                 tracing::warn!(
                     "Sensor '{}' not found in spawned sensors, skipping",
-                    config.link_name
+                    link_name
                 );
                 continue;
             }
         };
 
-        // Create bridge type from sensor config
-        let bridge_type = BridgeType::Sensor(config.sensor_type, config.link_name.clone());
+        // Map sensor_config::SensorType to bridge::sensor_bridge::SensorType
+        let bridge_sensor_type = match sensor_type {
+            sensor_config::SensorType::Camera => bridge::sensor_bridge::SensorType::CameraRgb,
+            sensor_config::SensorType::Lidar => bridge::sensor_bridge::SensorType::LidarRayCast,
+            sensor_config::SensorType::Imu => bridge::sensor_bridge::SensorType::Imu,
+            sensor_config::SensorType::Gnss => bridge::sensor_bridge::SensorType::Gnss,
+            sensor_config::SensorType::Radar => {
+                tracing::warn!("Radar sensor '{}' not yet supported, skipping", link_name);
+                continue;
+            }
+        };
+
+        // Create bridge type from sensor type
+        let bridge_type = BridgeType::Sensor(bridge_sensor_type, link_name.clone());
 
         // Create sensor bridge
         match SensorBridge::new(node.clone(), sensor, bridge_type, autoware) {
             Ok(bridge) => {
                 tracing::info!(
                     "Created sensor bridge for '{}' (type: {:?})",
-                    config.link_name,
-                    config.sensor_type
+                    link_name,
+                    sensor_type
                 );
                 bridges.push(bridge);
             }
             Err(e) => {
                 tracing::error!(
                     "Failed to create sensor bridge for '{}': {}",
-                    config.link_name,
+                    link_name,
                     e
                 );
                 // Continue with other sensors rather than failing completely
@@ -84,42 +95,94 @@ fn create_sensor_bridges(
     Ok(bridges)
 }
 
-/// ROS 2 CARLA bridge for Autoware (Autoware-centric architecture)
+/// Bridge configuration loaded from ROS parameters
 ///
-/// This bridge waits for Autoware to start, then spawns a vehicle in CARLA
-/// based on the initial pose set in RViz. It forwards vehicle state from
-/// CARLA to Autoware for localization, and applies control commands from
-/// Autoware to the CARLA vehicle.
-#[derive(Debug, Clone, Parser)]
-#[clap(version, about)]
-struct Opts {
-    /// CARLA simulator address
-    #[clap(long, default_value = "127.0.0.1")]
+/// Parameters are declared with defaults and can be overridden via:
+/// - Launch file: `<param name="carla_address" value="192.168.1.1"/>`
+/// - Command line: `--ros-args -p carla_address:=192.168.1.1`
+struct BridgeParams {
     pub carla_address: String,
-
-    /// CARLA simulator port
-    #[clap(long, default_value = "2000")]
     pub carla_port: u16,
-
-    /// CARLA map to load (e.g., "Town01", "Town10HD"). If not specified, uses current map.
-    #[clap(long)]
     pub map_name: Option<String>,
-
-    /// Vehicle blueprint to spawn (CARLA blueprint ID)
-    #[clap(long, default_value = "vehicle.tesla.model3")]
     pub vehicle_blueprint: String,
-
-    /// Timeout in seconds to wait for Autoware detection (0 = wait forever)
-    #[clap(long, default_value_t = 60)]
     pub autoware_timeout: u64,
-
-    /// Path to CARLA sensor configuration file (YAML)
-    #[clap(long, default_value = "config/carla_sensors.yaml")]
-    pub sensor_config: String,
-
-    /// Path to bridge configuration file (YAML) - contains spawn pose
-    #[clap(long, default_value = "config/bridge.yaml")]
+    pub vehicle_config: String,
     pub bridge_config: String,
+}
+
+impl BridgeParams {
+    /// Declare and read all bridge parameters from a ROS node
+    fn from_node(node: &rclrs::Node) -> Result<Self> {
+        use error::BridgeError;
+
+        // Declare parameters with defaults
+        let carla_address = node
+            .declare_parameter("carla_address")
+            .default("127.0.0.1".into())
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
+        let carla_port = node
+            .declare_parameter("carla_port")
+            .default(2000i64)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
+        let map_name = node
+            .declare_parameter::<Arc<str>>("map_name")
+            .optional()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
+        let vehicle_blueprint = node
+            .declare_parameter("vehicle_blueprint")
+            .default("vehicle.tesla.model3".into())
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
+        let autoware_timeout = node
+            .declare_parameter("autoware_timeout")
+            .default(60i64)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
+        let vehicle_config = node
+            .declare_parameter("vehicle_config")
+            .default("".into())
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
+        let bridge_config = node
+            .declare_parameter("bridge_config")
+            .default("config/bridge.yaml".into())
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
+        // Get parameter values
+        let carla_address_val: Arc<str> = carla_address.get();
+        let carla_port_val: i64 = carla_port.get();
+        let map_name_val: Option<Arc<str>> = map_name.get();
+        let vehicle_blueprint_val: Arc<str> = vehicle_blueprint.get();
+        let autoware_timeout_val: i64 = autoware_timeout.get();
+        let vehicle_config_val: Arc<str> = vehicle_config.get();
+        let bridge_config_val: Arc<str> = bridge_config.get();
+
+        // Validate required parameters
+        if vehicle_config_val.is_empty() {
+            return Err(BridgeError::ConfigError(
+                "vehicle_config parameter is required but not set".into(),
+            ));
+        }
+
+        Ok(Self {
+            carla_address: carla_address_val.to_string(),
+            carla_port: carla_port_val as u16,
+            map_name: map_name_val.map(|s| s.to_string()),
+            vehicle_blueprint: vehicle_blueprint_val.to_string(),
+            autoware_timeout: autoware_timeout_val as u64,
+            vehicle_config: vehicle_config_val.to_string(),
+            bridge_config: bridge_config_val.to_string(),
+        })
+    }
 }
 
 fn main() -> Result<()> {
@@ -134,8 +197,6 @@ fn main() -> Result<()> {
         )
         .init();
 
-    let opts = Opts::parse();
-
     // Flag for graceful shutdown when Ctrl-C is pressed
     let running = Arc::new(AtomicBool::new(true));
     {
@@ -147,27 +208,30 @@ fn main() -> Result<()> {
         .expect("Failed to set Ctrl-C handler");
     }
 
-    tracing::info!("=== Autoware-CARLA Bridge (Autoware-centric) ===");
-    tracing::info!("Vehicle blueprint: {}", opts.vehicle_blueprint);
-
     // === Step 1: Initialize ROS 2 ===
+    // Initialize ROS first so it can handle --ros-args from launch system
     tracing::info!("Initializing ROS 2...");
     let ctx = rclrs::Context::new(std::env::args(), rclrs::InitOptions::default())?;
     let mut executor = ctx.create_basic_executor();
     let node = executor.create_node("autoware_carla_bridge")?;
     tracing::info!("ROS 2 node created: autoware_carla_bridge");
 
-    // === Step 2: Connect to CARLA ===
+    // === Step 2: Read parameters from ROS node ===
+    let params = BridgeParams::from_node(&node)?;
+    tracing::info!("=== Autoware-CARLA Bridge (Autoware-centric) ===");
+    tracing::info!("Vehicle blueprint: {}", params.vehicle_blueprint);
+
+    // === Step 3: Connect to CARLA ===
     tracing::info!(
         "Connecting to CARLA at {}:{}...",
-        opts.carla_address,
-        opts.carla_port
+        params.carla_address,
+        params.carla_port
     );
 
     // Retry connecting to CARLA in an infinite loop
     let client = loop {
         match std::panic::catch_unwind(|| {
-            Client::connect(&opts.carla_address, opts.carla_port, None)
+            Client::connect(&params.carla_address, params.carla_port, None)
         }) {
             Ok(client) => {
                 // Try to access world to verify connection is working
@@ -196,7 +260,7 @@ fn main() -> Result<()> {
     };
 
     // Load map if specified, otherwise use current map
-    let mut world = if let Some(ref map_name) = opts.map_name {
+    let mut world = if let Some(ref map_name) = params.map_name {
         tracing::info!("Loading CARLA map: {}", map_name);
         utils::load_world_smart(&client, map_name)
     } else {
@@ -208,7 +272,7 @@ fn main() -> Result<()> {
     let simulator_clock = SimulatorClock::new(node.clone())?;
 
     // === Step 3: Load bridge configuration ===
-    let bridge_config = bridge_config::BridgeConfig::from_file(&opts.bridge_config)?;
+    let bridge_config = bridge_config::BridgeConfig::from_file(&params.bridge_config)?;
     let initial_pose = bridge_config.to_isometry();
 
     // Prepare spawn pose in ROS coordinates for auto-init if enabled
@@ -271,44 +335,81 @@ fn main() -> Result<()> {
 
     tracing::info!("Autoware detected!");
 
-    // === Step 4: Parse URDF to get sensor configurations ===
-    tracing::info!("Parsing URDF from Autoware...");
-    autoware.parse_sensors()?;
+    // === Step 4.5: Wait for TF transforms to be fully received ===
+    // The /tf_static topic may arrive in multiple messages from different publishers
+    // We need to ensure all transforms from the sensor_kit are available before spawning
+    tracing::info!("Waiting for TF transforms to be received...");
+    let tf_start_time = std::time::Instant::now();
+    let tf_timeout = Duration::from_secs(10);
+    let min_transforms = 4; // At minimum: sensor_kit_base_link, top_base_link, top, and at least one sensor
 
-    let sensor_configs = autoware.sensor_configs();
-    tracing::info!("Found {} sensors in URDF:", sensor_configs.len());
-    for config in sensor_configs {
-        tracing::info!(
-            "  - {} (type: {:?}, parent: {})",
-            config.link_name,
-            config.sensor_type,
-            config.parent_frame
-        );
+    loop {
+        // Spin executor to process TF callbacks
+        executor.spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(100)));
+
+        let tf_count = autoware.get_tf_buffer().get_all_frames().len();
+        if tf_count >= min_transforms {
+            tracing::info!(
+                "TF transforms ready: {} frames available",
+                tf_count
+            );
+            // Log available frames for debugging
+            let frames = autoware.get_tf_buffer().get_all_frames();
+            tracing::debug!("Available TF frames: {:?}", frames);
+            break;
+        }
+
+        if tf_start_time.elapsed() >= tf_timeout {
+            tracing::warn!(
+                "TF timeout after {:?}: only {} transforms received (need at least {})",
+                tf_timeout,
+                tf_count,
+                min_transforms
+            );
+            tracing::warn!("Available frames: {:?}", autoware.get_tf_buffer().get_all_frames());
+            // Continue anyway - the sensor spawning will fail with more specific error
+            break;
+        }
+
+        if !running.load(Ordering::SeqCst) {
+            tracing::info!("Shutdown requested while waiting for TF");
+            return Ok(());
+        }
+
+        // Log progress every 2 seconds
+        if tf_start_time.elapsed().as_secs() % 2 == 0 {
+            tracing::debug!(
+                "Waiting for TF... {} transforms (need {})",
+                tf_count,
+                min_transforms
+            );
+        }
     }
 
-    // === Step 5: Load CARLA sensor configuration ===
-    let carla_config = match sensor_config::CarlaConfig::from_file(&opts.sensor_config) {
-        Ok(config) => config,
-        Err(e) => {
-            tracing::warn!(
-                "Failed to load sensor config from '{}': {}",
-                opts.sensor_config,
-                e
-            );
-            tracing::warn!("Using default sensor parameters");
-            sensor_config::CarlaConfig::default()
-        }
-    };
+    // === Step 5: Load vehicle configuration (single source of truth for sensors) ===
+    tracing::info!("Loading vehicle configuration from: {}", params.vehicle_config);
+    let vehicle_config = sensor_config::VehicleConfig::from_file(&params.vehicle_config)?;
+
+    tracing::info!(
+        "Vehicle config loaded: {} sensors to spawn",
+        vehicle_config.sensors.len()
+    );
+    for (link_name, sensor_def) in &vehicle_config.sensors {
+        tracing::info!(
+            "  - {} (blueprint: {}, type: {:?})",
+            link_name,
+            sensor_def.blueprint,
+            sensor_def.sensor_type()
+        );
+    }
 
     // === Step 6: Spawn vehicle and sensors in CARLA ===
     tracing::info!("Spawning vehicle and sensors in CARLA...");
     let mut carla_vehicle = CarlaVehicle::new(
         &mut world,
-        &opts.vehicle_blueprint,
         &initial_pose,
-        sensor_configs,
+        &vehicle_config,
         autoware.get_tf_buffer(),
-        &carla_config,
     )?;
 
     let vehicle = carla_vehicle.get_vehicle();
@@ -318,12 +419,31 @@ fn main() -> Result<()> {
 
     tracing::info!("Vehicle and sensors spawned successfully!");
 
-    // === Step 7: Create sensor bridges ===
+    // === Step 7: Register sensors with Autoware for topic mapping ===
+    tracing::info!("Registering sensors with Autoware...");
+    for (link_name, sensor_type) in carla_vehicle.get_sensor_types() {
+        // Map sensor_config::SensorType to bridge::sensor_bridge::SensorType
+        let bridge_sensor_type = match sensor_type {
+            sensor_config::SensorType::Camera => bridge::sensor_bridge::SensorType::CameraRgb,
+            sensor_config::SensorType::Lidar => bridge::sensor_bridge::SensorType::LidarRayCast,
+            sensor_config::SensorType::Imu => bridge::sensor_bridge::SensorType::Imu,
+            sensor_config::SensorType::Gnss => bridge::sensor_bridge::SensorType::Gnss,
+            sensor_config::SensorType::Radar => {
+                tracing::debug!("Radar sensor '{}' not yet supported for topic mapping", link_name);
+                continue;
+            }
+        };
+
+        autoware.add_sensors(bridge_sensor_type, link_name.clone());
+        tracing::info!("  Registered sensor '{}' (type: {:?})", link_name, sensor_type);
+    }
+
+    // === Step 8: Create sensor bridges ===
     tracing::info!("Creating sensor bridges...");
     let _sensor_bridges = create_sensor_bridges(node.clone(), &carla_vehicle, &autoware)?;
     tracing::info!("Created {} sensor bridges", _sensor_bridges.len());
 
-    // === Step 8: Create vehicle control bridge ===
+    // === Step 9: Create vehicle control bridge ===
     tracing::info!("Creating vehicle control bridge...");
     let vehicle_control =
         vehicle_control::VehicleControlBridge::new(node.clone(), vehicle_shared.clone())?;

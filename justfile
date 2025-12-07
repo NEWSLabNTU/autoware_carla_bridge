@@ -101,13 +101,19 @@ bridge command *ARGS:
 
             echo "Starting Autoware-CARLA bridge on port $PORT..."
 
-            # Start bridge using systemd-run
+            # Vehicle config path (uses package share directory)
+            VEHICLE_CONFIG="$BRIDGE_DIR/install/autoware_carla_bridge/share/autoware_carla_bridge/config/vehicle_config.yaml"
+
+            # Start bridge using systemd-run with ros2 run and ROS parameters
             systemd-run --user \
                 --unit="$UNIT_NAME" \
                 --working-directory="$BRIDGE_DIR" \
                 bash -c "\
                     source install/setup.bash && \
-                    ros2 run autoware_carla_bridge autoware_carla_bridge --carla-port $PORT"
+                    ros2 run autoware_carla_bridge autoware_carla_bridge \
+                        --ros-args \
+                        -p carla_port:=$PORT \
+                        -p vehicle_config:=$VEHICLE_CONFIG"
 
             echo "Autoware-CARLA bridge started on port $PORT"
             echo "Use 'just bridge status' to check status"

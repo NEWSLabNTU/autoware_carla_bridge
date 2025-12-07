@@ -8,7 +8,6 @@ use crate::{
     bridge::sensor_bridge::SensorType,
     error::{BridgeError, Result},
     tf_bridge::TFBuffer,
-    urdf_parser::{parse_urdf_sensors, SensorConfig},
 };
 
 /// Tracks localization initialization state for auto-init feature
@@ -44,9 +43,6 @@ pub struct Autoware {
 
     /// TF buffer for sensor transforms
     tf_buffer: TFBuffer,
-
-    /// Parsed sensor configurations from URDF
-    sensor_configs: Vec<SensorConfig>,
 
     // === Pose Publishing Configuration ===
     /// Whether to publish pose directly to /localization/kinematic_state
@@ -476,7 +472,6 @@ impl Autoware {
             // === Autoware Detection and Configuration ===
             detector,
             tf_buffer,
-            sensor_configs: Vec::new(), // Will be populated by parse_sensors()
 
             // === Pose Publishing Configuration ===
             publish_direct_localization,
@@ -552,6 +547,10 @@ impl Autoware {
         })
     }
 
+    /// Register sensor topics for Autoware topic name mapping
+    ///
+    /// Must be called for each sensor before creating sensor bridges.
+    /// Maps sensor names to their corresponding Autoware topic paths.
     pub fn add_sensors(&mut self, sensor_type: SensorType, sensor_name: String) {
         // Standard Autoware sensor topic patterns (no prefix for namespace flexibility)
         match sensor_type {
@@ -661,63 +660,9 @@ impl Autoware {
     ///
     /// # Returns
     /// Option containing URDF string if available
+    #[allow(dead_code)]
     pub fn get_urdf(&self) -> Option<String> {
         self.detector.get_urdf()
-    }
-
-    /// Parse URDF and extract sensor configurations
-    ///
-    /// Parses the URDF from `/robot_description` and extracts sensor
-    /// link information. Populates `sensor_configs` and registers
-    /// sensor topics using `add_sensors()`.
-    ///
-    /// Must be called after Autoware is detected.
-    ///
-    /// # Returns
-    /// Result indicating success or parsing error
-    pub fn parse_sensors(&mut self) -> Result<()> {
-        tracing::info!("Parsing URDF for sensor configurations...");
-
-        let urdf = self.get_urdf().ok_or_else(|| {
-            crate::error::BridgeError::AutowareIssue(
-                "No URDF available - Autoware not detected".to_string(),
-            )
-        })?;
-
-        // Parse URDF to extract sensor configurations
-        self.sensor_configs = parse_urdf_sensors(&urdf)?;
-
-        tracing::info!("Found {} sensors in URDF", self.sensor_configs.len());
-
-        // Register sensor topics for each discovered sensor
-        // Clone configs to avoid borrow checker issues
-        let configs_to_register: Vec<_> = self
-            .sensor_configs
-            .iter()
-            .map(|config| (config.sensor_type, config.link_name.clone()))
-            .collect();
-
-        for (sensor_type, link_name) in configs_to_register {
-            tracing::debug!(
-                "Registering sensor: {} (type: {:?})",
-                link_name,
-                sensor_type
-            );
-            self.add_sensors(sensor_type, link_name);
-        }
-
-        Ok(())
-    }
-
-    /// Get parsed sensor configurations
-    ///
-    /// Returns slice of sensor configurations extracted from URDF.
-    /// Empty until `parse_sensors()` is called.
-    ///
-    /// # Returns
-    /// Slice of SensorConfig structs
-    pub fn sensor_configs(&self) -> &[SensorConfig] {
-        &self.sensor_configs
     }
 
     /// Perform health check on Autoware connection

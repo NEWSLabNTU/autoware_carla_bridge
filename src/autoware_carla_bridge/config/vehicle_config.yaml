@@ -10,37 +10,23 @@ vehicle:
   # - vehicle.audi.a2
 
 # Sensor mappings from Autoware URDF to CARLA blueprints
-# Format: <sensor_link_name>: <carla_blueprint_id>
+# Sensor names MUST match TF frame names from the sensor_kit URDF
 sensors:
-  # LiDAR sensors
-  velodyne_top:
+  # LiDAR sensor (TF frame: top)
+  top:
     blueprint: "sensor.lidar.ray_cast"
     parameters:
       channels: "128"
-      range: "130.0"
-      points_per_second: "1280000"
+      range: "200.0"
+      points_per_second: "2560000"
       rotation_frequency: "10.0"
-      upper_fov: "22.5"
-      lower_fov: "-22.5"
+      sensor_tick: "0.1"  # Sync with rotation_frequency for full 360° scans
+      upper_fov: "15.0"
+      lower_fov: "-25.0"
+      # Enhanced for better NDT localization
 
-  velodyne_left:
-    blueprint: "sensor.lidar.ray_cast"
-    parameters:
-      channels: "32"
-      range: "100.0"
-      points_per_second: "640000"
-      rotation_frequency: "10.0"
-
-  velodyne_right:
-    blueprint: "sensor.lidar.ray_cast"
-    parameters:
-      channels: "32"
-      range: "100.0"
-      points_per_second: "640000"
-      rotation_frequency: "10.0"
-
-  # Camera sensors
-  camera0:
+  # Camera sensor (TF frame: camera0/camera_link)
+  camera0/camera_link:
     blueprint: "sensor.camera.rgb"
     parameters:
       image_size_x: "800"
@@ -48,22 +34,14 @@ sensors:
       fov: "74.5"
       sensor_tick: "0.033"
 
-  camera1:
-    blueprint: "sensor.camera.rgb"
-    parameters:
-      image_size_x: "800"
-      image_size_y: "400"
-      fov: "74.5"
-      sensor_tick: "0.033"
-
-  # IMU sensor
-  imu_link:
+  # IMU sensor (TF frame: carla/imu_link)
+  carla/imu_link:
     blueprint: "sensor.other.imu"
     parameters:
       sensor_tick: "0.01"
 
-  # GNSS sensor
-  gnss_link:
+  # GNSS sensor (TF frame: carla/gnss_link)
+  carla/gnss_link:
     blueprint: "sensor.other.gnss"
     parameters:
       sensor_tick: "0.1"

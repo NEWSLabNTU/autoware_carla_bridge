@@ -2,11 +2,15 @@
 ///
 /// This module handles spawning and cleanup of CARLA vehicles for Autoware.
 /// The vehicle and sensors are spawned immediately in the constructor.
+///
+/// ## Design Philosophy
+/// - **Config as single source of truth**: `VehicleConfig` defines which sensors to spawn
+/// - **No name-based inference**: Blueprints come from config, not URDF link name patterns
+/// - **TF for positions only**: URDF/TF is only used to get sensor transform relative to base_link
 use crate::{
     error::{BridgeError, Result},
-    sensor_config::CarlaConfig,
+    sensor_config::{SensorType, VehicleConfig},
     tf_bridge::TFBuffer,
-    urdf_parser::SensorConfig,
 };
 use carla::{
     client::{ActorBase, Sensor, Vehicle, World},
@@ -21,31 +25,29 @@ use std::collections::HashMap;
 pub struct CarlaVehicle {
     vehicle: Vehicle,
     sensors: HashMap<String, Sensor>,
-    sensor_configs: Vec<SensorConfig>,
+    /// Sensor types keyed by link name (derived from VehicleConfig blueprints)
+    sensor_types: HashMap<String, SensorType>,
 }
 
 impl CarlaVehicle {
     /// Create a new CARLA vehicle and spawn it with sensors
     ///
     /// This immediately spawns the vehicle and all configured sensors in CARLA.
+    /// The `vehicle_config` is the **single source of truth** for which sensors to spawn.
     ///
     /// # Arguments
     /// * `world` - Mutable CARLA world reference
-    /// * `vehicle_blueprint` - CARLA blueprint ID (e.g., "vehicle.tesla.model3")
-    /// * `initial_pose` - Spawn location and orientation in CARLA coordinates
-    /// * `sensor_configs` - Sensor configurations from URDF parsing
-    /// * `tf_buffer` - TF buffer for sensor transforms
-    /// * `carla_config` - CARLA sensor configuration (CARLA-specific parameters)
+    /// * `initial_pose` - Spawn location and orientation in ROS coordinates
+    /// * `vehicle_config` - Vehicle and sensor configuration (single source of truth)
+    /// * `tf_buffer` - TF buffer for sensor position lookups
     ///
     /// # Returns
     /// A CarlaVehicle instance with spawned vehicle and sensors
     pub fn new(
         world: &mut World,
-        vehicle_blueprint: &str,
         initial_pose: &nalgebra::Isometry3<f32>,
-        sensor_configs: &[SensorConfig],
+        vehicle_config: &VehicleConfig,
         tf_buffer: &TFBuffer,
-        carla_config: &CarlaConfig,
     ) -> Result<Self> {
         tracing::info!(
             "Initial pose from Autoware (ROS coords): x={:.2}, y={:.2}, z={:.2}",
@@ -54,8 +56,9 @@ impl CarlaVehicle {
             initial_pose.translation.z
         );
 
-        // Spawn vehicle
-        let vehicle = Self::spawn_vehicle(world, vehicle_blueprint, initial_pose)?;
+        // Spawn vehicle using blueprint from config
+        let vehicle =
+            Self::spawn_vehicle(world, &vehicle_config.vehicle.blueprint, initial_pose)?;
 
         // Log actual spawned position in CARLA
         let spawned_transform = vehicle.transform();
@@ -67,8 +70,11 @@ impl CarlaVehicle {
         );
         tracing::info!("Vehicle spawned successfully: ID={}", vehicle.id());
 
-        // Spawn sensors
-        tracing::info!("Spawning {} sensors...", sensor_configs.len());
+        // Spawn sensors from vehicle_config (single source of truth)
+        tracing::info!(
+            "Spawning {} sensors from vehicle_config...",
+            vehicle_config.sensors.len()
+        );
 
         // Debug: Show available TF frames
         let available_frames = tf_buffer.get_all_frames();
@@ -77,15 +83,15 @@ impl CarlaVehicle {
             tracing::debug!("  - {}", frame);
         }
 
-        let sensors =
-            Self::spawn_sensors(world, &vehicle, sensor_configs, tf_buffer, carla_config)?;
+        let (sensors, sensor_types) =
+            Self::spawn_sensors(world, &vehicle, vehicle_config, tf_buffer)?;
 
         tracing::info!("All sensors spawned successfully");
 
         Ok(Self {
             vehicle,
             sensors,
-            sensor_configs: sensor_configs.to_vec(),
+            sensor_types,
         })
     }
 
@@ -148,71 +154,38 @@ impl CarlaVehicle {
     }
 
     /// Spawn sensors and attach to vehicle (private)
+    ///
+    /// Iterates over `vehicle_config.sensors` to spawn each sensor. The blueprint
+    /// comes directly from the config (single source of truth), while the transform
+    /// is looked up from TF.
     fn spawn_sensors(
         world: &mut World,
         vehicle: &Vehicle,
-        sensor_configs: &[SensorConfig],
+        vehicle_config: &VehicleConfig,
         tf_buffer: &TFBuffer,
-        carla_config: &CarlaConfig,
-    ) -> Result<HashMap<String, Sensor>> {
+    ) -> Result<(HashMap<String, Sensor>, HashMap<String, SensorType>)> {
         let blueprint_library = world.blueprint_library();
         let mut spawned_sensors = HashMap::new();
+        let mut sensor_types = HashMap::new();
 
-        for config in sensor_configs {
-            // Map SensorType to CARLA blueprint
-            let blueprint_id = match config.sensor_type {
-                crate::bridge::sensor_bridge::SensorType::CameraRgb => "sensor.camera.rgb",
-                crate::bridge::sensor_bridge::SensorType::LidarRayCast => "sensor.lidar.ray_cast",
-                crate::bridge::sensor_bridge::SensorType::LidarRayCastSemantic => {
-                    "sensor.lidar.ray_cast_semantic"
-                }
-                crate::bridge::sensor_bridge::SensorType::Imu => "sensor.other.imu",
-                crate::bridge::sensor_bridge::SensorType::Gnss => "sensor.other.gnss",
-                _ => {
-                    tracing::warn!("Skipping unsupported sensor type: {:?}", config.sensor_type);
-                    continue;
-                }
-            };
+        for (link_name, sensor_def) in &vehicle_config.sensors {
+            // Get blueprint directly from config (no name-based inference!)
+            let mut sensor_bp =
+                blueprint_library
+                    .find(&sensor_def.blueprint)
+                    .ok_or_else(|| {
+                        BridgeError::AutowareIssue(format!(
+                            "Sensor blueprint '{}' not found for '{}'",
+                            sensor_def.blueprint, link_name
+                        ))
+                    })?;
 
-            // Get blueprint
-            let mut sensor_bp = blueprint_library.find(blueprint_id).ok_or_else(|| {
-                BridgeError::AutowareIssue(format!("Sensor blueprint '{}' not found", blueprint_id))
-            })?;
-
-            // Apply CARLA-specific parameters from config
-            let config_sensor_type = match config.sensor_type {
-                crate::bridge::sensor_bridge::SensorType::CameraRgb => {
-                    crate::sensor_config::SensorType::Camera
-                }
-                crate::bridge::sensor_bridge::SensorType::LidarRayCast
-                | crate::bridge::sensor_bridge::SensorType::LidarRayCastSemantic => {
-                    crate::sensor_config::SensorType::Lidar
-                }
-                crate::bridge::sensor_bridge::SensorType::Imu => {
-                    crate::sensor_config::SensorType::Imu
-                }
-                crate::bridge::sensor_bridge::SensorType::Gnss => {
-                    crate::sensor_config::SensorType::Gnss
-                }
-                _ => {
-                    tracing::warn!(
-                        "Unknown sensor type for config mapping: {:?}",
-                        config.sensor_type
-                    );
-                    crate::sensor_config::SensorType::Camera // Default fallback
-                }
-            };
-
-            let sensor_params =
-                carla_config.get_sensor_params(&config.link_name, config_sensor_type);
-            sensor_params.apply_to_blueprint(&mut sensor_bp)?;
+            // Apply parameters from config
+            sensor_def.apply_to_blueprint(&mut sensor_bp)?;
 
             // Try to get transform from TF buffer (base_link → sensor)
-            tracing::info!(
-                "Looking up TF transform: base_link → '{}'",
-                config.link_name
-            );
-            let na_transform = match tf_buffer.lookup_transform("base_link", &config.link_name) {
+            tracing::info!("Looking up TF transform: base_link → '{}'", link_name);
+            let na_transform = match tf_buffer.lookup_transform("base_link", link_name) {
                 Ok(tf) => {
                     // Use TF transform
                     let trans = &tf.transform.translation;
@@ -220,7 +193,7 @@ impl CarlaVehicle {
 
                     tracing::info!(
                         "✓ Found TF for '{}': pos=({:.3}, {:.3}, {:.3}) parent='{}'",
-                        config.link_name,
+                        link_name,
                         trans.x,
                         trans.y,
                         trans.z,
@@ -238,40 +211,16 @@ impl CarlaVehicle {
                     )
                 }
                 Err(e) => {
-                    // Fall back to URDF data
+                    // TF lookup failed - this is required for config-driven spawning
                     tracing::error!(
-                        "✗ TF lookup failed for '{}': {} - Using URDF data: pos=({:.3}, {:.3}, {:.3})",
-                        config.link_name,
-                        e,
-                        config.position.x,
-                        config.position.y,
-                        config.position.z
+                        "✗ TF lookup failed for '{}': {} - Sensor link must exist in TF tree!",
+                        link_name,
+                        e
                     );
-
-                    // If both TF and URDF have zero position, this will fail in CARLA
-                    if config.position.x.abs() < 0.001
-                        && config.position.y.abs() < 0.001
-                        && config.position.z.abs() < 0.001
-                    {
-                        tracing::error!(
-                            "URDF position is also (0,0,0) for '{}' - CARLA will reject this!",
-                            config.link_name
-                        );
-                    }
-
-                    nalgebra::Isometry3::from_parts(
-                        nalgebra::Translation3::new(
-                            config.position.x as f32,
-                            config.position.y as f32,
-                            config.position.z as f32,
-                        ),
-                        nalgebra::UnitQuaternion::new_normalize(nalgebra::Quaternion::new(
-                            config.orientation.w as f32,
-                            config.orientation.i as f32,
-                            config.orientation.j as f32,
-                            config.orientation.k as f32,
-                        )),
-                    )
+                    return Err(BridgeError::AutowareIssue(format!(
+                        "Sensor '{}' not found in TF tree. Ensure the link exists in sensor_kit URDF.",
+                        link_name
+                    )));
                 }
             };
 
@@ -281,7 +230,7 @@ impl CarlaVehicle {
 
             tracing::info!(
                 "Sensor '{}' transform: ROS({:.3}, {:.3}, {:.3}) → CARLA({:.1}, {:.1}, {:.1})",
-                config.link_name,
+                link_name,
                 na_transform.translation.x,
                 na_transform.translation.y,
                 na_transform.translation.z,
@@ -301,7 +250,7 @@ impl CarlaVehicle {
                 .map_err(|e| {
                     BridgeError::AutowareIssue(format!(
                         "Failed to spawn sensor '{}': {}",
-                        config.link_name, e
+                        link_name, e
                     ))
                 })?;
 
@@ -310,17 +259,22 @@ impl CarlaVehicle {
                 _ => return Err(BridgeError::CarlaIssue("Spawned actor is not a sensor")),
             };
 
+            // Derive sensor type from blueprint (for sensor bridge creation)
+            let sensor_type = sensor_def.sensor_type();
+
             tracing::info!(
-                "Spawned sensor '{}' (type: {:?}, ID: {})",
-                config.link_name,
-                config.sensor_type,
+                "Spawned sensor '{}' (blueprint: {}, type: {:?}, ID: {})",
+                link_name,
+                sensor_def.blueprint,
+                sensor_type,
                 sensor.id()
             );
 
-            spawned_sensors.insert(config.link_name.clone(), sensor);
+            spawned_sensors.insert(link_name.clone(), sensor);
+            sensor_types.insert(link_name.clone(), sensor_type);
         }
 
-        Ok(spawned_sensors)
+        Ok((spawned_sensors, sensor_types))
     }
 
     /// Get reference to the spawned vehicle
@@ -333,12 +287,12 @@ impl CarlaVehicle {
         &self.sensors
     }
 
-    /// Get reference to sensor configurations
+    /// Get sensor types (keyed by link name)
     ///
-    /// This returns the sensor configurations used to spawn the sensors,
+    /// This returns the sensor types derived from VehicleConfig blueprints,
     /// allowing main.rs to create sensor bridges with the correct parameters.
-    pub fn get_sensor_configs(&self) -> &[SensorConfig] {
-        &self.sensor_configs
+    pub fn get_sensor_types(&self) -> &HashMap<String, SensorType> {
+        &self.sensor_types
     }
 
     /// Cleanup: destroy vehicle and sensors

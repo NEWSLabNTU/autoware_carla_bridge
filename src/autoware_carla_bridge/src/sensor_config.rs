@@ -1,19 +1,181 @@
-//! CARLA sensor configuration module
+//! CARLA vehicle and sensor configuration module
 //!
-//! This module provides CARLA-specific sensor parameters that cannot be obtained
-//! from Autoware's URDF/TF configuration. It implements a two-level configuration:
-//! 1. Type-level defaults for each sensor category (camera, lidar, gnss, imu, radar)
-//! 2. Sensor-specific overrides keyed by link name from URDF
+//! This module provides CARLA-specific configuration for vehicles and sensors.
+//! The vehicle_config.yaml file is the **single source of truth** for which
+//! sensors to spawn and their CARLA blueprints/parameters.
 //!
-//! The configuration is loaded from a YAML file (typically config/carla_sensors.yaml)
-//! and merged with URDF-derived sensor information during sensor spawning.
+//! ## Design Philosophy
+//! - **Explicit over implicit**: Sensors are explicitly listed in the config file
+//! - **No name-based inference**: We don't guess sensor types from URDF link names
+//! - **TF for positions only**: URDF/TF is only used for sensor positions, not types
+//!
+//! ## Config File Format (vehicle_config.yaml)
+//! ```yaml
+//! vehicle:
+//!   blueprint: "vehicle.tesla.model3"
+//! sensors:
+//!   velodyne_top:                     # Link name (must exist in TF)
+//!     blueprint: "sensor.lidar.ray_cast"
+//!     parameters:
+//!       channels: "128"
+//!       range: "200.0"
+//! ```
 
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, path::Path};
 
 use crate::error::{BridgeError, Result};
 
-/// Top-level CARLA sensor configuration
+// ============================================================================
+// VehicleConfig - Single source of truth for sensor spawning
+// ============================================================================
+
+/// Vehicle and sensor configuration loaded from vehicle_config.yaml
+///
+/// This is the **single source of truth** for which sensors to spawn.
+/// Each sensor entry defines:
+/// - Link name (key) - must exist in TF tree for position lookup
+/// - CARLA blueprint - the sensor type to spawn
+/// - Parameters - CARLA-specific sensor attributes
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VehicleConfig {
+    /// Vehicle configuration
+    #[serde(default)]
+    pub vehicle: VehicleSettings,
+
+    /// Sensor definitions (link_name -> sensor config)
+    #[serde(default)]
+    pub sensors: HashMap<String, SensorDefinition>,
+
+    /// Map origin offset (CARLA coordinates relative to ROS map frame)
+    #[serde(default)]
+    pub map_origin: MapOrigin,
+}
+
+/// Vehicle blueprint configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VehicleSettings {
+    /// CARLA vehicle blueprint ID (e.g., "vehicle.tesla.model3")
+    pub blueprint: String,
+}
+
+impl Default for VehicleSettings {
+    fn default() -> Self {
+        Self {
+            blueprint: "vehicle.tesla.model3".to_string(),
+        }
+    }
+}
+
+/// Map origin offset configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MapOrigin {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub yaw: f64,
+}
+
+/// Sensor definition from config file
+///
+/// Defines a sensor to spawn in CARLA with its blueprint and parameters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SensorDefinition {
+    /// CARLA sensor blueprint (e.g., "sensor.lidar.ray_cast", "sensor.camera.rgb")
+    pub blueprint: String,
+
+    /// CARLA sensor parameters as string key-value pairs
+    #[serde(default)]
+    pub parameters: HashMap<String, String>,
+}
+
+impl SensorDefinition {
+    /// Classify sensor type from blueprint ID
+    pub fn sensor_type(&self) -> SensorType {
+        if self.blueprint.contains("lidar") {
+            SensorType::Lidar
+        } else if self.blueprint.contains("camera") {
+            SensorType::Camera
+        } else if self.blueprint.contains("imu") {
+            SensorType::Imu
+        } else if self.blueprint.contains("gnss") {
+            SensorType::Gnss
+        } else if self.blueprint.contains("radar") {
+            SensorType::Radar
+        } else {
+            SensorType::Camera // Default fallback
+        }
+    }
+
+    /// Apply parameters to a CARLA blueprint
+    pub fn apply_to_blueprint(&self, blueprint: &mut carla::client::ActorBlueprint) -> Result<()> {
+        for (key, value) in &self.parameters {
+            if !blueprint.set_attribute(key, value) {
+                return Err(BridgeError::ConfigError(format!(
+                    "Failed to set sensor attribute '{}' to '{}'",
+                    key, value
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl VehicleConfig {
+    /// Load configuration from a YAML file
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let path = path.as_ref();
+        tracing::info!("Loading vehicle config from: {}", path.display());
+
+        let contents = fs::read_to_string(path).map_err(|e| {
+            BridgeError::ConfigError(format!(
+                "Failed to read config file {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        let config: VehicleConfig = serde_yaml::from_str(&contents).map_err(|e| {
+            BridgeError::ConfigError(format!(
+                "Failed to parse YAML config {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        tracing::info!(
+            "✓ Loaded vehicle config: {} sensors defined",
+            config.sensors.len()
+        );
+
+        for (link_name, sensor_def) in &config.sensors {
+            tracing::info!(
+                "  - '{}': {} ({:?})",
+                link_name,
+                sensor_def.blueprint,
+                sensor_def.sensor_type()
+            );
+        }
+
+        Ok(config)
+    }
+
+    /// Get sensor definitions as an iterator
+    #[allow(dead_code)]
+    pub fn sensor_iter(&self) -> impl Iterator<Item = (&String, &SensorDefinition)> {
+        self.sensors.iter()
+    }
+}
+
+// ============================================================================
+// Legacy CarlaConfig - kept for backward compatibility but deprecated
+// ============================================================================
+
+/// Top-level CARLA sensor configuration (DEPRECATED)
+///
+/// **DEPRECATED**: Use `VehicleConfig` instead.
+/// This struct is kept for backward compatibility but may be removed.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CarlaConfig {
     /// Type-level defaults for each sensor category
@@ -25,6 +187,7 @@ pub struct CarlaConfig {
     pub sensors: HashMap<String, SensorParams>,
 }
 
+#[allow(dead_code)]
 impl CarlaConfig {
     /// Load configuration from a YAML file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
@@ -103,7 +266,8 @@ impl CarlaConfig {
     }
 }
 
-/// Type-level defaults for each sensor category
+/// Type-level defaults for each sensor category (DEPRECATED)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SensorTypeDefaults {
     #[serde(default)]
@@ -122,6 +286,7 @@ pub struct SensorTypeDefaults {
     pub radar: Option<SensorParams>,
 }
 
+#[allow(dead_code)]
 impl SensorTypeDefaults {
     /// Get defaults for a specific sensor type
     pub fn get_defaults(&self, sensor_type: SensorType) -> SensorParams {
@@ -147,11 +312,11 @@ pub enum SensorType {
     Radar,
 }
 
-/// CARLA sensor parameters
+/// CARLA sensor parameters (DEPRECATED)
 ///
-/// This struct contains all possible CARLA sensor attributes.
-/// Fields are optional to support partial overrides.
-/// Use `merge()` to combine type defaults with sensor-specific overrides.
+/// **DEPRECATED**: Use `SensorDefinition.parameters` instead.
+/// This struct is kept for backward compatibility but may be removed.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SensorParams {
     // Common parameters
@@ -239,6 +404,7 @@ pub struct SensorParams {
     pub vertical_fov: Option<f32>,
 }
 
+#[allow(dead_code)]
 impl SensorParams {
     /// Merge this set of parameters with another, preferring `other`'s values
     ///

@@ -151,6 +151,7 @@ impl AutowareDetector {
     }
 
     /// Get the latest URDF if available
+    #[allow(dead_code)]
     pub fn get_urdf(&self) -> Option<String> {
         self.latest_urdf.lock().unwrap().clone()
     }

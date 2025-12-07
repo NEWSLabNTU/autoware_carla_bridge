@@ -18,6 +18,5 @@ pub use bridge::sensor_bridge::SensorType;
 pub use bridge_config::BridgeConfig;
 pub use carla_vehicle::CarlaVehicle;
 pub use error::{BridgeError, Result};
-pub use sensor_config::{CarlaConfig, SensorParams};
+pub use sensor_config::{SensorType as ConfigSensorType, VehicleConfig};
 pub use tf_bridge::TFBuffer;
-pub use urdf_parser::{parse_urdf_sensors, SensorConfig};
