@@ -23,7 +23,7 @@ use std::{
     time::Duration,
 };
 
-use carla::client::{ActorBase, Client};
+use carla::client::Client;
 use carla_vehicle::CarlaVehicle;
 use clock::SimulatorClock;
 use error::Result;
@@ -82,11 +82,7 @@ fn create_sensor_bridges(
                 bridges.push(bridge);
             }
             Err(e) => {
-                tracing::error!(
-                    "Failed to create sensor bridge for '{}': {}",
-                    link_name,
-                    e
-                );
+                tracing::error!("Failed to create sensor bridge for '{}': {}", link_name, e);
                 // Continue with other sensors rather than failing completely
             }
         }
@@ -105,6 +101,8 @@ struct BridgeParams {
     pub carla_port: u16,
     pub map_name: Option<String>,
     pub vehicle_blueprint: String,
+    /// Kept for CLI backward compatibility but ignored (bridge uses infinite retry)
+    #[allow(dead_code)]
     pub autoware_timeout: u64,
     pub vehicle_config: String,
     pub bridge_config: String,
@@ -275,20 +273,12 @@ fn main() -> Result<()> {
     let bridge_config = bridge_config::BridgeConfig::from_file(&params.bridge_config)?;
     let initial_pose = bridge_config.to_isometry();
 
-    // Prepare spawn pose in ROS coordinates for auto-init if enabled
-    let spawn_pose_ros = if bridge_config.auto_initialize_localization {
-        Some(bridge_config.to_ros_pose_with_covariance())
-    } else {
-        None
-    };
-
     // === Step 4: Create Autoware coordinator and wait for Autoware ===
     tracing::info!("Creating Autoware coordinator...");
     let mut autoware = autoware::Autoware::new(
         node.clone(),
         bridge_config.publish_direct_localization,
         bridge_config.auto_initialize_localization,
-        spawn_pose_ros,
     )?;
 
     tracing::info!("Waiting for Autoware to start...");
@@ -349,10 +339,7 @@ fn main() -> Result<()> {
 
         let tf_count = autoware.get_tf_buffer().get_all_frames().len();
         if tf_count >= min_transforms {
-            tracing::info!(
-                "TF transforms ready: {} frames available",
-                tf_count
-            );
+            tracing::info!("TF transforms ready: {} frames available", tf_count);
             // Log available frames for debugging
             let frames = autoware.get_tf_buffer().get_all_frames();
             tracing::debug!("Available TF frames: {:?}", frames);
@@ -366,7 +353,10 @@ fn main() -> Result<()> {
                 tf_count,
                 min_transforms
             );
-            tracing::warn!("Available frames: {:?}", autoware.get_tf_buffer().get_all_frames());
+            tracing::warn!(
+                "Available frames: {:?}",
+                autoware.get_tf_buffer().get_all_frames()
+            );
             // Continue anyway - the sensor spawning will fail with more specific error
             break;
         }
@@ -387,7 +377,10 @@ fn main() -> Result<()> {
     }
 
     // === Step 5: Load vehicle configuration (single source of truth for sensors) ===
-    tracing::info!("Loading vehicle configuration from: {}", params.vehicle_config);
+    tracing::info!(
+        "Loading vehicle configuration from: {}",
+        params.vehicle_config
+    );
     let vehicle_config = sensor_config::VehicleConfig::from_file(&params.vehicle_config)?;
 
     tracing::info!(
@@ -405,23 +398,30 @@ fn main() -> Result<()> {
 
     // === Step 6: Spawn vehicle and sensors in CARLA ===
     tracing::info!("Spawning vehicle and sensors in CARLA...");
-    let mut carla_vehicle = CarlaVehicle::new(
+    let carla_vehicle = CarlaVehicle::new(
         &mut world,
         &initial_pose,
         &vehicle_config,
         autoware.get_tf_buffer(),
     )?;
 
-    let vehicle = carla_vehicle.get_vehicle();
+    // Wrap CarlaVehicle in Arc<Mutex<>> for shared access
+    let carla_vehicle = Arc::new(Mutex::new(carla_vehicle));
 
-    // Wrap vehicle in Arc<Mutex<>> for shared access between control callbacks and main loop
+    // Set vehicle reference in Autoware for ground truth publishing and localization init
+    autoware.set_vehicle(carla_vehicle.clone());
+
+    // Get raw vehicle for control callbacks (must be done after wrapping)
+    let vehicle_guard = carla_vehicle.lock().unwrap();
+    let vehicle = vehicle_guard.get_vehicle();
     let vehicle_shared = Arc::new(Mutex::new(Some(vehicle.clone())));
+    drop(vehicle_guard);
 
     tracing::info!("Vehicle and sensors spawned successfully!");
 
     // === Step 7: Register sensors with Autoware for topic mapping ===
     tracing::info!("Registering sensors with Autoware...");
-    for (link_name, sensor_type) in carla_vehicle.get_sensor_types() {
+    for (link_name, sensor_type) in carla_vehicle.lock().unwrap().get_sensor_types() {
         // Map sensor_config::SensorType to bridge::sensor_bridge::SensorType
         let bridge_sensor_type = match sensor_type {
             sensor_config::SensorType::Camera => bridge::sensor_bridge::SensorType::CameraRgb,
@@ -429,18 +429,26 @@ fn main() -> Result<()> {
             sensor_config::SensorType::Imu => bridge::sensor_bridge::SensorType::Imu,
             sensor_config::SensorType::Gnss => bridge::sensor_bridge::SensorType::Gnss,
             sensor_config::SensorType::Radar => {
-                tracing::debug!("Radar sensor '{}' not yet supported for topic mapping", link_name);
+                tracing::debug!(
+                    "Radar sensor '{}' not yet supported for topic mapping",
+                    link_name
+                );
                 continue;
             }
         };
 
         autoware.add_sensors(bridge_sensor_type, link_name.clone());
-        tracing::info!("  Registered sensor '{}' (type: {:?})", link_name, sensor_type);
+        tracing::info!(
+            "  Registered sensor '{}' (type: {:?})",
+            link_name,
+            sensor_type
+        );
     }
 
     // === Step 8: Create sensor bridges ===
     tracing::info!("Creating sensor bridges...");
-    let _sensor_bridges = create_sensor_bridges(node.clone(), &carla_vehicle, &autoware)?;
+    let _sensor_bridges =
+        create_sensor_bridges(node.clone(), &carla_vehicle.lock().unwrap(), &autoware)?;
     tracing::info!("Created {} sensor bridges", _sensor_bridges.len());
 
     // === Step 9: Create vehicle control bridge ===
@@ -467,7 +475,7 @@ fn main() -> Result<()> {
         autoware.health_check();
         if !autoware.is_alive() {
             tracing::warn!("Autoware connection lost! Cleaning up...");
-            carla_vehicle.cleanup()?;
+            carla_vehicle.lock().unwrap().cleanup()?;
             tracing::info!("Cleanup complete. Waiting for Autoware to restart...");
 
             // Wait for Autoware to come back
@@ -506,94 +514,11 @@ fn main() -> Result<()> {
         // Spin executor to process ROS callbacks (subscriptions)
         executor.spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(10)));
 
-        // === Auto-initialization for NDT localization ===
-        // Publish zero velocity and motion state (required for pose_initializer)
-        if let Err(e) = autoware.publish_zero_velocity(sec as f64) {
-            tracing::debug!("Failed to publish zero velocity: {}", e);
+        // === Main tick: ground truth publishing + localization init ===
+        // All pose/init logic is now encapsulated in autoware.tick()
+        if let Err(e) = autoware.tick(sec as f64) {
+            tracing::warn!("Autoware tick failed: {}", e);
         }
-        if let Err(e) = autoware.publish_stopped_motion_state(sec as f64) {
-            tracing::debug!("Failed to publish motion state: {}", e);
-        }
-
-        // Publish GNSS pose (bypasses gnss_poser for local projector maps)
-        // This provides the initial pose to pose_initializer for NDT alignment
-        if let Err(e) = autoware.publish_gnss_pose(sec as f64) {
-            tracing::debug!("Failed to publish GNSS pose: {}", e);
-        }
-
-        // Check if we should trigger localization init
-        if autoware.increment_localization_warmup() {
-            if let Err(e) = autoware.trigger_localization_init(sec as f64) {
-                tracing::warn!("Failed to trigger localization init: {}", e);
-            }
-        }
-
-        // Update localization init status from subscription
-        autoware.update_localization_init_status();
-
-        // Get vehicle transform and velocity from CARLA
-        let transform = vehicle.transform();
-        let velocity = vehicle.velocity();
-        let angular_velocity = vehicle.angular_velocity();
-
-        // Convert CARLA geom types to nalgebra for coordinate conversion
-        let na_transform = transform.to_na();
-        let na_velocity = velocity.to_na();
-        let na_angular_velocity = angular_velocity.to_na();
-
-        // Convert CARLA coordinates to ROS coordinates
-        let position = coordinate_conversion::carla_to_ros_position(&nalgebra::Vector3::new(
-            na_transform.translation.x as f64,
-            na_transform.translation.y as f64,
-            na_transform.translation.z as f64,
-        ));
-
-        // Convert CARLA rotation (quaternion) to ROS quaternion
-        // 1. Extract quaternion from CARLA transform (UnitQuaternion<f32>)
-        // 2. Convert to f64 for coordinate_conversion functions
-        // 3. Convert to Euler angles to apply coordinate system transform
-        // 4. Apply coordinate flip (roll and yaw signs)
-        // 5. Convert back to quaternion
-        let carla_quat = nalgebra::Quaternion::new(
-            na_transform.rotation.w as f64,
-            na_transform.rotation.i as f64,
-            na_transform.rotation.j as f64,
-            na_transform.rotation.k as f64,
-        );
-        let (roll, pitch, yaw) = coordinate_conversion::quaternion_to_euler(&carla_quat);
-        let orientation = coordinate_conversion::euler_to_quaternion(
-            -roll, // Roll sign flip for ROS right-handed system
-            pitch, -yaw, // Yaw sign flip for ROS right-handed system
-        );
-
-        let linear_vel = coordinate_conversion::carla_to_ros_velocity(&nalgebra::Vector3::new(
-            na_velocity.x as f64,
-            na_velocity.y as f64,
-            na_velocity.z as f64,
-        ));
-
-        let angular_vel =
-            coordinate_conversion::carla_to_ros_angular_velocity(&nalgebra::Vector3::new(
-                na_angular_velocity.x as f64,
-                na_angular_velocity.y as f64,
-                na_angular_velocity.z as f64,
-            ));
-
-        // Create ROS timestamp
-        let ros_timestamp = builtin_interfaces::msg::Time {
-            sec: sec as i32,
-            nanosec: ((sec - sec.floor()) * 1e9) as u32,
-        };
-
-        // Publish ground truth (debug/evaluation only)
-        // Following AWSIM convention: Autoware's localization computes pose from sensor data
-        autoware.publish_ground_truth(
-            &ros_timestamp,
-            &[position.x, position.y, position.z],
-            &[orientation.w, orientation.i, orientation.j, orientation.k],
-            &[linear_vel.x, linear_vel.y, linear_vel.z],
-            &[angular_vel.x, angular_vel.y, angular_vel.z],
-        )?;
 
         // Publish vehicle status (velocity, steering, control mode)
         vehicle_control.publish_status(sec)?;
@@ -608,7 +533,7 @@ fn main() -> Result<()> {
     }
 
     tracing::info!("Cleaning up...");
-    carla_vehicle.cleanup()?;
+    carla_vehicle.lock().unwrap().cleanup()?;
     tracing::info!("Bridge shutdown complete");
 
     Ok(())

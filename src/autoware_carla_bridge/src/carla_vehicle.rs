@@ -57,8 +57,7 @@ impl CarlaVehicle {
         );
 
         // Spawn vehicle using blueprint from config
-        let vehicle =
-            Self::spawn_vehicle(world, &vehicle_config.vehicle.blueprint, initial_pose)?;
+        let vehicle = Self::spawn_vehicle(world, &vehicle_config.vehicle.blueprint, initial_pose)?;
 
         // Log actual spawned position in CARLA
         let spawned_transform = vehicle.transform();
@@ -170,15 +169,14 @@ impl CarlaVehicle {
 
         for (link_name, sensor_def) in &vehicle_config.sensors {
             // Get blueprint directly from config (no name-based inference!)
-            let mut sensor_bp =
-                blueprint_library
-                    .find(&sensor_def.blueprint)
-                    .ok_or_else(|| {
-                        BridgeError::AutowareIssue(format!(
-                            "Sensor blueprint '{}' not found for '{}'",
-                            sensor_def.blueprint, link_name
-                        ))
-                    })?;
+            let mut sensor_bp = blueprint_library
+                .find(&sensor_def.blueprint)
+                .ok_or_else(|| {
+                    BridgeError::AutowareIssue(format!(
+                        "Sensor blueprint '{}' not found for '{}'",
+                        sensor_def.blueprint, link_name
+                    ))
+                })?;
 
             // Apply parameters from config
             sensor_def.apply_to_blueprint(&mut sensor_bp)?;

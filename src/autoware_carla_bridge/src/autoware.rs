@@ -1,11 +1,14 @@
 use std::{collections::HashMap, sync::Arc};
 
 use arc_swap::ArcSwap;
+use carla::client::ActorBase;
 use rclrs::IntoPrimitiveOptions;
 
 use crate::{
     autoware_detection::AutowareDetector,
     bridge::sensor_bridge::SensorType,
+    carla_vehicle::CarlaVehicle,
+    coordinate_conversion,
     error::{BridgeError, Result},
     tf_bridge::TFBuffer,
 };
@@ -59,8 +62,8 @@ pub struct Autoware {
     /// Auto-initialization status
     localization_init_status: std::sync::Mutex<LocalizationInitStatus>,
 
-    /// Spawn pose for auto-initialization (converted to ROS coordinates)
-    spawn_pose_ros: Option<geometry_msgs::msg::PoseWithCovarianceStamped>,
+    /// CARLA vehicle reference for getting ground truth pose
+    vehicle: Option<Arc<std::sync::Mutex<CarlaVehicle>>>,
 
     /// Publisher for GNSS pose (bypasses gnss_poser for local projector maps)
     /// Published to /sensing/gnss/pose_with_covariance for pose_initializer
@@ -187,12 +190,14 @@ impl Autoware {
     /// Autoware topic names. Does NOT wait for Autoware detection -
     /// call `wait_for_detection()` for that.
     ///
+    /// After creation, call `set_vehicle()` to enable ground truth publishing
+    /// and localization initialization from CARLA vehicle pose.
+    ///
     /// # Arguments
     /// * `node` - ROS node handle for subscriptions and publishers
     /// * `publish_direct_localization` - Whether to publish directly to /localization/kinematic_state
     ///   Ground truth is always published to /carla/ground_truth/*
     /// * `auto_initialize_localization` - Whether to auto-initialize via service call
-    /// * `spawn_pose_ros` - Optional spawn pose in ROS coordinates for auto-initialization
     ///
     /// # Returns
     /// Result containing Autoware instance or error
@@ -200,7 +205,6 @@ impl Autoware {
         node: rclrs::Node,
         publish_direct_localization: bool,
         auto_initialize_localization: bool,
-        spawn_pose_ros: Option<geometry_msgs::msg::PoseWithCovarianceStamped>,
     ) -> Result<Self> {
         tracing::info!("Initializing Autoware coordinator...");
         tracing::info!(
@@ -478,7 +482,7 @@ impl Autoware {
             auto_initialize_localization,
             localization_init_client,
             localization_init_status: std::sync::Mutex::new(LocalizationInitStatus::Pending),
-            spawn_pose_ros,
+            vehicle: None,
             pub_gnss_pose,
 
             // === Ground Truth Publishers (Always Active) ===
@@ -692,6 +696,283 @@ impl Autoware {
     /// Reference to TFBuffer
     pub fn get_tf_buffer(&self) -> &TFBuffer {
         &self.tf_buffer
+    }
+
+    /// Set the CARLA vehicle reference
+    ///
+    /// Must be called after vehicle spawn to enable ground truth publishing
+    /// and localization initialization from CARLA vehicle pose.
+    ///
+    /// # Arguments
+    /// * `vehicle` - Arc<Mutex<CarlaVehicle>> for shared access
+    pub fn set_vehicle(&mut self, vehicle: Arc<std::sync::Mutex<CarlaVehicle>>) {
+        tracing::info!("Vehicle reference set for Autoware coordinator");
+        self.vehicle = Some(vehicle);
+    }
+
+    /// Main tick function - call once per frame
+    ///
+    /// Handles:
+    /// 1. Getting vehicle pose/velocity from CARLA
+    /// 2. Converting coordinates to ROS
+    /// 3. Publishing ground truth
+    /// 4. Handling localization initialization/re-initialization
+    ///
+    /// # Arguments
+    /// * `sim_time` - CARLA simulation time in seconds
+    ///
+    /// # Returns
+    /// Result indicating success or error
+    pub fn tick(&self, sim_time: f64) -> Result<()> {
+        // Get vehicle from stored reference
+        let vehicle_arc = self.vehicle.as_ref().ok_or_else(|| {
+            BridgeError::AutowareIssue("Vehicle not set - call set_vehicle() first".to_string())
+        })?;
+
+        let vehicle_guard = vehicle_arc.lock().unwrap();
+        let vehicle = vehicle_guard.get_vehicle();
+
+        // Get CARLA transform/velocity
+        let transform = vehicle.transform();
+        let velocity = vehicle.velocity();
+        let angular_velocity = vehicle.angular_velocity();
+
+        // Convert to nalgebra for coordinate conversion
+        let na_transform = transform.to_na();
+        let na_velocity = velocity.to_na();
+        let na_angular_velocity = angular_velocity.to_na();
+
+        // Convert CARLA coordinates to ROS coordinates
+        let position = coordinate_conversion::carla_to_ros_position(&nalgebra::Vector3::new(
+            na_transform.translation.x as f64,
+            na_transform.translation.y as f64,
+            na_transform.translation.z as f64,
+        ));
+
+        // Convert CARLA rotation (quaternion) to ROS quaternion
+        let carla_quat = nalgebra::Quaternion::new(
+            na_transform.rotation.w as f64,
+            na_transform.rotation.i as f64,
+            na_transform.rotation.j as f64,
+            na_transform.rotation.k as f64,
+        );
+        let (roll, pitch, yaw) = coordinate_conversion::quaternion_to_euler(&carla_quat);
+        let orientation = coordinate_conversion::euler_to_quaternion(
+            -roll, // Roll sign flip for ROS right-handed system
+            pitch, -yaw, // Yaw sign flip for ROS right-handed system
+        );
+
+        let linear_vel = coordinate_conversion::carla_to_ros_velocity(&nalgebra::Vector3::new(
+            na_velocity.x as f64,
+            na_velocity.y as f64,
+            na_velocity.z as f64,
+        ));
+
+        let angular_vel =
+            coordinate_conversion::carla_to_ros_angular_velocity(&nalgebra::Vector3::new(
+                na_angular_velocity.x as f64,
+                na_angular_velocity.y as f64,
+                na_angular_velocity.z as f64,
+            ));
+
+        // Create ROS timestamp
+        let ros_timestamp = builtin_interfaces::msg::Time {
+            sec: sim_time as i32,
+            nanosec: ((sim_time - sim_time.floor()) * 1e9) as u32,
+        };
+
+        // Publish ground truth
+        self.publish_ground_truth(
+            &ros_timestamp,
+            &[position.x, position.y, position.z],
+            &[orientation.w, orientation.i, orientation.j, orientation.k],
+            &[linear_vel.x, linear_vel.y, linear_vel.z],
+            &[angular_vel.x, angular_vel.y, angular_vel.z],
+        )?;
+
+        // Handle localization initialization if enabled
+        if self.auto_initialize_localization {
+            // Create pose for init service from current CARLA position
+            let ros_pose = self.create_ros_pose_from_carla(&na_transform, sim_time);
+            self.handle_localization_init(sim_time, &ros_pose)?;
+        }
+
+        Ok(())
+    }
+
+    /// Create ROS PoseWithCovarianceStamped from CARLA transform
+    ///
+    /// Converts CARLA coordinates to ROS coordinates (Y-axis flip, roll/yaw sign flips)
+    /// since the lanelet map is in ROS coordinate system.
+    fn create_ros_pose_from_carla(
+        &self,
+        na_transform: &nalgebra::Isometry3<f32>,
+        sim_time: f64,
+    ) -> geometry_msgs::msg::PoseWithCovarianceStamped {
+        // Convert CARLA position to ROS coordinates (Y-axis flip)
+        let position = coordinate_conversion::carla_to_ros_position(&nalgebra::Vector3::new(
+            na_transform.translation.x as f64,
+            na_transform.translation.y as f64,
+            na_transform.translation.z as f64,
+        ));
+
+        // Convert CARLA rotation (quaternion) to ROS quaternion
+        let carla_quat = nalgebra::Quaternion::new(
+            na_transform.rotation.w as f64,
+            na_transform.rotation.i as f64,
+            na_transform.rotation.j as f64,
+            na_transform.rotation.k as f64,
+        );
+        let (roll, pitch, yaw) = coordinate_conversion::quaternion_to_euler(&carla_quat);
+        let orientation = coordinate_conversion::euler_to_quaternion(
+            -roll, // Roll sign flip for ROS right-handed system
+            pitch, -yaw, // Yaw sign flip for ROS right-handed system
+        );
+
+        let mut pose = geometry_msgs::msg::PoseWithCovarianceStamped::default();
+        pose.header.frame_id = "map".to_string();
+        pose.header.stamp.sec = sim_time.floor() as i32;
+        pose.header.stamp.nanosec = (sim_time.fract() * 1_000_000_000_f64) as u32;
+
+        // Position (converted to ROS coordinates)
+        pose.pose.pose.position.x = position.x;
+        pose.pose.pose.position.y = position.y;
+        pose.pose.pose.position.z = position.z;
+
+        // Orientation (converted to ROS coordinates)
+        pose.pose.pose.orientation.w = orientation.w;
+        pose.pose.pose.orientation.x = orientation.i;
+        pose.pose.pose.orientation.y = orientation.j;
+        pose.pose.pose.orientation.z = orientation.k;
+
+        // Set covariance (reasonable defaults for simulation)
+        // Diagonal: [x, y, z, roll, pitch, yaw] variance
+        pose.pose.covariance[0] = 0.25; // x variance (0.5m std dev)
+        pose.pose.covariance[7] = 0.25; // y variance
+        pose.pose.covariance[14] = 0.25; // z variance
+        pose.pose.covariance[21] = 0.01; // roll variance
+        pose.pose.covariance[28] = 0.01; // pitch variance
+        pose.pose.covariance[35] = 0.01; // yaw variance
+
+        pose
+    }
+
+    /// Handle localization initialization based on current state
+    ///
+    /// Monitors localization state and triggers (re-)initialization when needed.
+    fn handle_localization_init(
+        &self,
+        sim_time: f64,
+        ros_pose: &geometry_msgs::msg::PoseWithCovarianceStamped,
+    ) -> Result<()> {
+        let state = *self.localization_init_state.lock().unwrap();
+        let status = *self.localization_init_status.lock().unwrap();
+
+        match status {
+            LocalizationInitStatus::Pending | LocalizationInitStatus::Failed => {
+                // Start initialization if localization is uninitialized
+                if state == 1 {
+                    // UNINITIALIZED
+                    // Publish GNSS pose for NDT alignment
+                    self.publish_gnss_pose_from_carla(ros_pose)?;
+
+                    // Publish zero velocity and stopped motion state (required for pose_initializer)
+                    self.publish_zero_velocity(sim_time)?;
+                    self.publish_stopped_motion_state(sim_time)?;
+
+                    // Call init service immediately
+                    self.call_localization_init_service(ros_pose)?;
+                }
+            }
+            LocalizationInitStatus::WarmingUp { .. } | LocalizationInitStatus::Requested => {
+                // Continue publishing required topics during warmup/request
+                self.publish_gnss_pose_from_carla(ros_pose)?;
+                self.publish_zero_velocity(sim_time)?;
+                self.publish_stopped_motion_state(sim_time)?;
+
+                // Update status from subscription
+                self.update_localization_init_status();
+            }
+            LocalizationInitStatus::Initialized => {
+                // Check for localization loss
+                if state == 1 {
+                    // Lost - transition back to UNINITIALIZED
+                    tracing::warn!(
+                        "Localization lost (state changed to UNINITIALIZED), triggering re-initialization"
+                    );
+                    *self.localization_init_status.lock().unwrap() =
+                        LocalizationInitStatus::Pending;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Publish GNSS pose from CARLA transform (bypasses gnss_poser)
+    fn publish_gnss_pose_from_carla(
+        &self,
+        pose: &geometry_msgs::msg::PoseWithCovarianceStamped,
+    ) -> Result<()> {
+        if let Some(publisher) = &self.pub_gnss_pose {
+            publisher.publish(pose)?;
+        }
+        Ok(())
+    }
+
+    /// Call localization init service with given pose
+    fn call_localization_init_service(
+        &self,
+        pose: &geometry_msgs::msg::PoseWithCovarianceStamped,
+    ) -> Result<()> {
+        let client = match &self.localization_init_client {
+            Some(c) => c,
+            None => return Ok(()), // Auto-init disabled
+        };
+
+        // Check if service is available
+        match client.service_is_ready() {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::debug!("Localization init service not ready yet");
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::debug!("Failed to check service ready: {}", e);
+                return Ok(());
+            }
+        }
+
+        // Create request
+        let mut request = autoware_adapi_v1_msgs::srv::InitializeLocalization_Request::default();
+        request.pose.push(pose.clone());
+
+        tracing::info!(
+            "Calling /api/localization/initialize with pose: ({:.2}, {:.2}, {:.2})",
+            pose.pose.pose.position.x,
+            pose.pose.pose.position.y,
+            pose.pose.pose.position.z
+        );
+
+        // Update status
+        *self.localization_init_status.lock().unwrap() = LocalizationInitStatus::Requested;
+
+        // Send request (fire-and-forget)
+        let result: Result<
+            rclrs::Promise<autoware_adapi_v1_msgs::srv::InitializeLocalization_Response>,
+            _,
+        > = client.call(&request);
+        match result {
+            Ok(_promise) => {
+                tracing::info!("Localization init request sent successfully");
+            }
+            Err(e) => {
+                tracing::error!("Failed to send localization init request: {}", e);
+                *self.localization_init_status.lock().unwrap() = LocalizationInitStatus::Failed;
+            }
+        }
+
+        Ok(())
     }
 
     // === Initial Pose Methods ===
@@ -1068,168 +1349,12 @@ impl Autoware {
         Ok(())
     }
 
-    /// Publish GNSS pose for localization initialization
-    ///
-    /// This bypasses gnss_poser (which fails with local projector type maps)
-    /// by publishing the spawn pose directly to /sensing/gnss/pose_with_covariance.
-    /// The pose_initializer subscribes to this topic to get the initial GNSS pose
-    /// for NDT alignment.
-    ///
-    /// This should be called during the warmup phase before triggering localization init.
-    ///
-    /// # Arguments
-    /// * `sim_time` - CARLA simulation time in seconds
-    ///
-    /// # Returns
-    /// Result indicating success or error
-    pub fn publish_gnss_pose(&self, sim_time: f64) -> Result<()> {
-        // Only publish if auto-init is enabled and we have a publisher
-        let publisher = match &self.pub_gnss_pose {
-            Some(p) => p,
-            None => return Ok(()), // Auto-init disabled, nothing to do
-        };
-
-        let spawn_pose = match &self.spawn_pose_ros {
-            Some(p) => p,
-            None => return Ok(()), // No spawn pose configured
-        };
-
-        // Clone and update timestamp
-        let mut msg = spawn_pose.clone();
-        msg.header.stamp.sec = sim_time.floor() as i32;
-        msg.header.stamp.nanosec = (sim_time.fract() * 1_000_000_000_f64) as u32;
-
-        publisher.publish(&msg)?;
-
-        Ok(())
-    }
-
     // === Auto-Initialization Methods ===
 
     /// Get the current localization auto-init status
     #[allow(dead_code)]
     pub fn get_localization_init_status(&self) -> LocalizationInitStatus {
         *self.localization_init_status.lock().unwrap()
-    }
-
-    /// Increment the warmup counter for localization auto-initialization
-    ///
-    /// This should be called once per main loop iteration. After sufficient
-    /// warmup ticks (to allow sensors to start publishing), the service
-    /// call will be triggered.
-    ///
-    /// Returns true if the service call should be triggered this tick.
-    pub fn increment_localization_warmup(&self) -> bool {
-        if !self.auto_initialize_localization {
-            return false;
-        }
-
-        let mut status = self.localization_init_status.lock().unwrap();
-        match *status {
-            LocalizationInitStatus::Pending => {
-                *status = LocalizationInitStatus::WarmingUp { ticks: 1 };
-                false
-            }
-            LocalizationInitStatus::WarmingUp { ticks } => {
-                // Wait for 100 ticks (~5 seconds at 20Hz) before triggering
-                const WARMUP_TICKS: u32 = 100;
-                if ticks >= WARMUP_TICKS {
-                    tracing::info!(
-                        "Localization warmup complete ({} ticks), triggering initialization",
-                        ticks
-                    );
-                    *status = LocalizationInitStatus::Requested;
-                    true
-                } else {
-                    *status = LocalizationInitStatus::WarmingUp { ticks: ticks + 1 };
-                    if ticks % 20 == 0 {
-                        tracing::debug!("Localization warmup: {}/{} ticks", ticks, WARMUP_TICKS);
-                    }
-                    false
-                }
-            }
-            _ => false, // Already requested, initialized, or failed
-        }
-    }
-
-    /// Trigger the localization initialization service call
-    ///
-    /// This is a non-blocking call that sends the request to the service.
-    /// The response is handled asynchronously.
-    pub fn trigger_localization_init(&self, sim_time: f64) -> Result<()> {
-        let client = match &self.localization_init_client {
-            Some(c) => c,
-            None => {
-                return Err(BridgeError::AutowareIssue(
-                    "Localization init client not available".to_string(),
-                ));
-            }
-        };
-
-        let spawn_pose = match &self.spawn_pose_ros {
-            Some(p) => p.clone(),
-            None => {
-                return Err(BridgeError::AutowareIssue(
-                    "Spawn pose not available for localization init".to_string(),
-                ));
-            }
-        };
-
-        // Check if service is available
-        match client.service_is_ready() {
-            Ok(true) => {}
-            Ok(false) => {
-                tracing::warn!("Localization init service not ready, will retry...");
-                // Reset to warmup state to retry
-                *self.localization_init_status.lock().unwrap() =
-                    LocalizationInitStatus::WarmingUp { ticks: 80 }; // Retry after 1 second
-                return Ok(());
-            }
-            Err(e) => {
-                tracing::warn!("Failed to check service ready: {}, will retry...", e);
-                *self.localization_init_status.lock().unwrap() =
-                    LocalizationInitStatus::WarmingUp { ticks: 80 };
-                return Ok(());
-            }
-        }
-
-        // Create request
-        let mut request = autoware_adapi_v1_msgs::srv::InitializeLocalization_Request::default();
-
-        // Update timestamp to current sim time
-        let mut pose_with_time = spawn_pose;
-        pose_with_time.header.stamp.sec = sim_time.floor() as i32;
-        pose_with_time.header.stamp.nanosec = (sim_time.fract() * 1_000_000_000_f64) as u32;
-
-        // The pose field is a bounded sequence with max 1 element
-        request.pose.push(pose_with_time);
-
-        tracing::info!(
-            "Calling /api/localization/initialize with pose: ({:.2}, {:.2}, {:.2})",
-            request.pose[0].pose.pose.position.x,
-            request.pose[0].pose.pose.position.y,
-            request.pose[0].pose.pose.position.z
-        );
-
-        // Send request (fire-and-forget - we monitor status via subscription)
-        let result: Result<
-            rclrs::Promise<autoware_adapi_v1_msgs::srv::InitializeLocalization_Response>,
-            _,
-        > = client.call(&request);
-        match result {
-            Ok(_promise) => {
-                tracing::info!("Localization init request sent successfully");
-                // Note: We don't wait for response here, the localization_init_state
-                // subscription will detect when initialization is complete
-                // The _promise is dropped, which is fine - we use the topic-based status monitoring
-            }
-            Err(e) => {
-                tracing::error!("Failed to send localization init request: {}", e);
-                *self.localization_init_status.lock().unwrap() = LocalizationInitStatus::Failed;
-            }
-        }
-
-        Ok(())
     }
 
     /// Check if localization has been initialized (from /localization/initialization_state)
@@ -1273,6 +1398,23 @@ impl Autoware {
                         "Localization state changed from INITIALIZED to {} - may need re-init",
                         state
                     );
+                }
+            }
+            LocalizationInitStatus::WarmingUp { ticks } => {
+                // If localization initialized while warming up, we're done
+                if state == 3 {
+                    tracing::info!("Localization initialized during warmup");
+                    *self.localization_init_status.lock().unwrap() =
+                        LocalizationInitStatus::Initialized;
+                } else if ticks > 0 {
+                    // Decrement warmup counter
+                    *self.localization_init_status.lock().unwrap() =
+                        LocalizationInitStatus::WarmingUp { ticks: ticks - 1 };
+                } else {
+                    // Warmup complete, transition to Pending for retry
+                    tracing::info!("Warmup complete, ready to retry localization init");
+                    *self.localization_init_status.lock().unwrap() =
+                        LocalizationInitStatus::Pending;
                 }
             }
             _ => {}
