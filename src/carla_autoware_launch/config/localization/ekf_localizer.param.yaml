@@ -3,15 +3,20 @@
     node:
       show_debug_info: false
       enable_yaw_bias_estimation: true
-      predict_frequency: 50.0
-      tf_rate: 50.0
-      extend_state_step: 50
+      # CARLA simulation runs at ~20Hz, so reduce predict/tf rates accordingly
+      # Original: 50.0, but CARLA async mode limits to ~20Hz
+      predict_frequency: 20.0
+      tf_rate: 20.0
+      extend_state_step: 20
 
     pose_measurement:
       # for Pose measurement
       pose_additional_delay: 0.0
       pose_measure_uncertainty_time: 0.01
-      pose_smoothing_steps: 5
+      # Reduced smoothing steps for CARLA's lower update rate
+      # Original: 5, but with 20Hz predict, smoothing_time = 5*0.05 = 0.25s which is too long
+      # With 2 steps: smoothing_time = 2*0.05 = 0.1s
+      pose_smoothing_steps: 2
       pose_gate_dist: 49.5 # corresponds to significance level = 10^-10
 
     twist_measurement:
