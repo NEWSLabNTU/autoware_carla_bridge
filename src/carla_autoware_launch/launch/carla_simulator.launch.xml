@@ -6,6 +6,7 @@
      - Sets use_sim_time globally via set_parameter (fixes ROS 2 parameter propagation issue)
      - Includes autoware.launch.xml with launch_localization=false
      - Includes tier4_localization_component separately with CARLA-optimized NDT parameters
+     - Disables traffic light recognition (use_traffic_light_recognition=false)
      - Includes autoware_carla_interface when simulator_type is carla
 -->
 <launch>
@@ -57,6 +58,8 @@
 
   <!-- CARLA-optimized localization config path -->
   <arg name="carla_loc_config_path" default="$(find-pkg-share carla_autoware_launch)/config/localization"/>
+  <!-- CARLA-optimized system topics config - excludes traffic light topic monitoring -->
+  <arg name="carla_system_topics_path" default="$(find-pkg-share carla_autoware_launch)/config/system/component_state_monitor/topics.yaml"/>
 
   <!-- Include autoware_carla_interface for CARLA integration -->
   <group scoped="false" if="$(eval &quot;'$(var simulator_type)' == 'carla'&quot;)">
@@ -77,7 +80,8 @@
       <arg name="control_module_preset" value="$(var control_module_preset)"/>
       <!-- Modules to be launched -->
       <arg name="launch_vehicle" value="$(var vehicle)"/>
-      <arg name="launch_system" value="$(var system)"/>
+      <!-- CRITICAL - Disable system here, launch separately with CARLA topics config -->
+      <arg name="launch_system" value="false"/>
       <arg name="launch_map" value="$(var map)"/>
       <arg name="launch_sensing" value="$(var sensing)"/>
       <!-- CRITICAL - Disable localization here, launch separately with CARLA config -->
@@ -100,6 +104,8 @@
       <!-- Sensing -->
       <arg name="launch_sensing_driver" value="$(var launch_sensing_driver)"/>
       <!-- Perception -->
+      <!-- CARLA - Disable traffic light recognition (no traffic light detection in CARLA yet) -->
+      <arg name="use_traffic_light_recognition" value="false"/>
       <arg name="traffic_light_recognition/enable_fine_detection" value="false"/>
       <arg name="all_traffic_light_camera" value="$(var traffic_light_namespace)"/>
       <!-- Tools -->
@@ -114,6 +120,36 @@
     <include file="$(find-pkg-share autoware_launch)/launch/components/tier4_localization_component.launch.xml">
       <!-- Use CARLA-optimized localization config path -->
       <arg name="loc_config_path" value="$(var carla_loc_config_path)"/>
+    </include>
+  </group>
+
+  <!-- Include system with CARLA-optimized topics config
+       This uses carla_autoware_launch topics.yaml which excludes traffic light monitoring -->
+  <group if="$(var system)">
+    <include file="$(find-pkg-share tier4_system_launch)/launch/system.launch.xml">
+      <arg name="run_mode" value="logging_simulation"/>
+      <arg name="launch_system_monitor" value="$(var launch_system_monitor)"/>
+      <arg name="launch_dummy_diag_publisher" value="$(var launch_dummy_diag_publisher)"/>
+      <arg name="sensor_model" value="$(var sensor_model)"/>
+      <!-- CRITICAL - Use CARLA-specific topics config that excludes traffic light topic -->
+      <arg name="component_state_monitor_topic_path" value="$(var carla_system_topics_path)"/>
+      <!-- Use default paths for other configs -->
+      <arg name="duplicated_node_checker_param_path" value="$(find-pkg-share autoware_launch)/config/system/duplicated_node_checker/duplicated_node_checker.param.yaml"/>
+      <arg name="processing_time_checker_param_path" value="$(find-pkg-share autoware_launch)/config/system/processing_time_checker/processing_time_checker.param.yaml"/>
+      <arg name="mrm_comfortable_stop_operator_param_path" value="$(find-pkg-share autoware_launch)/config/system/mrm_comfortable_stop_operator/mrm_comfortable_stop_operator.param.yaml"/>
+      <arg name="mrm_emergency_stop_operator_param_path" value="$(find-pkg-share autoware_launch)/config/system/mrm_emergency_stop_operator/mrm_emergency_stop_operator.param.yaml"/>
+      <arg name="dummy_diag_publisher_param_path" value="$(find-pkg-share autoware_launch)/config/system/diagnostics/dummy_diag_publisher.param.yaml"/>
+      <arg name="system_monitor_cpu_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/cpu_monitor.param.yaml"/>
+      <arg name="system_monitor_gpu_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/gpu_monitor.param.yaml"/>
+      <arg name="system_monitor_hdd_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/hdd_monitor.param.yaml"/>
+      <arg name="system_monitor_mem_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/mem_monitor.param.yaml"/>
+      <arg name="system_monitor_net_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/net_monitor.param.yaml"/>
+      <arg name="system_monitor_ntp_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/ntp_monitor.param.yaml"/>
+      <arg name="system_monitor_process_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/process_monitor.param.yaml"/>
+      <arg name="system_monitor_voltage_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/voltage_monitor.param.yaml"/>
+      <arg name="mrm_handler_param_path" value="$(find-pkg-share autoware_launch)/config/system/mrm_handler/mrm_handler.param.yaml"/>
+      <arg name="diagnostic_graph_aggregator_param_path" value="$(find-pkg-share diagnostic_graph_aggregator)/config/default.param.yaml"/>
+      <arg name="diagnostic_graph_aggregator_graph_path" value="$(find-pkg-share autoware_launch)/config/system/diagnostics/autoware-main.yaml"/>
     </include>
   </group>
 </launch>
