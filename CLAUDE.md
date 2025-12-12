@@ -70,7 +70,10 @@ Uses colcon-cargo-ros2 for seamless Rust + ROS 2 integration:
 
 ```bash
 just build  # Standard colcon build
+just clean  # Clean build artifacts (optional, for fresh rebuild)
 ```
+
+**IMPORTANT**: Always use `just build` (and optionally `just clean`) to rebuild the project. Do NOT use `colcon build` directly with specific packages, as `just build` ensures proper environment setup and consistent build configuration.
 
 No manual staging or configuration required - builds like any ROS 2 package.
 
@@ -296,6 +299,52 @@ colcon list | grep autoware_vehicle_msgs
 - Executor must spin in wait loops for callbacks
 - carla-rust uses nalgebra types: `.to_na()` / `Transform::from_na()`
 
+### use_sim_time Parameter Propagation - CRITICAL
+
+**Problem**: ROS 2 launch files don't automatically propagate `use_sim_time` through nested includes. Autoware's `global_params.launch.py` uses `SetParameter` but this only affects nodes launched in the same context.
+
+**Symptom**: Auto button disabled in RViz despite valid route. Check logs for:
+```
+Lookup would require extrapolation into the past. Requested time 527.290747 but earliest data is at time 1765365855.014771
+```
+
+**Root Cause Chain**:
+```
+Localization nodes have use_sim_time=false
+  → TF transforms published with wall clock (~1.77 billion seconds)
+  → Sensor data uses simulation time (~527 seconds)
+  → MessageFilter drops all pointclouds (TF lookup fails)
+  → occupancy_grid_map produces no output
+  → behavior_path_planner blocked
+  → No trajectory/control commands
+  → Diagnostic rate checks fail
+  → is_autonomous_mode_available = false
+```
+
+**Fix**: Add global `<set_parameter>` in top-level launch file:
+```xml
+<launch>
+  <arg name="use_sim_time" default="true"/>
+
+  <!-- CRITICAL: Set use_sim_time globally for ALL nodes -->
+  <set_parameter name="use_sim_time" value="$(var use_sim_time)"/>
+
+  <!-- Include Autoware launch files after set_parameter -->
+  <include file="$(find-pkg-share autoware_launch)/launch/autoware.launch.xml">
+    ...
+  </include>
+</launch>
+```
+
+**Verification**:
+```bash
+# Check localization nodes have use_sim_time=true
+ros2 param get /localization/pose_estimator/ndt_scan_matcher use_sim_time
+ros2 param get /localization/ekf_localizer use_sim_time
+```
+
+**File**: `src/carla_autoware_launch/launch/carla_simulator.launch.xml` (fixed 2025-12-11)
+
 ### Dependency Synchronization
 When using local carla-rust (`path = "..."`), match critical dependency versions (nalgebra, ndarray) to avoid type incompatibility errors.
 
@@ -340,6 +389,88 @@ mapping values are not allowed here
 ---
 
 ## Coding Practices
+
+### Background Commands for Demo
+
+**When starting demo, use simple background commands with run_in_background=true**
+
+```bash
+# Correct - simple command in background
+env DISPLAY=:1 just demo start 2>&1
+# (with run_in_background=true)
+
+# Incorrect - don't add sleep/echo/wait patterns
+env DISPLAY=:1 just demo start 2>&1 &
+sleep 80
+echo "=== Done ==="
+```
+
+The Bash tool's `run_in_background` parameter handles background execution properly. Adding shell backgrounding (`&`), sleep/wait patterns clutters the command and makes output harder to track.
+
+**Checking status**: Use `just demo status` or `BashOutput` tool to check background job output.
+
+### Systemd Service Commands
+
+**`just bridge start`, `just bridge stop`, etc. start/stop systemd services and return immediately**
+
+```bash
+# Correct - run directly, no background needed
+just bridge start
+just bridge stop
+
+# Incorrect - don't put in background
+just bridge start &
+```
+
+These commands control systemd services that run in the background themselves. They complete immediately after starting/stopping the service.
+
+### Build Commands - CRITICAL
+
+**Always use `just build` instead of direct `colcon build`**
+
+```bash
+# Correct - use just build
+just build
+
+# Incorrect - don't use colcon build directly
+colcon build --packages-select some_package
+```
+
+**Why**: The justfile passes `--symlink-install` to colcon, which creates symbolic links in the `install/` directory instead of file copies. Running `colcon build` directly creates file copies that conflict with previously created symlinks, causing unpredictable behavior.
+
+**If you accidentally ran `colcon build` directly**:
+```bash
+just clean && just build
+```
+
+This removes all build artifacts and rebuilds cleanly with proper symlinks.
+
+**If install/ files are broken for a specific package** (e.g., stale launch files):
+```bash
+# Clean specific package and rebuild
+rm -rf build/autoware_carla_bridge install/autoware_carla_bridge
+just build
+```
+
+Never manually fix symlinks or copy files to install/. Always use `just build` after removing the broken package directories.
+
+### ROS 2 Topic Monitoring Commands
+
+**Use Bash tool's timeout parameter instead of shell patterns**
+
+When running streaming ROS 2 commands like `ros2 topic hz` or `ros2 topic echo`, use the Bash tool's `timeout` parameter:
+
+```bash
+# Correct - use timeout parameter on Bash tool
+timeout 5 ros2 topic hz /some/topic --window 3
+
+# Incorrect - don't use sleep/kill patterns
+ros2 topic hz /some/topic --window 3 &
+sleep 3
+kill %1 2>/dev/null
+```
+
+**Why**: The Bash tool's timeout parameter handles process cleanup properly. Shell backgrounding with manual kill creates race conditions and cluttered output.
 
 ### Temporary Files
 
@@ -457,6 +588,48 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 
 ---
 
+## Debugging Autoware
+
+### Autoware Node Logs (play_launch)
+
+When Autoware is running via `just autoware start`, individual node logs are stored at:
+```
+third_party/autoware/autoware_repo/play_log/<timestamp>/node/<node-name>/{out,err}
+```
+
+Example - check NDT scan matcher logs:
+```bash
+# List available log sessions
+ls third_party/autoware/autoware_repo/play_log/
+
+# Check specific node logs
+cat third_party/autoware/autoware_repo/play_log/2025-12-08_03-24-49/node/ndt_scan_matcher/err
+cat third_party/autoware/autoware_repo/play_log/2025-12-08_03-24-49/node/autoware_pose_initializer_node-78/out
+```
+
+### Pose Initializer Stop Check
+
+The pose_initializer requires the vehicle to be stopped before accepting initialization:
+
+- **Topic**: `/sensing/vehicle_velocity_converter/twist_with_covariance`
+- **Message type**: `geometry_msgs::msg::TwistWithCovarianceStamped`
+- **Parameters** (on `/localization/util/pose_initializer`):
+  - `stop_check_enabled`: Whether stop check is required (default: true in `online` mode)
+  - `stop_check_duration`: How long vehicle must be stopped (default: 3.0s)
+
+**CRITICAL**: The `stop_check_enabled` parameter is controlled by `system_run_mode` at launch time:
+- `system_run_mode=online` → `stop_check_enabled=true` (default)
+- `system_run_mode=logging_simulation` → `stop_check_enabled=false`
+
+Our `carla_simulator.launch.xml` sets `system_run_mode=logging_simulation` to disable stop check because:
+1. CARLA simulation has timing issues with `use_sim_time`
+2. Localization nodes have `use_sim_time=False` due to parameter propagation issues
+3. This causes timestamp mismatch that makes stop check always fail
+
+**Verification**: `ros2 param get /localization/util/pose_initializer stop_check_enabled` should return `False`.
+
+---
+
 ## Documentation
 
 **In-repo**:
@@ -475,10 +648,30 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 
 ---
 
-**Last Updated**: 2025-12-03 (Session: Connection robustness & URDF/YAML fixes)
+**Last Updated**: 2025-12-11 (Session: use_sim_time parameter propagation fix)
 **Migration Status**: Phases 0-3 Complete + Phase 4 Vehicle Spawning (55%)
 **Autonomous Driving**: ✅ End-to-end working (Python scripts + Rust bridge with modern Autoware APIs)
 **Recent Changes**:
+- ✅ **use_sim_time parameter propagation fix** (2025-12-11):
+  - Fixed Auto button disabled in RViz despite valid route
+  - Root cause: Localization nodes had `use_sim_time=false` causing TF timestamp mismatch
+  - TF transforms used wall clock time (~1.77B sec) while sensors used sim time (~527 sec)
+  - MessageFilter dropped all pointclouds → cascading failure through perception/planning/control
+  - Fix: Added `<set_parameter name="use_sim_time" value="$(var use_sim_time)"/>` in carla_simulator.launch.xml
+- ✅ **Localization stop_check fix** (2025-12-10):
+  - Fixed "vehicle is not stopped" error during pose initialization
+  - Updated `carla_simulator.launch.xml` to set `system_run_mode=logging_simulation`
+  - This disables `stop_check_enabled` in pose_initializer at launch time
+  - Root cause: `use_sim_time=False` on localization nodes caused timestamp mismatch
+- ✅ **ROS parameters migration** (2025-12-08):
+  - Replaced clap command-line args with native ROS 2 parameters
+  - Single config file: `src/autoware_carla_bridge/config/vehicle_config.yaml`
+  - Parameters set via `--ros-args -p param:=value` (e.g., `carla_port`, `vehicle_config`)
+  - Removed duplicate config files, consolidated to single source of truth
+- ✅ **CARLA localization configuration** (2025-12-05):
+  - Created `carla_autoware_launch` package with CARLA-optimized NDT parameters
+  - Disabled `stop_check_enabled` in pose_initializer (CARLA timing issues caused false "vehicle not stopped" errors)
+  - Custom NDT params: resolution=1.0m, max_iterations=50, particles_num=500, map_radius=200m
 - ✅ **Connection robustness improvements** (2025-12-03):
   - Infinite retry loops for CARLA connection with panic catching (main.rs:167-196)
   - Infinite wait for Autoware detection with executor spinning (main.rs:223-259)
