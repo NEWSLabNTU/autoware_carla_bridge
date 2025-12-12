@@ -1,0 +1,24 @@
+# CARLA Simulator MRM Handler Configuration
+# Relaxed timeouts for simulation environment where timing is less predictable
+# than real-time systems due to CARLA synchronization and variable frame rates
+---
+/**:
+  ros__parameters:
+    update_rate: 10
+    # Increased timeout for operation mode availability (default: 0.5s)
+    # CARLA simulation can have frame timing variations
+    timeout_operation_mode_availability: 2.0
+    # Increased timeouts for MRM behavior calls (default: 0.01s)
+    # Allow more time for service responses in simulation
+    timeout_call_mrm_behavior: 0.5
+    timeout_cancel_mrm_behavior: 0.5
+    use_emergency_holding: false
+    timeout_emergency_recovery: 5.0
+    use_parking_after_stopped: false
+    # Disabled for simulation - no pull over or comfortable stop behaviors
+    use_pull_over: false
+    use_comfortable_stop: false
+
+    # setting whether to turn hazard lamp on for each situation
+    turning_hazard_on:
+      emergency: true

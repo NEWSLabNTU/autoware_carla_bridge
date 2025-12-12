@@ -19,8 +19,12 @@
     <!-- IMU Driver -->
     <include file="$(find-pkg-share carla_sensor_kit_launch)/launch/imu.launch.xml"/>
 
-    <!-- GNSS Processing -->
-    <include file="$(find-pkg-share carla_sensor_kit_launch)/launch/gnss.launch.xml"/>
+    <!-- GNSS Processing - DISABLED for CARLA simulation
+         CARLA maps use LOCAL projector type (not geographic projection like UTM)
+         gnss_poser cannot convert GNSS coordinates when map_projector_info is LOCAL
+         NDT localization with simulated LiDAR is sufficient for CARLA
+         Keeping this disabled eliminates the recurring ERROR log messages -->
+    <!-- <include file="$(find-pkg-share carla_sensor_kit_launch)/launch/gnss.launch.xml"/> -->
 
     <!-- Vehicle Velocity Converter  -->
     <include file="$(find-pkg-share autoware_vehicle_velocity_converter)/launch/vehicle_velocity_converter.launch.xml">
