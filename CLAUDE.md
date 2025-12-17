@@ -607,6 +607,26 @@ cat third_party/autoware/autoware_repo/play_log/2025-12-08_03-24-49/node/ndt_sca
 cat third_party/autoware/autoware_repo/play_log/2025-12-08_03-24-49/node/autoware_pose_initializer_node-78/out
 ```
 
+### CARLA-Specific System Configurations
+
+The `carla_autoware_launch` package provides CARLA-optimized configurations that override Autoware defaults:
+
+**MRM Handler** (`config/system/mrm_handler/mrm_handler.param.yaml`):
+- `timeout_operation_mode_availability: 2.0` (default: 0.5s) - Relaxed for simulation timing variations
+- `timeout_call_mrm_behavior: 0.5` (default: 0.01s) - Allow more time for service responses
+- `timeout_cancel_mrm_behavior: 0.5` (default: 0.01s)
+- `use_pull_over: false`, `use_comfortable_stop: false` - Disabled for simulation
+
+**Component State Monitor Topics** (`config/system/component_state_monitor/topics.yaml`):
+- Excludes traffic light recognition topic monitoring (not available in CARLA)
+
+**Launch File** (`launch/carla_simulator.launch.xml`):
+- Sets `use_sim_time` globally via `<set_parameter>`
+- Sets `system_run_mode=logging_simulation` to disable pose_initializer stop check
+- Disables traffic light recognition (`use_traffic_light_recognition=false`)
+- Uses CARLA-optimized localization config path
+- Launches system component with CARLA-specific topics and MRM handler configs
+
 ### Pose Initializer Stop Check
 
 The pose_initializer requires the vehicle to be stopped before accepting initialization:
@@ -648,10 +668,17 @@ Our `carla_simulator.launch.xml` sets `system_run_mode=logging_simulation` to di
 
 ---
 
-**Last Updated**: 2025-12-11 (Session: use_sim_time parameter propagation fix)
+**Last Updated**: 2025-12-12 (Session: MRM handler timeout configuration for CARLA)
 **Migration Status**: Phases 0-3 Complete + Phase 4 Vehicle Spawning (55%)
 **Autonomous Driving**: ✅ End-to-end working (Python scripts + Rust bridge with modern Autoware APIs)
 **Recent Changes**:
+- ✅ **MRM handler timeout configuration for CARLA** (2025-12-12):
+  - Fixed MRM oscillation causing EMERGENCY_STOP flickering and autonomous mode unavailability
+  - Root cause: Default MRM handler timeouts too aggressive for simulation (0.5s availability, 0.01s behavior calls)
+  - Created CARLA-specific MRM handler config: `src/carla_autoware_launch/config/system/mrm_handler/mrm_handler.param.yaml`
+  - Relaxed timeouts: `timeout_operation_mode_availability: 2.0s`, `timeout_call_mrm_behavior: 0.5s`
+  - Updated `carla_simulator.launch.xml` to use CARLA-specific MRM handler config
+  - Result: MRM state stable at NORMAL (1), autonomous mode can now be engaged successfully
 - ✅ **use_sim_time parameter propagation fix** (2025-12-11):
   - Fixed Auto button disabled in RViz despite valid route
   - Root cause: Localization nodes had `use_sim_time=false` causing TF timestamp mismatch
