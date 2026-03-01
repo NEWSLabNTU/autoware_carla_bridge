@@ -2,7 +2,6 @@
 set -e
 script_dir=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 project_root=$( cd "$script_dir/../.." && pwd )
-cd "$script_dir/autoware_repo"
 
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 export DISPLAY=:1

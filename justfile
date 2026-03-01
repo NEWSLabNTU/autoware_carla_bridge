@@ -52,15 +52,16 @@ help:
     @echo "  just demo logs [args...]    View logs from all services"
     @echo ""
     @echo "Other:"
-    @echo "  just install-deps           Install dependencies and download maps"
+    @echo "  just setup                  Install deps, Autoware Debian, and CARLA maps"
     @echo "  just help                   Show this help message"
 
 # Default recipe
 default: help
 
-# Install colcon plugins and dependencies
-install-deps:
+# Full project setup: install deps, Autoware Debian packages, and CARLA maps
+setup:
     ./scripts/install_deps.sh
+    ./scripts/install_autoware_debian.sh
     ./scripts/download_carla_maps_for_autoware.sh
 
 # Build autoware_carla_bridge package (colcon-cargo-ros2 handles everything)
@@ -68,8 +69,8 @@ build:
     #!/usr/bin/env bash
     set -e
     export CARLA_VERSION={{carla_version}}
-    # Source Autoware environment to make interface packages discoverable
-    source third_party/autoware/autoware_repo/install/setup.bash
+    # Source Autoware 1.5.0 Debian environment to make interface packages discoverable
+    source /opt/autoware/1.5.0/setup.bash
     colcon build \
         --base-paths src \
         --symlink-install \
