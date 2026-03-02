@@ -427,7 +427,7 @@ dependencies = [
 
 [[package]]
 name = "autoware_adapi_v1_msgs"
-version = "1.6.0"
+version = "1.9.1"
 dependencies = [
  "builtin_interfaces",
  "geographic_msgs",
@@ -474,14 +474,14 @@ dependencies = [
 
 [[package]]
 name = "autoware_common_msgs"
-version = "1.3.0"
+version = "1.11.0"
 dependencies = [
  "rosidl_runtime_rs",
 ]
 
 [[package]]
 name = "autoware_vehicle_msgs"
-version = "1.3.0"
+version = "1.11.0"
 dependencies = [
  "builtin_interfaces",
  "rosidl_runtime_rs",
@@ -3593,7 +3593,7 @@ dependencies = [
 
 [[package]]
 name = "tf2_msgs"
-version = "0.25.16"
+version = "0.25.17"
 dependencies = [
  "action_msgs",
  "builtin_interfaces",
@@ -4521,7 +4521,7 @@ dependencies = [
 
 [[patch.unused]]
 name = "autoware_planning_msgs"
-version = "1.3.0"
+version = "1.11.0"
 
 [[patch.unused]]
 name = "rcl_interfaces"
