@@ -25,8 +25,11 @@
 
   <!-- launch module preset -->
   <!-- CARLA preset disables static_obstacle_avoidance module which requires
-       lanelet attributes not present in CARLA-converted maps -->
-  <arg name="planning_module_preset" default="carla" description="planning module preset"/>
+       lanelet attributes not present in CARLA-converted maps.
+       We include the carla preset from our own package (below) to pre-set the
+       planning args, then use the upstream "default" preset name so the file
+       lookup stays inside autoware_launch (which exists in the Debian install). -->
+  <arg name="planning_module_preset" default="default" description="planning module preset"/>
   <arg name="control_module_preset" default="default" description="control module preset"/>
 
   <!-- Optional parameters -->
@@ -68,6 +71,12 @@
     <include file="$(find-pkg-share autoware_carla_interface)/autoware_carla_interface.launch.xml"/>
   </group>
 
+  <!-- Pre-set CARLA planning args before autoware.launch.xml includes the
+       default_preset.yaml. YAML includes modify the parent context, and child
+       contexts inherit configurations, so these values propagate through the
+       include chain and take precedence over the default preset's defaults. -->
+  <include file="$(find-pkg-share carla_autoware_launch)/config/planning/preset/carla_preset.yaml"/>
+
   <!-- Include autoware.launch.xml with localization DISABLED
        Localization is launched separately below with CARLA-optimized config -->
   <group scoped="false">
@@ -106,10 +115,8 @@
       <!-- Sensing -->
       <arg name="launch_sensing_driver" value="$(var launch_sensing_driver)"/>
       <!-- Perception -->
-      <!-- CARLA - Disable traffic light recognition (no traffic light detection in CARLA yet) -->
-      <arg name="use_traffic_light_recognition" value="false"/>
-      <arg name="traffic_light_recognition/enable_fine_detection" value="false"/>
-      <arg name="all_traffic_light_camera" value="$(var traffic_light_namespace)"/>
+      <!-- CARLA - Use high accuracy detection disabled for traffic lights -->
+      <arg name="traffic_light_recognition/use_high_accuracy_detection" value="false"/>
       <!-- Tools -->
       <arg name="rviz" value="$(var rviz)"/>
       <arg name="rviz_config" value="$(var rviz_config)"/>
@@ -122,6 +129,10 @@
     <include file="$(find-pkg-share autoware_launch)/launch/components/tier4_localization_component.launch.xml">
       <!-- Use CARLA-optimized localization config path -->
       <arg name="loc_config_path" value="$(var carla_loc_config_path)"/>
+      <arg name="use_sim_time" value="$(var use_sim_time)"/>
+      <arg name="vehicle_model" value="$(var vehicle_model)"/>
+      <!-- Required by tier4_localization_component but not declared with a default -->
+      <arg name="system_run_mode" value="logging_simulation"/>
     </include>
   </group>
 
@@ -138,6 +149,7 @@
       <!-- Use default paths for other configs -->
       <arg name="duplicated_node_checker_param_path" value="$(find-pkg-share autoware_launch)/config/system/duplicated_node_checker/duplicated_node_checker.param.yaml"/>
       <arg name="processing_time_checker_param_path" value="$(find-pkg-share autoware_launch)/config/system/processing_time_checker/processing_time_checker.param.yaml"/>
+      <arg name="pipeline_latency_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/pipeline_latency_monitor/pipeline_latency_monitor.param.yaml"/>
       <arg name="mrm_comfortable_stop_operator_param_path" value="$(find-pkg-share autoware_launch)/config/system/mrm_comfortable_stop_operator/mrm_comfortable_stop_operator.param.yaml"/>
       <arg name="mrm_emergency_stop_operator_param_path" value="$(find-pkg-share autoware_launch)/config/system/mrm_emergency_stop_operator/mrm_emergency_stop_operator.param.yaml"/>
       <arg name="dummy_diag_publisher_param_path" value="$(find-pkg-share autoware_launch)/config/system/diagnostics/dummy_diag_publisher.param.yaml"/>
@@ -151,8 +163,9 @@
       <arg name="system_monitor_voltage_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/voltage_monitor.param.yaml"/>
       <!-- CARLA-specific MRM handler config with relaxed timeouts -->
       <arg name="mrm_handler_param_path" value="$(var carla_mrm_handler_path)"/>
-      <arg name="diagnostic_graph_aggregator_param_path" value="$(find-pkg-share diagnostic_graph_aggregator)/config/default.param.yaml"/>
-      <arg name="diagnostic_graph_aggregator_graph_path" value="$(find-pkg-share autoware_launch)/config/system/diagnostics/autoware-main.yaml"/>
+      <arg name="diagnostic_graph_aggregator_param_path" value="$(find-pkg-share autoware_diagnostic_graph_aggregator)/config/default.param.yaml"/>
+      <!-- Use CARLA-specific diagnostic graph (increased timeouts for simulation latency) -->
+      <arg name="diagnostic_graph_aggregator_graph_path" value="$(find-pkg-share autoware_launch)/config/system/diagnostics/autoware-carla.yaml"/>
     </include>
   </group>
 </launch>
