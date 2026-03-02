@@ -20,7 +20,7 @@ install_to_share = ["launch", "config"]
 
 [dependencies]
 # ROS 2 dependencies
-rclrs = "*"
+rclrs = "0.7"
 
 # ROS 2 message packages
 # NOTE: These crates are generated during colcon build (stage 1) and made
