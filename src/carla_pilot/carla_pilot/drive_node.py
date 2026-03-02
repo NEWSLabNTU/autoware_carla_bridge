@@ -1,13 +1,13 @@
-#!/usr/bin/env python3
 """
-Autonomous driving script for Autoware using standard rclpy API.
-Reads poses from poses.json and drives the vehicle autonomously to the goal.
+Autonomous driving node for Autoware.
+Reads poses from a JSON file (path given via ROS parameter) and drives the vehicle
+autonomously to the goal.
 
-Updated for modern Autoware (2024/2025):
-- Uses /api/localization/initialize service
-- Uses /api/routing/set_route_points service
-- Uses /api/routing/clear_route service
-- Uses /api/operation_mode/change_to_autonomous service
+Uses modern Autoware (2024/2025) API:
+- /api/localization/initialize service
+- /api/routing/set_route_points service
+- /api/routing/clear_route service
+- /api/operation_mode/change_to_autonomous service
 
 IMPORTANT: The initial and goal poses MUST be on connected lanes in the lanelet2 map.
 If route planning fails, the poses may not have a valid path between them.
@@ -19,7 +19,6 @@ import json
 import math
 import time
 import sys
-from pathlib import Path
 
 import rclpy
 from rclpy.node import Node
@@ -32,22 +31,6 @@ from autoware_vehicle_msgs.msg import VelocityReport
 from nav_msgs.msg import Odometry
 
 
-def load_poses():
-    """Load poses from JSON file in the same directory as this script."""
-    poses_path = Path(__file__).parent / "poses.json"
-
-    if not poses_path.exists():
-        print(f"Error: poses.json not found at {poses_path}", file=sys.stderr)
-        print("Please run read_poses.py first to capture initial and goal poses", file=sys.stderr)
-        sys.exit(1)
-
-    with open(poses_path, 'r') as f:
-        poses = json.load(f)
-
-    print(f"✓ Loaded poses from {poses_path}")
-    return poses
-
-
 def calculate_distance(x1, y1, x2, y2):
     """Calculate 2D distance between two points."""
     return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
@@ -56,12 +39,32 @@ def calculate_distance(x1, y1, x2, y2):
 class AutowareDriveNode(Node):
     """ROS 2 node for autonomous driving with Autoware."""
 
-    def __init__(self, poses):
+    def __init__(self):
         super().__init__('autoware_drive_node')
 
-        self.poses = poses
-        self.initial_pose = poses['initial_pose']
-        self.goal_pose = poses['goal_pose']
+        # Declare and get poses_file parameter
+        self.declare_parameter('poses_file', '')
+        poses_file = self.get_parameter('poses_file').get_parameter_value().string_value
+
+        if not poses_file:
+            self.get_logger().fatal("Required parameter 'poses_file' not set")
+            raise SystemExit(1)
+
+        # Load poses from file
+        try:
+            with open(poses_file, 'r') as f:
+                self.poses = json.load(f)
+        except FileNotFoundError:
+            self.get_logger().fatal(f"Poses file not found: {poses_file}")
+            raise SystemExit(1)
+        except json.JSONDecodeError as e:
+            self.get_logger().fatal(f"Invalid JSON in poses file: {e}")
+            raise SystemExit(1)
+
+        self.get_logger().info(f"Loaded poses from {poses_file}")
+
+        self.initial_pose = self.poses['initial_pose']
+        self.goal_pose = self.poses['goal_pose']
 
         # Vehicle state
         self.current_position = None
@@ -376,12 +379,14 @@ def main():
     print("AUTOWARE AUTONOMOUS DRIVING")
     print("=" * 60)
 
-    # Load poses
-    print("\n1. Loading poses...")
-    poses = load_poses()
+    # Initialize ROS 2
+    rclpy.init()
 
-    initial_pose = poses['initial_pose']
-    goal_pose = poses['goal_pose']
+    # Create node (loads poses via ROS parameter)
+    node = AutowareDriveNode()
+
+    initial_pose = node.initial_pose
+    goal_pose = node.goal_pose
 
     total_distance = calculate_distance(
         initial_pose['position']['x'],
@@ -390,12 +395,6 @@ def main():
         goal_pose['position']['y']
     )
     print(f"   Total distance to goal: {total_distance:.2f} meters")
-
-    # Initialize ROS 2
-    rclpy.init()
-
-    # Create node
-    node = AutowareDriveNode(poses)
 
     try:
         # Initialize localization
@@ -426,7 +425,7 @@ def main():
             print("\nTroubleshooting:")
             print("  - The initial and goal poses may not be connected in the lanelet2 map")
             print("  - Try using RViz to select poses with '2D Pose Estimate' and '2D Goal Pose'")
-            print("  - Or run ./scripts/get_carla_spawn_points.py to find valid CARLA spawn points")
+            print("  - Or run get_carla_spawn_points.py to find valid CARLA spawn points")
             print("  - Check Autoware logs: just autoware logs -n 50")
             return False
 

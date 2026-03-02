@@ -1,12 +1,19 @@
-#!/usr/bin/env python3
-"""Read initial pose and goal pose from RViz and save to file."""
+"""
+Read initial pose and goal pose from RViz and save to file.
 
-import argparse
+The output file path is specified via the 'output_file' ROS parameter.
+"""
+
 import json
+import math
 import sys
 from dataclasses import dataclass
 from typing import Optional
-from pathlib import Path
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSPresetProfiles
+from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped
 
 
 @dataclass
@@ -43,8 +50,6 @@ def euler_from_quaternion(x, y, z, w):
     Returns:
         Tuple of (roll, pitch, yaw) in radians
     """
-    import math
-
     # Roll (x-axis rotation)
     sinr_cosp = 2 * (w * x + y * z)
     cosr_cosp = 1 - 2 * (x * x + y * y)
@@ -66,35 +71,19 @@ def euler_from_quaternion(x, y, z, w):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Read initial and goal poses from Autoware")
-    parser.add_argument("--output", "-o", type=str, default=None,
-                       help="Output JSON file (default: poses.json in script directory)")
-    args = parser.parse_args()
-
-    # Default output path is in the same directory as this script
-    if args.output is None:
-        output_path = Path(__file__).parent / "poses.json"
-    else:
-        output_path = Path(args.output)
-
-    args.output = output_path
-
-    # Import ROS 2 after parsing args
-    try:
-        import rclpy
-        from rclpy.node import Node
-        from rclpy.qos import QoSPresetProfiles
-        from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped
-    except ImportError as e:
-        print(f"Error: Failed to import ROS 2 Python libraries: {e}", file=sys.stderr)
-        print("Make sure ROS 2 is sourced: source /opt/ros/humble/setup.bash", file=sys.stderr)
-        sys.exit(1)
-
-    # Initialize ROS 2
     rclpy.init()
 
-    # Create node
     node = Node('pose_reader')
+
+    # Declare and get output_file parameter
+    node.declare_parameter('output_file', '')
+    output_file = node.get_parameter('output_file').get_parameter_value().string_value
+
+    if not output_file:
+        node.get_logger().fatal("Required parameter 'output_file' not set")
+        node.destroy_node()
+        rclpy.shutdown()
+        sys.exit(1)
 
     # Store poses
     initial_pose: Optional[Pose] = None
@@ -108,8 +97,8 @@ def main():
             x=pos.x, y=pos.y, z=pos.z,
             qx=orient.x, qy=orient.y, qz=orient.z, qw=orient.w
         )
-        node.get_logger().info(f"✓ Received initial pose: x={pos.x:.2f}, y={pos.y:.2f}, z={pos.z:.2f}")
-        print(f"✓ Received initial pose: x={pos.x:.2f}, y={pos.y:.2f}, z={pos.z:.2f}")
+        node.get_logger().info(f"Received initial pose: x={pos.x:.2f}, y={pos.y:.2f}, z={pos.z:.2f}")
+        print(f"Received initial pose: x={pos.x:.2f}, y={pos.y:.2f}, z={pos.z:.2f}")
 
     def goal_pose_callback(msg, source="unknown"):
         nonlocal goal_pose
@@ -119,8 +108,8 @@ def main():
             x=pos.x, y=pos.y, z=pos.z,
             qx=orient.x, qy=orient.y, qz=orient.z, qw=orient.w
         )
-        node.get_logger().info(f"✓ Received goal pose from {source}: x={pos.x:.2f}, y={pos.y:.2f}, z={pos.z:.2f}")
-        print(f"✓ Received goal pose from {source}: x={pos.x:.2f}, y={pos.y:.2f}, z={pos.z:.2f}")
+        node.get_logger().info(f"Received goal pose from {source}: x={pos.x:.2f}, y={pos.y:.2f}, z={pos.z:.2f}")
+        print(f"Received goal pose from {source}: x={pos.x:.2f}, y={pos.y:.2f}, z={pos.z:.2f}")
 
     try:
         # Use default QoS preset for system topics (matches RViz)
@@ -158,7 +147,6 @@ def main():
             roll, pitch, yaw = euler_from_quaternion(
                 initial_pose.qx, initial_pose.qy, initial_pose.qz, initial_pose.qw
             )
-            import math
             output['initial_pose'] = {
                 **initial_pose.to_dict(),
                 'euler': {
@@ -176,7 +164,6 @@ def main():
             roll, pitch, yaw = euler_from_quaternion(
                 goal_pose.qx, goal_pose.qy, goal_pose.qz, goal_pose.qw
             )
-            import math
             output['goal_pose'] = {
                 **goal_pose.to_dict(),
                 'euler': {
@@ -191,10 +178,10 @@ def main():
             print(f"  Euler (deg): roll={math.degrees(roll):.2f}, pitch={math.degrees(pitch):.2f}, yaw={math.degrees(yaw):.2f}")
 
         # Write to file
-        with open(args.output, 'w') as f:
+        with open(output_file, 'w') as f:
             json.dump(output, f, indent=2)
 
-        print(f"\n✓ Poses saved to {args.output}")
+        print(f"\nPoses saved to {output_file}")
 
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

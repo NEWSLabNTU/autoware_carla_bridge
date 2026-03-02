@@ -11,6 +11,7 @@
 
   <exec_depend>carla_autoware_launch</exec_depend>
   <exec_depend>autoware_carla_bridge</exec_depend>
+  <exec_depend>carla_pilot</exec_depend>
   <exec_depend>manual_control</exec_depend>
 
   <export>

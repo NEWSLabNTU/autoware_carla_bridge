@@ -131,7 +131,15 @@ run-pilot:
         echo "Please capture poses first:"
         echo "  1. In RViz, click '2D Pose Estimate' and set initial pose"
         echo "  2. In RViz, click '2D Goal Pose' and set goal pose"
-        echo "  3. Run: ./scripts/read_poses.py"
+        echo "  3. Run: just run-read-poses"
         exit 1
     fi
-    exec "{{project}}/scripts/drive_in_autoware.py"
+    source "{{project}}/install/setup.bash"
+    exec play_launch run carla_pilot drive --ros-args -p poses_file:="$POSES_FILE"
+
+# Capture poses from RViz interactively
+run-read-poses:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "{{project}}/install/setup.bash"
+    exec play_launch run carla_pilot read_poses --ros-args -p output_file:="{{project}}/scripts/poses.json"

@@ -7,7 +7,7 @@
      2. Autoware planning simulator (via carla_simulator.launch.xml)
      3. CARLA-Autoware bridge (via autoware_carla_bridge.launch.xml)
      4. Demo scenario - loads map and configures CARLA (executable)
-     5. Autonomous driving pilot (executable)
+     5. Autonomous driving pilot (node)
      6. Manual control monitor GUI (node)
 -->
 <launch>
@@ -47,10 +47,9 @@
     name="demo_scenario"/>
 
   <!-- 5. Autonomous driving pilot -->
-  <executable
-    cmd="$(var project_dir)/scripts/drive_in_autoware.py"
-    output="screen"
-    name="drive_pilot"/>
+  <node pkg="carla_pilot" exec="drive" name="drive_pilot" output="screen">
+    <param name="poses_file" value="$(var project_dir)/scripts/poses.json"/>
+  </node>
 
   <!-- 6. Manual control monitor GUI -->
   <node pkg="manual_control" exec="manual_control" name="manual_control" output="screen">
