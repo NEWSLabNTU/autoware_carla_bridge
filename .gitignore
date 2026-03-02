@@ -16,6 +16,10 @@ target/
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
 
+# Python cache
+__pycache__/
+*.py[oc]
+
 # Colcon build artifacts
 build/
 install/
