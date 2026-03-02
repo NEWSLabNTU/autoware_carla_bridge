@@ -28,7 +28,7 @@ build:
 
 # Remove build artifacts
 clean:
-    rm -rf build install log
+    rm -rf build install log .cargo/config.toml target
 
 # Format code with rustfmt
 format:
@@ -41,26 +41,22 @@ lint:
     #!/usr/bin/env bash
     set -e
     source install/setup.bash
-    if [ ! -f build/ros2_cargo_config.toml ]; then
-        echo "Error: build/ros2_cargo_config.toml not found. Run 'just build' first."
+    if [ ! -f .cargo/config.toml ]; then
+        echo "Error: .cargo/config.toml not found. Run 'just build' first."
         exit 1
     fi
     cargo +nightly fmt --check
-    cargo clippy --config build/ros2_cargo_config.toml --all-targets -- -D warnings
+    cargo clippy --all-targets -- -D warnings
 
 # Run tests with nextest
 test:
     #!/usr/bin/env bash
     set -e
     source install/setup.bash
-    if [ ! -f build/ros2_cargo_config.toml ]; then
-        echo "Error: build/ros2_cargo_config.toml not found. Run 'just build' first."
+    if [ ! -f .cargo/config.toml ]; then
+        echo "Error: .cargo/config.toml not found. Run 'just build' first."
         exit 1
     fi
-    cleanup() { rm -f .cargo/config.toml; }
-    trap cleanup EXIT INT TERM
-    mkdir -p .cargo
-    ln -sf ../build/ros2_cargo_config.toml .cargo/config.toml
     cargo nextest run --no-tests pass --no-fail-fast
 
 # Run CARLA simulator (foreground)
