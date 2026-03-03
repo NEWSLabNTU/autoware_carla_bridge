@@ -567,14 +567,3 @@ This document covers integration testing, performance validation, documentation,
 □ GitHub release published
 □ Announcement posted
 ```
-
----
-
-**Document Version**: 1.0
-**Last Updated**: 2025-11-04
-**Related Documents**:
-- [roadmap.md](../roadmap.md) - Main roadmap index
-- [1-infrastructure.md](1-infrastructure.md) - Infrastructure (Phase 1)
-- [2-bridge.md](2-bridge.md) - Data bridge (Phase 2)
-- [3-integration.md](3-integration.md) - Autoware integration (Phase 3)
-- [../architecture.md](../architecture.md) - Architecture design and ADRs

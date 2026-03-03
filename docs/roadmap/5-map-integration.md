@@ -589,9 +589,3 @@ Based on `docs/automated-map-generation.md`:
 - [ ] Can generate new maps in < 1 day
 - [ ] Maps support all Autoware features
 - [ ] Process is documented and repeatable
-
----
-
-**Last Updated**: 2025-11-08
-**Next Review**: After Phase 1 completion
-**Owner**: Integration Team

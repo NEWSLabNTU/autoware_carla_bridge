@@ -2,14 +2,6 @@
 
 This document describes the architecture design decisions for the autoware_carla_bridge project.
 
-**Related Documents**:
-- [roadmap.md](roadmap.md) - Main roadmap index and project overview
-- [autoware-integration-design.md](autoware-integration-design.md) - Detailed design for Autoware integration (Phases 3-6, 9-10)
-- [roadmap/1-infrastructure.md](roadmap/1-infrastructure.md) - Infrastructure (Phase 1)
-- [roadmap/2-bridge.md](roadmap/2-bridge.md) - Data bridge (Phase 2)
-- [roadmap/3-integration.md](roadmap/3-integration.md) - Autoware integration (Phase 3)
-- [roadmap/6-testing-and-release.md](roadmap/6-testing-and-release.md) - Testing and release (Phase 6)
-
 ## 1-to-1 Autoware-Centric Design Philosophy
 
 **Decision Date**: 2025-10-31
@@ -112,7 +104,7 @@ This design allows flexible scenario scripting:
 
 ## Future: Autoware Integration Architecture
 
-**Status**: Planned (Phases 3-6, 9-10) - See [autoware-integration-design.md](../autoware-integration-design.md)
+**Status**: Planned (Phases 3-6, 9-10) - See [autoware-integration-design.md](autoware-integration-design.md)
 
 The bridge architecture will evolve to support **Autoware-driven vehicle spawning**, where the bridge:
 
@@ -159,7 +151,7 @@ The bridge architecture will evolve to support **Autoware-driven vehicle spawnin
 - ✅ Autoware controls vehicle lifecycle (bridge is truly passive)
 - ✅ Testing workflow mirrors real Autoware usage
 
-**See**: [autoware-integration-design.md](../autoware-integration-design.md) for complete design details
+**See**: [autoware-integration-design.md](autoware-integration-design.md) for complete design details
 
 ---
 
@@ -349,7 +341,7 @@ Adopt a 1-to-1 mapping where each bridge instance manages exactly one CARLA vehi
 
 **Related**:
 - See [Core Principles](#core-principles) section
-- See [roadmap/2-bridge.md](roadmap/2-bridge.md) Phase 8 implementation tasks
+- See [roadmap/2-bridge.md](../roadmap/2-bridge.md) Phase 8 implementation tasks
 
 ## ADR-002: Bridge Does Not Control Simulation
 
@@ -373,8 +365,8 @@ Bridge will not control simulation. External scenario scripts configure CARLA an
 - **Migration**: Existing users need to add scenario script to their workflow
 
 **Related**:
-- Phase 8.1: Remove Simulation Control (see [roadmap/2-bridge.md](roadmap/2-bridge.md))
-- Phase 8.7: Create Scenario Scripts (see [roadmap/2-bridge.md](roadmap/2-bridge.md))
+- Phase 8.1: Remove Simulation Control (see [roadmap/2-bridge.md](../roadmap/2-bridge.md))
+- Phase 8.7: Create Scenario Scripts (see [roadmap/2-bridge.md](../roadmap/2-bridge.md))
 
 ## ADR-003: Root Namespace Topics
 
@@ -398,12 +390,6 @@ Publish to root namespace using standard Autoware topic names. Use ROS domains f
 - **Migration**: Topic names change, but standard names easier to remember
 
 **Related**:
-- Phase 8.4: Root Namespace Topics (see [roadmap/2-bridge.md](roadmap/2-bridge.md))
+- Phase 8.4: Root Namespace Topics (see [roadmap/2-bridge.md](../roadmap/2-bridge.md))
 - [Core Principles](#core-principles): Root Namespace Topics
 
----
-
-**Document Version**: 1.2
-**Last Updated**: 2025-11-04
-**Phase Update**: Reorganized roadmap by functional area
-**Related Documents**: [roadmap.md](roadmap.md), [autoware-integration-design.md](autoware-integration-design.md), [roadmap/1-infrastructure.md](roadmap/1-infrastructure.md), [roadmap/2-bridge.md](roadmap/2-bridge.md), [roadmap/3-integration.md](roadmap/3-integration.md), [roadmap/6-testing-and-release.md](roadmap/6-testing-and-release.md)

@@ -199,12 +199,12 @@ colcon list | grep autoware_vehicle_msgs
 │       ├── carla-rust/            # CARLA Rust bindings
 │       └── zenoh_carla_bridge/    # Reference implementation
 ├── docs/                          # Technical documentation
-│   ├── carla-map-acquisition-guide.md
-│   ├── sensor-configuration-strategy.md
-│   └── roadmap.md
-├── scripts/                       # Python utilities & autonomous driving
-│   ├── drive_in_autoware.py      # ⭐ Main autonomous driving script
-│   ├── read_poses.py              # Capture poses from RViz
+│   ├── README.md                  # Docs index
+│   ├── design/                    # Architecture & design docs
+│   ├── guides/                    # How-to guides
+│   ├── roadmap/                   # Phase 1-6 roadmap docs
+│   └── archive/                   # Historical migration docs
+├── scripts/                       # Python utilities
 │   ├── get_carla_spawn_points.py # Get valid CARLA spawn points
 │   ├── setup_carla.py             # Configure CARLA
 │   ├── set_initial_pose.py        # Set initial pose
@@ -654,9 +654,9 @@ Our `carla_simulator.launch.xml` sets `system_run_mode=logging_simulation` to di
 
 **In-repo**:
 - `scripts/README.md` - **Autonomous driving scripts guide** ⭐
-- `docs/carla-map-acquisition-guide.md` - Map conversion guide
-- `docs/sensor-configuration-strategy.md` - Sensor config & gap analysis
-- `docs/roadmap.md` - Phase breakdown
+- `docs/README.md` - Docs index (design, guides, roadmap, archive)
+- `docs/guides/automated-map-generation.md` - Map conversion guide
+- `docs/design/sensor-configuration-strategy.md` - Sensor config & gap analysis
 - `README.md` - Setup & quick start
 
 **External**:
