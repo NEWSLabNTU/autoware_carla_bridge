@@ -2,7 +2,9 @@
 
 This document covers integration testing, performance validation, documentation, and release preparation for the autoware_carla_bridge project.
 
-**Status**: ⏳ **PENDING** - Awaiting completion of Phases 3-6
+**Status**: ⏳ **PENDING** - Phases 1-4 complete; formal test scripts not yet created
+
+**Note**: Core functionality has been informally verified via end-to-end autonomous driving (CARLA → Bridge → Autoware → Vehicle follows route to goal). Formal test scripts and benchmarks are the remaining work.
 
 ---
 
@@ -10,12 +12,12 @@ This document covers integration testing, performance validation, documentation,
 
 **Objective**: End-to-end testing with complete Autoware integration workflow.
 
-**Status**: ⏳ **PENDING**
+**Status**: ⏳ **INFORMALLY VERIFIED** - Formal test scripts pending
 
 **Duration**: 1-2 weeks
 
 **Prerequisites**:
-- Phases 3-6 complete (full integration)
+- ✅ Phases 1-4 complete (full integration working)
 
 **Testing Workflow**:
 1. Start CARLA simulator

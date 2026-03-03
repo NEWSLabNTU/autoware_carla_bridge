@@ -258,19 +258,13 @@ Files: `src/autoware.rs`, `src/utils.rs`
 - CARLA_VERSION environment variable selects CARLA version at build time
 - Three-stage build ensures correct dependency resolution
 
-### 1.8 Actor Cleanup Implementation - ⚠️ DEFERRED
+### 1.8 Actor Cleanup Implementation - ✅ COMPLETE
 
-**Note**: Actor cleanup APIs are available in carla-rust 0.12.0 but implementation is deferred to future phases when needed.
-
-**Available APIs**:
-- `ActorBase::destroy()` - Explicit actor cleanup
-- Replaces manual "drop and hope" pattern
-- Ensures resources freed immediately
-
-**Future Use Cases**:
-- Phase 4: Vehicle lifecycle management (spawn/cleanup)
-- Phase 9: Testing cleanup between test runs
-- Error recovery scenarios
+**Implementation**:
+- `CarlaVehicle::cleanup()` uses `ActorBase::destroy()` for explicit cleanup
+- Called on Autoware disconnection (`main.rs:478`) and graceful shutdown (`main.rs:536`)
+- CARLA automatically destroys attached sensors when vehicle is destroyed
+- Graceful error handling for already-destroyed actors
 
 ### 1.9 Documentation - ✅ COMPLETE
 
@@ -308,40 +302,16 @@ The following enhancements are available but not yet implemented:
 
 ## Build System Overview
 
-### Three-Stage Build Process
+### Build Process
 
-The project uses a three-stage colcon build to properly generate ROS message bindings:
+The project uses `just build` (colcon with `--symlink-install`) to build all packages:
 
-**Stage 1: Build ros2_rust packages**
 ```bash
-make build-ros2-rust
+just build   # Build all packages
+just clean   # Clean build artifacts
 ```
-- Builds rosidl_generator_rs (Rust message generator)
-- Installs generator into colcon workspace
-- Required before building any message packages
 
-**Stage 2: Build interface packages**
-```bash
-make build-interfaces
-```
-- Builds ROS 2 message packages (std_msgs, sensor_msgs, etc.)
-- Generates Rust bindings for all message types
-- Generates `.cargo/config.toml` with message package patches
-- Includes Autoware message packages (autoware_vehicle_msgs, tier4_vehicle_msgs, etc.)
-
-**Stage 3: Build autoware_carla_bridge**
-```bash
-make build-bridge
-```
-- Builds the main bridge application
-- Uses message types from Stage 2 via .cargo/config.toml patches
-- Links against rclrs and message crates
-
-**Incremental Builds**:
-After first complete build, only modified packages rebuild:
-```bash
-make build  # Runs all 3 stages, but only rebuilds changed packages
-```
+colcon-cargo-ros2 generates `.cargo/config.toml` with ROS message package patches. All Rust, Python, and CMake packages are built together.
 
 ### Environment Configuration
 
@@ -355,16 +325,15 @@ make build  # Runs all 3 stages, but only rebuilds changed packages
 **Manual activation** (if direnv not installed):
 ```bash
 source /opt/ros/humble/setup.bash
-source third_party/autoware/install/setup.bash
+source third_party/autoware/autoware_repo/install/setup.bash
 source install/setup.bash
-export CARLA_VERSION=0.9.16  # or 0.9.14, 0.9.15
 ```
 
 ### Key Files
 
 - **package.xml** - ROS 2 package manifest (colcon metadata)
-- **.cargo/config.toml** - Generated cargo patches for message packages
+- **.cargo/config.toml** - Generated cargo patches for message packages (by colcon-cargo-ros2)
 - **.envrc** - direnv configuration for automatic environment setup
-- **Makefile** - Build targets for three-stage process
+- **justfile** - Build and service management commands
 - **Cargo.toml** (workspace) - Workspace configuration
 - **src/autoware_carla_bridge/Cargo.toml** - Bridge package dependencies

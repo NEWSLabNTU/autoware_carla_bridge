@@ -3,31 +3,31 @@
 Track progress for CARLA map integration with Autoware, including Lanelet2 conversion and point cloud map generation.
 
 **Reference Documents**:
-- `docs/automated-map-generation.md` - Complete map generation guide
-- `docs/carla-autoware-map-integration.md` - Map integration design
+- `docs/guides/automated-map-generation.md` - Complete map generation guide
+- `docs/archive/carla-autoware-map-integration.md` - Map integration design
 - TUMFTM pre-converted maps: https://syncandshare.lrz.de/getlink/fiBgYSNkmsmRB28meoX3gZ/
 
-**Current Status**: 🔴 **NOT STARTED** - Research complete, implementation pending
+**Current Status**: 🟡 **PARTIALLY COMPLETE** - Pre-converted maps downloaded and working, automation scripts pending
 
 ---
 
 ## Progress Overview
 
-### ✅ Completed Research
+### ✅ Completed
 
-- ✅ Identified automated conversion tools (opendrive2lanelet, odr2lanelet2)
-- ✅ Documented point cloud generation methods (autopilot recording, CARLA HDMaps)
-- ✅ Analyzed TUMFTM's pre-converted maps
-- ✅ Created comprehensive automation workflows
-- ✅ Documented traffic light integration challenges
+- ✅ Pre-converted maps downloaded for Town01, Town02, Town03, Town05, Town10
+- ✅ Maps stored in `data/carla-autoware-bridge/` with full Autoware structure (lanelet2_map.osm, pointcloud_map.pcd, map_config.yaml, map_projector_info.yaml)
+- ✅ Helper scripts: `scripts/download_carla_maps_for_autoware.sh`, `scripts/find_map_offset.py`, `scripts/inspect_carla_map.py`
+- ✅ End-to-end autonomous driving verified with pre-converted maps
+- ✅ NDT localization works with point cloud maps
+- ✅ Routing and planning work with lanelet2 maps
 
 ### 🔴 Not Started
 
-- Map conversion automation scripts
+- Map conversion automation scripts (for custom maps)
 - Point cloud generation scripts
 - Traffic light configuration
 - Map validation tools
-- Integration with bridge
 
 ---
 
@@ -35,78 +35,31 @@ Track progress for CARLA map integration with Autoware, including Lanelet2 conve
 
 **Objective**: Use TUMFTM's pre-converted maps to get running quickly
 
-**Status**: 🔴 **NOT STARTED**
+**Status**: ✅ **COMPLETE**
 
-**Priority**: 🔴 **HIGH** - Fastest path to testing
+### 5.1 Download TUMFTM Maps - ✅ COMPLETE
 
-**Duration**: 1-2 days
+Maps downloaded and stored in `data/carla-autoware-bridge/`:
+- ✅ Town01 (lanelet2_map.osm + pointcloud_map.pcd + map_config.yaml + map_projector_info.yaml)
+- ✅ Town02
+- ✅ Town03
+- ✅ Town05
+- ✅ Town10
 
-**Why This First**: Allows us to test bridge functionality without spending weeks on map conversion
+Download script: `scripts/download_carla_maps_for_autoware.sh`
 
-### 5.1 Download TUMFTM Maps
+### 5.2 Configure Autoware for TUMFTM Maps - ✅ COMPLETE
 
-**Tasks**:
-- [ ] Download TUMFTM maps from https://syncandshare.lrz.de/getlink/fiBgYSNkmsmRB28meoX3gZ/
-- [ ] Extract to `maps/tumftm/`
-- [ ] Document available maps and their characteristics
+- ✅ Maps load in Autoware via `map_path` launch argument
+- ✅ Maps display correctly in RViz
+- ✅ NDT localization converges with point cloud maps
 
-**Expected Maps**:
-- Town01.osm / Town01.pcd
-- Town02.osm / Town02.pcd
-- Town03.osm / Town03.pcd
-- Town04.osm / Town04.pcd
-- Town05.osm / Town05.pcd
-- Town06.osm / Town06.pcd
-- Town07.osm / Town07.pcd
-- Town10HD.osm / Town10HD.pcd
+### 5.3 Validate Bridge with TUMFTM Maps - ✅ COMPLETE
 
-**Deliverables**:
-- Downloaded map files in project
-- README documenting each map's characteristics
-- Quick reference for which map to use for testing
-
----
-
-### 5.2 Configure Autoware for TUMFTM Maps
-
-**Tasks**:
-- [ ] Create Autoware map configuration for each TUMFTM map
-- [ ] Set up map paths in Autoware launch files
-- [ ] Verify map loads in RViz
-- [ ] Test localization with point cloud map
-
-**Autoware Map Structure**:
-```
-autoware_map/
-├── lanelet2_map.osm      # Vector map (from TUMFTM)
-└── pointcloud_map.pcd    # Point cloud (from TUMFTM)
-```
-
-**Deliverables**:
-- Autoware can load TUMFTM maps
-- Maps display correctly in RViz
-- Localization works with point cloud
-
-**Testing**:
-- [ ] Load each map in Autoware
-- [ ] Verify all lane lines visible
-- [ ] Check point cloud alignment
-- [ ] Test NDT localization
-
----
-
-### 5.3 Validate Bridge with TUMFTM Maps
-
-**Tasks**:
-- [ ] Test bridge with each TUMFTM map
-- [ ] Verify vehicle spawns correctly
-- [ ] Check sensor alignment with map
-- [ ] Validate localization accuracy
-
-**Deliverables**:
-- Bridge works with all TUMFTM maps
-- Documentation of any map-specific issues
-- Recommendations for best maps for testing
+- ✅ End-to-end autonomous driving verified
+- ✅ Vehicle spawns correctly
+- ✅ Sensor data aligns with map
+- ✅ Localization accurate enough for autonomous driving
 
 ---
 
@@ -500,13 +453,13 @@ Based on `docs/automated-map-generation.md`:
 
 | Phase | Status | Completion | Priority |
 |-------|--------|------------|----------|
-| Phase 1: TUMFTM Maps | 🔴 Not Started | 0% | 🔴 HIGH |
+| Phase 1: TUMFTM Maps | ✅ Complete | 100% | Done |
 | Phase 2: PCD Generation | 🔴 Not Started | 0% | 🟡 MEDIUM |
 | Phase 3: Lanelet2 Conversion | 🔴 Not Started | 0% | 🟡 MEDIUM |
 | Phase 4: Map Management | 🔴 Not Started | 0% | 🟢 LOW |
 | Phase 5: Advanced Features | ⏳ Future | 0% | 🟢 LOW |
 
-**Overall Progress**: 0% complete
+**Overall Progress**: 30% complete (pre-converted maps working, automation pending)
 
 **Estimated Total Time**: 3-4 weeks (Phase 1-3 only)
 

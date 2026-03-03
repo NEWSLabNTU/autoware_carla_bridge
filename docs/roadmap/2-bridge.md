@@ -2,7 +2,7 @@
 
 This document covers the data bridge implementation for the autoware_carla_bridge project, including publishers, subscribers, sensor data, and vehicle control.
 
-**Status**: Phase 2, 8 ✅ Complete | Phase 5 🔧 In Progress (95% - testing only) | Phase 6 ⏳ Pending
+**Status**: ✅ **COMPLETE** - All sensor data publishing and vehicle control implemented and verified via end-to-end autonomous driving
 
 ---
 
@@ -219,30 +219,24 @@ File: `src/utils.rs`
 
 **Objective**: Implement sensor data publishing for Camera, LiDAR, IMU, and GNSS sensors.
 
-**Status**: 🔧 **IN PROGRESS** - Implementation complete (95%), runtime testing pending (5%)
+**Status**: ✅ **COMPLETE** - All sensors publishing, verified via end-to-end autonomous driving
 
-**Duration**: 3-5 days remaining (runtime testing only)
-
-**Prerequisites**:
-- ✅ Phase 3 (Autoware Integration Foundation) - Complete
-- ✅ Phase 4 (Vehicle Lifecycle Management) - Complete
-
-**Implementation Status**:
+**Implementation**:
 - ✅ Sensor publishing code (migrated in Phase 1)
-- ✅ Sensor spawning from URDF (Phase 4, 2025-11-05)
-- ✅ Sensor bridge connection (Phase 5.6, 2025-11-08)
-- ✅ Dynamic frame IDs from URDF (Phase 5.6, 2025-11-08)
-- ⏳ Runtime testing (pending)
+- ✅ Sensor spawning from vehicle_config.yaml
+- ✅ Sensor bridge connection (2025-11-08)
+- ✅ Dynamic frame IDs from config
+- ✅ Runtime verified - sensors publishing correctly in autonomous driving workflow
 
 ### 2.8 Camera Sensors
 
 **Objective**: Publish camera sensor data to ROS topics
 
-**Status**: ✅ **COMPLETE** - Migrated in Phase 1, frame IDs need updating
+**Status**: ✅ **COMPLETE** - Publishing, frame IDs from config
 
 **Topics**:
-- `/sensing/camera/traffic_light/image_raw` (sensor_msgs/Image) ✅
-- `/sensing/camera/traffic_light/camera_info` (sensor_msgs/CameraInfo) ✅
+- `/sensing/camera/{name}/image_raw` (sensor_msgs/Image) ✅
+- `/sensing/camera/{name}/camera_info` (sensor_msgs/CameraInfo) ✅
 
 **Tasks**:
 - [x] Create camera publisher in SensorBridge (`sensor_bridge.rs:165-233`)
@@ -264,24 +258,24 @@ File: `src/utils.rs`
   }
   ```
 - [x] Publish CameraInfo with camera intrinsics
-- [ ] Test with CARLA RGB camera (requires sensor spawning integration)
-- [ ] Verify image data in RViz (requires sensor spawning integration)
-- [ ] Update hardcoded frame_id ("camera4/camera_link") to use TF data
+- [x] Test with CARLA RGB camera ✅
+- [x] Verify image data in RViz ✅
+- [x] Frame IDs from vehicle_config.yaml ✅
 
 **Success Criteria**:
-- [x] Camera images publish correctly (code complete)
-- [ ] Correct frame_id (currently hardcoded)
-- [x] Image encoding matches expectations (bgra8)
-- [ ] Publish rate verification (pending integration testing)
+- [x] Camera images publish correctly ✅
+- [x] Correct frame_id from config ✅
+- [x] Image encoding matches expectations (bgra8) ✅
+- [x] Verified via end-to-end autonomous driving ✅
 
 ### 2.9 LiDAR Sensors
 
 **Objective**: Publish LiDAR point cloud data to ROS topics
 
-**Status**: ✅ **COMPLETE** - Migrated in Phase 1, frame IDs need updating
+**Status**: ✅ **COMPLETE** - Publishing PointXYZIRC format for Autoware NDT
 
 **Topics**:
-- `/sensing/lidar/top/pointcloud` (sensor_msgs/PointCloud2) ✅
+- `/sensing/lidar/{name}/pointcloud_before_sync` (sensor_msgs/PointCloud2) ✅
 
 **Tasks**:
 - [x] Create LiDAR publisher in SensorBridge (`sensor_bridge.rs:235-302`)
@@ -314,15 +308,15 @@ File: `src/utils.rs`
   }
   ```
 - [x] Handle coordinate system conversion (CARLA → ROS)
-- [ ] Test with CARLA ray_cast LiDAR sensor (requires sensor spawning)
-- [ ] Verify point cloud in RViz (requires sensor spawning)
-- [ ] Update hardcoded frame_id ("velodyne_top_base_link") to use TF data
+- [x] Test with CARLA ray_cast LiDAR sensor ✅
+- [x] Verify point cloud in RViz ✅
+- [x] Frame IDs from vehicle_config.yaml ✅
 
 **Success Criteria**:
-- [x] Point cloud publishing code complete
-- [x] Correct coordinate transformation implemented
-- [x] Intensity values included
-- [ ] Publish rate verification (pending integration testing)
+- [x] Point cloud publishing code complete ✅
+- [x] PointXYZIRC format (16 bytes/point) for Autoware NDT ✅
+- [x] Correct coordinate transformation ✅
+- [x] Verified via end-to-end autonomous driving ✅
 
 ### 2.10 IMU Sensor
 
@@ -364,14 +358,14 @@ File: `src/utils.rs`
   }
   ```
 - [x] Handle coordinate system conversion (Y-axis flip, deg → rad)
-- [ ] Test with CARLA IMU sensor (requires sensor spawning)
-- [ ] Verify IMU data in RViz (requires sensor spawning)
+- [x] Test with CARLA IMU sensor ✅
+- [x] Verify IMU data ✅
 
 **Success Criteria**:
-- [x] IMU data publishing code complete
-- [x] Coordinate transformations implemented
-- [x] Orientation quaternion conversion included
-- [ ] Publish rate verification (pending integration testing)
+- [x] IMU data publishing code complete ✅
+- [x] Coordinate transformations implemented ✅
+- [x] Orientation quaternion conversion included ✅
+- [x] Verified via end-to-end autonomous driving ✅
 
 ### 2.11 GNSS Sensor
 
@@ -405,47 +399,30 @@ File: `src/utils.rs`
       self.gnss_publisher.publish(&nav_sat_fix)?;
   }
   ```
-- [ ] Test with CARLA GNSS sensor (requires sensor spawning)
-- [ ] Verify GNSS data in RViz (requires sensor spawning)
+- [x] Test with CARLA GNSS sensor ✅
+- [x] Verify GNSS data ✅
 
 **Success Criteria**:
-- [x] GNSS coordinates publishing code complete
-- [x] Fix status and service type implemented
-- [ ] Publish rate verification (pending integration testing)
+- [x] GNSS coordinates publishing code complete ✅
+- [x] Fix status and service type implemented ✅
+- [x] Verified via end-to-end autonomous driving ✅
 
 ### 2.12 Data Verification
 
 **Objective**: Verify sensor data accuracy and consistency
 
-**Status**: ⏳ **PENDING** - Requires full integration
+**Status**: ✅ **INFORMALLY VERIFIED** - End-to-end autonomous driving works, no formal verification scripts
 
-**Tasks**:
-- [ ] Create verification script in `scripts/verify_sensors.py`
-- [ ] Compare CARLA sensor data with ROS topic data
-- [ ] Check timestamp synchronization across sensors
-- [x] Coordinate transformations implemented:
-  - CARLA (left-handed) → ROS (right-handed)
-  - Y-axis flip for IMU
-  - Rotation conversions (deg → rad)
-- [ ] Performance testing:
-  - Measure publish latency
-  - Check CPU usage
-  - Monitor memory usage
-- [ ] Integration test:
-  - Start CARLA
-  - Start bridge with spawned vehicle + sensors
-  - Start Autoware
-  - Set initial pose
-  - Verify all sensor topics publish
-  - Check sensor data in Autoware
+**Verified via end-to-end testing**:
+- [x] Coordinate transformations (CARLA → ROS)
+- [x] All sensor topics publish correctly
+- [x] Autoware receives and uses sensor data (NDT localization converges)
+- [x] Autonomous driving completes routes successfully
 
-**Success Criteria**:
-- [x] All sensor types have publishing code
-- [x] Coordinate conversion logic implemented
-- [ ] Data verification against CARLA (pending integration)
-- [ ] Timestamp synchronization testing (pending)
-- [ ] Performance benchmarks (pending)
-- [ ] Autoware integration validation (pending)
+**Not formally tested**:
+- [ ] Formal verification script (`scripts/verify_sensors.py`)
+- [ ] Performance benchmarks (latency, CPU, memory)
+- [ ] Timestamp synchronization measurements
 
 ### 2.13 Sensor Bridge Connection
 
@@ -591,89 +568,16 @@ fn create_sensor_bridges(
 
 ### Summary
 
-**Status**: 🔧 **IN PROGRESS** - Implementation complete (95%), runtime testing pending (5%)
+**Status**: ✅ **COMPLETE** - All sensor data publishing verified via end-to-end autonomous driving
 
-**Completed** (Phase 1 migration):
-- [x] All sensor publishing code migrated to rclrs (~635 lines in sensor_bridge.rs)
-- [x] Camera: Image + CameraInfo publishing
-- [x] LiDAR: PointCloud2 with intensity
-- [x] IMU: Linear acceleration, angular velocity, orientation
-- [x] GNSS: NavSatFix with status
-- [x] Proper QoS profiles (sensor_data_qos)
-- [x] CARLA callback → ROS message conversions
-- [x] Coordinate system transformations
-
-**Completed Since Documentation**:
-- [x] **Sensor Spawning** ✅ COMPLETE (2025-11-05)
-  - [x] URDF sensor data parsing from Autoware
-  - [x] TF transforms for sensor positioning (with tree traversal)
-  - [x] Sensors spawn attached to vehicle in CARLA
-  - [x] CARLA sensor parameter configuration (YAML) ✅ (2025-11-08)
-- [x] **VehicleLifecycle Integration** ✅ COMPLETE (2025-11-05)
-  - [x] CarlaVehicle spawning working in main.rs
-  - [x] Sensors created from URDF configuration
-  - [x] Sensors positioned using TF transforms
-
-**Completed Since Last Update** (2025-11-08):
-- [x] **Sensor Bridge Connection** ✅ COMPLETE (2025-11-08)
-  - [x] Created SensorBridge factory in main.rs (`create_sensor_bridges()`)
-  - [x] Wired sensor callbacks to CARLA sensor data listeners
-  - [x] Connected bridges to ROS publishers
-  - [x] Fixed sensor lifecycle (single-owner model: CarlaVehicle owns sensors)
-  - **Code locations**:
-    - Factory function: `main.rs:39-86` ✅ Complete
-    - Integration: `main.rs:279-280` ✅ Complete
-    - Sensor ownership: `sensor_bridge.rs:143-154` ✅ Fixed
-- [x] **Dynamic Frame IDs** ✅ COMPLETE (2025-11-08)
-  - [x] Replaced all hardcoded frame_ids with URDF link names
-  - [x] Frame IDs passed from sensor configs to bridge callbacks
-  - [x] All sensors use correct Autoware frame names from URDF
-  - **Updated functions**:
-    - Camera: `sensor_bridge.rs:160` ✅ Uses frame_id param
-    - LiDAR (raycast): `sensor_bridge.rs:240` ✅ Uses frame_id param
-    - LiDAR (semantic): `sensor_bridge.rs:272` ✅ Uses frame_id param
-    - IMU: `sensor_bridge.rs:304` ✅ Uses frame_id param
-    - GNSS: `sensor_bridge.rs:334` ✅ Uses frame_id param
-
-**Remaining Work** (Updated 2025-11-08):
-- [ ] **Runtime Testing & Verification** (Important - 3-5 days) ⬅️ **NEXT PRIORITY**
-  - [ ] Verify sensor data publishes to correct topics
-  - [ ] Check data appears in Autoware/RViz
-  - [ ] Validate point cloud alignment with map
-  - [ ] Verify image timestamps and frame rates
-  - [ ] Performance benchmarks (latency, CPU, memory)
-  - [ ] Full Autoware integration testing
-  - [ ] Fix any runtime issues discovered
-
-**Updated Dependencies**:
-- ✅ Phase 4 (Vehicle Lifecycle) - COMPLETE
-- ✅ Sensor spawning system - COMPLETE
-- ✅ CARLA sensor configuration - COMPLETE (2025-11-08)
-- ✅ Sensor bridge wiring - COMPLETE (2025-11-08)
-- ✅ Dynamic frame IDs - COMPLETE (2025-11-08)
-
-**Estimated Remaining Effort**: 3-5 days (runtime testing only)
-- ~~Sensor bridge connection: 3-5 days~~ ✅ COMPLETE
-- ~~Frame ID updates: 1-2 days~~ ✅ COMPLETE
-- Testing & verification: 3-5 days ⬅️ **ONLY REMAINING WORK**
-
-**Updated Next Steps** (2025-11-08):
-1. ~~**Wire sensor bridges in main.rs**~~ ✅ COMPLETE (2025-11-08)
-   - Implemented `create_sensor_bridges()` factory function
-   - Integrated at `main.rs:279-280`
-   - All sensors now connected to ROS publishers
-2. ~~**Update frame IDs** to use URDF link names~~ ✅ COMPLETE (2025-11-08)
-   - All 5 sensor types updated (Camera, LiDAR x2, IMU, GNSS)
-   - Frame IDs now come from URDF sensor configs
-3. **Test with Autoware** (verify data flow: CARLA → Bridge → ROS → Autoware) ⬅️ **CURRENT PRIORITY**
-   - Start CARLA simulator
-   - Launch Autoware planning simulator
-   - Run bridge and verify topics
-   - Check data in RViz
-4. **Performance validation** and benchmarks
-   - Measure topic publish rates
-   - Check CPU/memory usage
-   - Verify latency is acceptable
+All sensor types publishing correctly:
+- ✅ Camera (Image + CameraInfo)
+- ✅ LiDAR (PointCloud2 with PointXYZIRC format)
+- ✅ IMU (acceleration, angular velocity, orientation)
+- ✅ GNSS (NavSatFix)
+- ✅ Dynamic frame IDs from vehicle_config.yaml
+- ✅ Config-driven sensor spawning with TF transforms
+- ✅ Single-owner lifecycle (CarlaVehicle owns sensors)
 
 ---
 
@@ -681,13 +585,7 @@ fn create_sensor_bridges(
 
 **Objective**: Implement vehicle control command subscription and status publishing.
 
-**Status**: 🟢 **IN PROGRESS** (Phases 6.1 and 6.2 COMPLETE - 2025-11-08)
-
-**Progress**: 65% Complete (Control subscriber ✅ | Status publishers ✅ | Testing pending)
-
-**Duration**: 1-2 weeks (Implementation: 1 day ✅ | Testing: 1-2 weeks remaining)
-
-**Prerequisites**: Phase 5 (Sensor Data Publishing)
+**Status**: ✅ **COMPLETE** - Control subscriber and status publishers working, verified via end-to-end autonomous driving
 
 ### 2.14 Control Command Subscription
 
@@ -719,22 +617,21 @@ fn create_sensor_bridges(
   ```
 - [x] Handle control value clamping (0.0-1.0 ranges) ✅
 - [x] Add control logging ✅
-- [ ] Test with manual control commands (runtime testing pending)
-- [ ] Test with Autoware control output (runtime testing pending)
+- [x] Test with Autoware control output ✅ (end-to-end autonomous driving)
 
 **Implementation Details**:
 - **File**: `src/autoware_carla_bridge/src/vehicle_control.rs`
 - **Subscriber topic**: `/control/command/actuation_cmd`
 - **Message type**: `tier4_vehicle_msgs::msg::ActuationCommandStamped`
-- **Integration**: `main.rs:290-296` (VehicleControlBridge creation)
+- **Integration**: `main.rs:456-457` (VehicleControlBridge creation)
 - **Control mapping**: Direct mapping (accel_cmd → throttle, brake_cmd → brake, steer_cmd → steer)
 - **Logging**: Debug-level logging of all control values
 
 **Success Criteria**:
-- ✅ Bridge receives control commands from Autoware (subscriber created)
+- ✅ Bridge receives control commands from Autoware
 - ✅ Control values correctly mapped to CARLA (with clamping)
-- ⏳ Vehicle responds to throttle, brake, and steering (runtime test pending)
-- ⏳ No control command latency issues (runtime test pending)
+- ✅ Vehicle responds to throttle, brake, and steering
+- ✅ Verified via end-to-end autonomous driving
 
 ### 2.15 Vehicle Status Publishing
 
@@ -750,99 +647,44 @@ fn create_sensor_bridges(
 **Tasks**:
 - [x] Create status publishers in VehicleControlBridge ✅
 - [x] Configure status QoS (reliable, keep_last(10)) ✅
-- [ ] Implement CARLA → ROS status conversion:
-  ```rust
-  fn publish_velocity_status(&self) -> Result<()> {
-      let velocity = self.carla_vehicle.get_velocity()?;
-      let speed = (velocity.x.powi(2) + velocity.y.powi(2) + velocity.z.powi(2)).sqrt();
-
-      let mut velocity_report = autoware_vehicle_msgs::msg::VelocityReport::default();
-      velocity_report.header = create_ros_header(None);
-      velocity_report.header.frame_id = "base_link";
-      velocity_report.longitudinal_velocity = speed; // m/s
-      velocity_report.lateral_velocity = 0.0;
-      velocity_report.heading_rate = self.carla_vehicle.get_angular_velocity()?.z.to_radians();
-
-      self.velocity_publisher.publish(&velocity_report)?;
-      Ok(())
-  }
-
-  fn publish_actuation_status(&self) -> Result<()> {
-      let control = self.carla_vehicle.get_control()?;
-
-      let mut actuation_status = tier4_vehicle_msgs::msg::ActuationStatusStamped::default();
-      actuation_status.header = create_ros_header(None);
-      actuation_status.status.accel_status = control.throttle;
-      actuation_status.status.brake_status = control.brake;
-      actuation_status.status.steer_status = control.steer;
-
-      self.actuation_publisher.publish(&actuation_status)?;
-      Ok(())
-  }
-
-  fn publish_steering_status(&self) -> Result<()> {
-      let control = self.carla_vehicle.get_control()?;
-
-      let mut steering_report = autoware_vehicle_msgs::msg::SteeringReport::default();
-      steering_report.stamp = create_ros_header(None).stamp;
-      steering_report.steering_tire_angle = control.steer * MAX_STEERING_ANGLE;
-
-      self.steering_publisher.publish(&steering_report)?;
-      Ok(())
-  }
-  ```
-- [x] Publish status at regular intervals (e.g., simulation rate) ✅
-- [x] Add coordinate system conversions where needed ✅
-- [ ] Test status publishing with Autoware (runtime testing pending)
-- [ ] Verify Autoware receives and uses status data (runtime testing pending)
+- [x] Implement CARLA → ROS status conversion ✅
+- [x] Publish status at regular intervals (~20Hz) ✅
+- [x] Add coordinate system conversions ✅
+- [x] Test status publishing with Autoware ✅ (end-to-end autonomous driving)
 
 **Implementation Details**:
-- **File**: `src/autoware_carla_bridge/src/vehicle_control.rs:145-202`
+- **File**: `src/autoware_carla_bridge/src/vehicle_control.rs:146-214`
 - **Publisher topics**:
   - `/vehicle/status/velocity_status` (VelocityReport)
   - `/vehicle/status/steering_status` (SteeringReport)
   - `/vehicle/status/control_mode` (ControlModeReport)
-- **Integration**: `main.rs:426` (publish_status() called in main loop)
-- **Publish rate**: Matches simulation tick rate (~20Hz with default CARLA settings)
+  - `/vehicle/status/gear_status` (GearReport)
+- **Integration**: `main.rs:524` (publish_status() called in main loop)
+- **Publish rate**: Matches simulation tick rate (~20Hz)
 - **Velocity calculation**: 3D velocity magnitude from CARLA
-- **Steering conversion**: CARLA normalized steer (-1 to 1) → tire angle (radians)
+- **Steering conversion**: CARLA normalized steer (-1 to 1) → tire angle (radians, max 1.22 rad)
 - **Control mode**: Always AUTONOMOUS (mode = 1) in simulation
+- **Gear**: Always DRIVE in simulation
 
 **Success Criteria**:
-- ✅ Status messages published at expected rate (in main loop)
-- ⏳ Autoware receives and displays vehicle status (runtime test pending)
-- ✅ Velocity and steering values accurate (calculations implemented)
-- ✅ Control mode reflects current state (always AUTONOMOUS)
+- ✅ Status messages published at expected rate
+- ✅ Autoware receives and uses vehicle status
+- ✅ Velocity and steering values accurate
+- ✅ Verified via end-to-end autonomous driving
 
 ### 2.16 Control Verification
 
 **Objective**: Verify bidirectional control integration
 
-**Tasks**:
-- [ ] Create control verification script in `scripts/verify_control.py`
-- [ ] Test control loop:
-  1. Send control command from Autoware
-  2. Verify command received by bridge
-  3. Verify CARLA vehicle responds
-  4. Verify status update published
-  5. Verify Autoware receives status
-- [ ] Test edge cases:
-  - Maximum throttle/brake/steer values
-  - Rapid control changes
-  - Control command timeout handling
-- [ ] Performance testing:
-  - Measure control loop latency
-  - Check control responsiveness
-  - Monitor message rate
-- [ ] Integration test:
-  - Start full Autoware stack
-  - Set navigation goal
-  - Verify vehicle follows planned path
-  - Check control smoothness
+**Status**: ✅ **INFORMALLY VERIFIED** - End-to-end autonomous driving works
 
-**Success Criteria**:
-- Control loop latency <50ms
-- Smooth vehicle control (no jitter)
-- Autoware successfully controls CARLA vehicle
-- Emergency stop works correctly
-- Status updates accurate and timely
+**Verified via end-to-end testing**:
+- [x] Autoware sends control commands → bridge → CARLA vehicle responds
+- [x] Vehicle follows planned path to goal
+- [x] Status feedback loop works (Autoware receives vehicle status)
+
+**Not formally tested**:
+- [ ] Control verification script (`scripts/verify_control.py`)
+- [ ] Edge case testing (max values, rapid changes)
+- [ ] Control loop latency measurements
+- [ ] Emergency stop verification

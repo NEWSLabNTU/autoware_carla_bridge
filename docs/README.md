@@ -13,12 +13,12 @@
 
 ## Roadmap
 
-- [1-infrastructure.md](roadmap/1-infrastructure.md) - Phase 1: Infrastructure
-- [2-bridge.md](roadmap/2-bridge.md) - Phase 2: Data Bridge
-- [3-integration.md](roadmap/3-integration.md) - Phase 3: Autoware Integration
-- [4-autoware-feature-parity.md](roadmap/4-autoware-feature-parity.md) - Phase 4: Feature Parity
-- [5-map-integration.md](roadmap/5-map-integration.md) - Phase 5: Map Integration
-- [6-testing-and-release.md](roadmap/6-testing-and-release.md) - Phase 6: Testing & Release
+- [1-infrastructure.md](roadmap/1-infrastructure.md) - Phase 1: Infrastructure ✅
+- [2-bridge.md](roadmap/2-bridge.md) - Phase 2: Data Bridge ✅
+- [3-integration.md](roadmap/3-integration.md) - Phase 3: Autoware Integration ✅
+- [4-autoware-feature-parity.md](roadmap/4-autoware-feature-parity.md) - Phase 4: Feature Parity ✅ (calibration pending)
+- [5-map-integration.md](roadmap/5-map-integration.md) - Phase 5: Map Integration 🟡 (pre-converted maps working)
+- [6-testing-and-release.md](roadmap/6-testing-and-release.md) - Phase 6: Testing & Release ⏳
 
 ## Archive
 

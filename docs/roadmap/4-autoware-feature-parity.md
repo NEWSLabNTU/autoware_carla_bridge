@@ -3,11 +3,11 @@
 Track progress toward feature parity with TUMFTM Carla-Autoware-Bridge while maintaining our superior architecture (single Rust process vs multi-process Python).
 
 **Reference Documents**:
-- `docs/architecture-comparison.md` - Feature comparison with TUMFTM
-- `docs/tumftm-bridge-analysis.md` - Detailed TUMFTM analysis
-- `docs/sensor-configuration-strategy.md` - Sensor config design
+- `docs/archive/architecture-comparison.md` - Feature comparison with TUMFTM
+- `docs/archive/tumftm-bridge-analysis.md` - Detailed TUMFTM analysis
+- `docs/design/sensor-configuration-strategy.md` - Sensor config design
 
-**Current Status**: 🟡 **IN PROGRESS** - Core infrastructure complete, vehicle integration pending
+**Current Status**: 🟢 **MOSTLY COMPLETE** - Vehicle control and status publishers implemented, calibration pending
 
 ---
 
@@ -24,9 +24,9 @@ Track progress toward feature parity with TUMFTM Carla-Autoware-Bridge while mai
 - ✅ TF2 tree traversal for sensor positions
 - ✅ CARLA sensor parameter configuration system (hybrid URDF + YAML)
 
-**Localization** (Partially Complete):
-- ✅ `/localization/kinematic_state` publisher (Odometry) - **Our approach**
-- ⏳ `/sensing/gnss/pose_with_covariance` (PoseWithCovarianceStamped) - **TUMFTM approach** (verify if needed)
+**Localization** (Complete):
+- ✅ `/localization/kinematic_state` publisher (Odometry)
+- ✅ `/sensing/gnss/pose_with_covariance` (PoseWithCovarianceStamped) - bypasses gnss_poser for local projector maps
 
 **Sensors** (Complete):
 - ✅ Camera (RGB) - `/sensing/camera/*/image_raw`
@@ -37,9 +37,13 @@ Track progress toward feature parity with TUMFTM Carla-Autoware-Bridge while mai
 **Clock**:
 - ✅ Simulator clock synchronization via `/clock`
 
-### 🔴 Missing Critical Features
-
-Priority order based on Autoware integration requirements.
+**Vehicle Control** (Complete):
+- ✅ Control command subscriber (`/control/command/actuation_cmd`)
+- ✅ Velocity status publisher (`/vehicle/status/velocity_status`)
+- ✅ Steering status publisher (`/vehicle/status/steering_status`)
+- ✅ Control mode publisher (`/vehicle/status/control_mode`)
+- ✅ Gear status publisher (`/vehicle/status/gear_status`)
+- ✅ GNSS pose with covariance publisher (`/sensing/gnss/pose_with_covariance`)
 
 ---
 
@@ -47,127 +51,61 @@ Priority order based on Autoware integration requirements.
 
 **Objective**: Implement bidirectional vehicle control between Autoware and CARLA
 
-**Status**: 🔴 **NOT STARTED**
+**Status**: ✅ **COMPLETE**
 
-**Priority**: 🔴 **HIGH** - Required for Autoware to control vehicle
-
-**Duration**: 1-2 weeks
-
-**Reference**: TUMFTM's `aw_bridge.py` (lines 82-134)
+**Implementation**: `src/autoware_carla_bridge/src/vehicle_control.rs`
 
 ### 4.1 Control Command Subscriber
 
-**Objective**: Subscribe to Autoware control commands and apply to CARLA vehicle
+**Status**: ✅ **COMPLETE**
 
-**Tasks**:
-- [ ] Subscribe to `/control/command/control_cmd` (AckermannControlCommand)
-- [ ] Parse lateral control (steering_tire_angle, steering_tire_rotation_rate)
-- [ ] Parse longitudinal control (speed, acceleration, jerk)
-- [ ] Convert to CARLA VehicleControl
-- [ ] Apply control to vehicle using `vehicle.apply_control()`
-- [ ] Add control rate limiting (if needed)
+**Implementation**:
+- Subscribes to `/control/command/actuation_cmd` (ActuationCommandStamped)
+- Converts steer_cmd, accel_cmd, brake_cmd to CARLA VehicleControl
+- Steering clamped to [-1.0, 1.0], throttle/brake to [0.0, 1.0]
+- Dead zone at 0.01 for accel/brake to avoid jitter
+- Applied via `vehicle.apply_control()`
 
-**TUMFTM Findings**:
-- Uses 1.2x steering angle multiplier (vehicle calibration)
-- Directly forwards speed, acceleration, jerk
-- No throttle/brake conversion (uses high-level control)
-
-**Our Approach**:
-- Direct CARLA `VehicleControl` API
-- Optional calibration config file per vehicle model
-- Support both high-level (speed) and low-level (throttle/brake) control
-
-**Deliverables**:
-- Control command subscription working
-- Vehicle responds to Autoware planning commands
-- Smooth control without oscillations
-
-**Testing**:
-- [ ] Verify vehicle follows Autoware trajectory
-- [ ] Test emergency stops
-- [ ] Validate steering response
-- [ ] Check control loop timing
+**Design Choice**: Uses ActuationCommandStamped (direct throttle/brake/steer) rather than AckermannControlCommand (speed/steering_angle). This matches Autoware's raw_vehicle_cmd_converter output.
 
 ---
 
 ### 4.2 Vehicle Status Publishers
 
-**Objective**: Publish vehicle state to Autoware for monitoring and feedback
+**Status**: ✅ **COMPLETE**
 
-**Tasks**:
+**Implementation** (`VehicleControlBridge::publish_status()`):
 
 **a) Velocity Status** (`/vehicle/status/velocity_status`):
-- [ ] Create VelocityReport message
-- [ ] Publish longitudinal velocity (from CARLA vehicle)
-- [ ] Publish lateral velocity
-- [ ] Publish heading rate
-- [ ] Set timestamp from simulator clock
+- VelocityReport with longitudinal_velocity (3D magnitude), lateral_velocity, heading_rate
+- Reads directly from `vehicle.velocity()` and `vehicle.angular_velocity()`
 
 **b) Steering Status** (`/vehicle/status/steering_status`):
-- [ ] Create SteeringReport message
-- [ ] Publish steering_tire_angle (from CARLA vehicle)
-- [ ] Set timestamp from simulator clock
+- SteeringReport with steering_tire_angle (converted from CARLA's -1..1 to radians)
+- Max steering angle: 1.22 rad (~70 degrees)
 
 **c) Control Mode** (`/vehicle/status/control_mode`):
-- [ ] Create ControlModeReport message
-- [ ] Set mode to AUTONOMOUS (mode = 1) - always autonomous in simulation
-- [ ] Publish at 10 Hz
+- ControlModeReport with mode=AUTONOMOUS (1) always
 
-**TUMFTM Implementation**:
-```python
-# From TUMFTM aw_bridge.py
-velocity_status.longitudinal_velocity = odometry.twist.twist.linear.x
-velocity_status.lateral_velocity = odometry.twist.twist.linear.y
-velocity_status.heading_rate = odometry.twist.twist.angular.z
+**d) Gear Status** (`/vehicle/status/gear_status`):
+- GearReport with report=DRIVE always
+- Added beyond original plan for Autoware compatibility
 
-control_mode.mode = 1  # Always autonomous
-```
-
-**Our Approach**:
-- Get state directly from CARLA vehicle API
-- Use `vehicle.velocity()`, `vehicle.angular_velocity()`
-- Extract steering from `vehicle.get_control()`
-- More efficient than TUMFTM (no intermediate odometry conversion)
-
-**Deliverables**:
-- Three status publishers working
-- Autoware receives vehicle feedback
-- Status updates at appropriate rates
-
-**Testing**:
-- [ ] Verify Autoware sees vehicle status
-- [ ] Check timing of status updates
-- [ ] Validate values match CARLA ground truth
+All published every tick (~20Hz) with simulation timestamps.
 
 ---
 
-### 4.3 Pose with Covariance Publisher (Optional)
+### 4.3 Pose with Covariance Publisher
 
-**Objective**: Publish pose with covariance for Autoware localization (if needed)
+**Status**: ✅ **COMPLETE**
 
-**Status**: ⏳ **INVESTIGATE** - May not be needed if Odometry is sufficient
+**Implementation**: `src/autoware_carla_bridge/src/autoware.rs`
 
-**Tasks**:
-- [ ] Check if Autoware 2025.02 requires this topic
-- [ ] If yes: Convert from kinematic_state to PoseWithCovarianceStamped
-- [ ] Set covariance matrix (use TUMFTM values: 0.1 diagonal)
-- [ ] Publish to `/sensing/gnss/pose_with_covariance`
-
-**TUMFTM Covariance**:
-```python
-covariance = [
-    0.1, 0.0, 0.0, 0.0, 0.0, 0.0,
-    0.0, 0.1, 0.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.1, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-]
-```
-
-**Decision Point**:
-- First verify if Autoware works with `/localization/kinematic_state` alone
-- Only add this if Autoware explicitly requires it
+- Publishes PoseWithCovarianceStamped to `/sensing/gnss/pose_with_covariance`
+- Enabled when `auto_initialize_localization` is active
+- Bypasses gnss_poser (which fails with local projector type maps)
+- Covariance diagonal: [0.25, 0.25, 0.25, 0.01, 0.01, 0.01] (position + orientation)
+- Converts CARLA transform to ROS pose with coordinate system conversion
 
 ---
 
@@ -260,99 +198,67 @@ vehicles:
 
 ### Metrics
 
-| Category                               | TUMFTM      | Our Bridge          | Status                |
-|----------------------------------------|-------------|---------------------|-----------------------|
-| **Publishers**                         |             |                     |                       |
-| Sensor data (camera, lidar, imu, gnss) | ✅          | ✅                  | Done                  |
-| Kinematic state / Odometry             | ✅          | ✅                  | Done                  |
-| Velocity status                        | ✅          | ❌                  | TODO Phase 4.2a       |
-| Steering status                        | ✅          | ❌                  | TODO Phase 4.2b       |
-| Control mode                           | ✅          | ❌                  | TODO Phase 4.2c       |
-| Pose with covariance                   | ✅          | ⏳                  | Investigate Phase 4.3 |
-| **Subscribers**                        |             |                     |                       |
-| Control command                        | ✅          | ❌                  | TODO Phase 4.1        |
-| **Performance**                        |             |                     |                       |
-| Process count                          | 5+          | 1                   | ⚡ Better             |
-| Memory usage                           | ~500-800 MB | ~50-100 MB          | ⚡ Better             |
-| Latency                                | ~10-20 ms   | ~1-5 ms             | ⚡ Better             |
-| **Integration**                        |             |                     |                       |
-| Sensor config                          | Static JSON | URDF + YAML         | ⚡ Better             |
-| Vehicle spawning                       | Manual      | Automatic from RViz | ⚡ Better             |
+| Category                               | TUMFTM      | Our Bridge          | Status    |
+|----------------------------------------|-------------|---------------------|-----------|
+| **Publishers**                         |             |                     |           |
+| Sensor data (camera, lidar, imu, gnss) | ✅          | ✅                  | Done      |
+| Kinematic state / Odometry             | ✅          | ✅                  | Done      |
+| Velocity status                        | ✅          | ✅                  | Done      |
+| Steering status                        | ✅          | ✅                  | Done      |
+| Control mode                           | ✅          | ✅                  | Done      |
+| Gear status                            | ❌          | ✅                  | Done      |
+| Pose with covariance                   | ✅          | ✅                  | Done      |
+| **Subscribers**                        |             |                     |           |
+| Control command                        | ✅          | ✅                  | Done      |
+| **Performance**                        |             |                     |           |
+| Process count                          | 5+          | 1                   | Better    |
+| Memory usage                           | ~500-800 MB | ~50-100 MB          | Better    |
+| Latency                                | ~10-20 ms   | ~1-5 ms             | Better    |
+| **Integration**                        |             |                     |           |
+| Sensor config                          | Static JSON | URDF + YAML         | Better    |
+| Vehicle spawning                       | Manual      | Automatic from RViz | Better    |
 
 ### Completion Status
 
-**Overall Progress**: 60% complete
+**Overall Progress**: 90% complete
 
 - ✅ Infrastructure: 100% (superior to TUMFTM)
 - ✅ Sensor integration: 100%
-- ✅ Localization: 100% (Odometry approach)
-- 🔴 Vehicle control: 0% (Phase 4 TODO)
-- 🔴 Vehicle status: 0% (Phase 4 TODO)
+- ✅ Localization: 100%
+- ✅ Vehicle control: 100% (Phase 4.1)
+- ✅ Vehicle status: 100% (Phase 4.2)
+- ✅ GNSS pose: 100% (Phase 4.3)
+- 🔴 Vehicle calibration: 0% (Phase 4.4)
 
-**Estimated Remaining Work**: 2-3 weeks
+**Estimated Remaining Work**: 3-5 days (calibration only)
 
 ---
 
 ## Dependencies
 
-### Message Types Needed
+### Message Types Used
 
-Already in workspace (verify availability):
-- `autoware_vehicle_msgs::msg::VelocityReport`
-- `tier4_vehicle_msgs::msg::SteeringReport`
-- `autoware_vehicle_msgs::msg::ControlModeReport`
-- `autoware_control_msgs::msg::Control` (for control_cmd)
+In workspace:
+- `autoware_vehicle_msgs::msg::VelocityReport` ✅
+- `autoware_vehicle_msgs::msg::SteeringReport` ✅
+- `autoware_vehicle_msgs::msg::ControlModeReport` ✅
+- `autoware_vehicle_msgs::msg::GearReport` ✅
+- `tier4_vehicle_msgs::msg::ActuationCommandStamped` ✅ (for control_cmd)
+- `geometry_msgs::msg::PoseWithCovarianceStamped` ✅ (for GNSS pose)
 
-If missing, add to `src/interface/` symlinks.
+### CARLA APIs Used
 
-### CARLA APIs Needed
-
-- `vehicle.apply_control(VehicleControl)` - Apply control commands
-- `vehicle.get_control()` - Get current control state (for steering status)
-- `vehicle.velocity()` - Get velocity vector ✅ (already using)
-- `vehicle.angular_velocity()` - Get angular velocity ✅ (already using)
-
----
-
-## Risk Assessment
-
-### High Risk
-
-1. **Control loop timing**: Autoware expects specific control rates
-   - **Mitigation**: Measure and adjust publish rates, add timing diagnostics
-
-2. **Steering calibration**: Different vehicles need different multipliers
-   - **Mitigation**: Implement calibration system early (Phase 5)
-
-### Medium Risk
-
-1. **Message compatibility**: Autoware 2025.02 may have changed message definitions
-   - **Mitigation**: Test early with running Autoware instance
-
-2. **Covariance values**: Incorrect covariance may confuse Autoware
-   - **Mitigation**: Use TUMFTM's proven values, tune if needed
-
-### Low Risk
-
-1. **Performance**: Control loop may be too slow
-   - **Mitigation**: Unlikely with Rust's performance, monitor anyway
+- `vehicle.apply_control(VehicleControl)` ✅ - Apply control commands
+- `vehicle.control()` ✅ - Get current control state (for steering status)
+- `vehicle.velocity()` ✅ - Get velocity vector
+- `vehicle.angular_velocity()` ✅ - Get angular velocity
 
 ---
 
 ## Next Steps
 
-**Immediate (Phase 4.1)**:
-1. Check that control message types are available in workspace
-2. Implement control command subscriber
-3. Test vehicle responds to Autoware commands
-4. Validate control loop timing
-
-**Short Term (Phase 4.2)**:
-1. Implement three status publishers
-2. Verify Autoware sees vehicle feedback
-3. Test complete control loop
-
-**Medium Term (Phase 5)**:
-1. Add vehicle calibration system
-2. Test with multiple vehicle models
-3. Tune calibration parameters
+**Remaining (Phase 4.4)**:
+1. Design YAML schema for vehicle calibration
+2. Add per-vehicle steering angle multiplier
+3. Test with multiple vehicle models
+4. Tune calibration parameters

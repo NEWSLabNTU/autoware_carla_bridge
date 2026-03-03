@@ -6,7 +6,7 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
 
 **Repository**: https://github.com/NEWSLabNTU/ros_zenoh_bridge
 
-**Status**: ✅ Phases 0-3 Complete + Phase 4 Vehicle Spawning (55%) - Core migration from Zenoh to rclrs complete with modern Autoware API integration.
+**Status**: ✅ Phases 1-4 Complete - End-to-end autonomous driving working (CARLA + Bridge + Autoware). Remaining: vehicle calibration, map automation, formal testing.
 
 **Recent**: ✅ Modern Autoware localization API integration (2025-11-23) - Bridge now spawns vehicles automatically when localization initializes, enabling full end-to-end autonomous driving.
 
@@ -19,46 +19,47 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
 **Rust Bridge (rclrs)**:
 - ✅ Native ROS 2 publishers/subscribers (no Zenoh/CDR serialization)
 - ✅ Clock publisher and utility functions
-- ✅ All 5 bridge types migrated (Sensor, Vehicle, TrafficLight, TrafficSign, OtherActor)
-- ✅ Autoware integration foundation:
+- ✅ Autoware integration:
   - Autoware instance detection via `/robot_description`
-  - URDF parsing (26 sensors from sample_sensor_kit)
   - TF2 transform buffer with multi-hop chain traversal
   - ROS ↔ CARLA coordinate conversion
-  - **Modern Autoware localization API integration**:
-    - Subscribes to `/localization/initialization_state` (monitors INITIALIZED state)
-    - Subscribes to `/localization/kinematic_state` (receives vehicle pose)
-    - Spawns vehicle when localization becomes INITIALIZED (state 3)
-    - No backward compatibility with legacy `/initialpose` topic
-- ✅ **Connection robustness** (2025-12-03):
+  - Modern Autoware localization API integration
+  - Config-driven vehicle and sensor spawning (`vehicle_config.yaml`)
+- ✅ Sensor data publishing (all verified via autonomous driving):
+  - Camera (Image + CameraInfo)
+  - LiDAR (PointCloud2 with PointXYZIRC format for NDT)
+  - IMU (acceleration, angular velocity, orientation)
+  - GNSS (NavSatFix)
+- ✅ Vehicle control:
+  - Subscribes to `/control/command/actuation_cmd` (ActuationCommandStamped)
+  - Publishes VelocityReport, SteeringReport, ControlModeReport, GearReport at ~20Hz
+  - GNSS PoseWithCovarianceStamped for localization (bypasses gnss_poser)
+- ✅ Connection robustness:
   - Infinite retry loops for CARLA connection with panic catching
   - Infinite wait for Autoware detection with executor spinning
   - Graceful Ctrl-C handling during retry/wait phases
-  - Progress logging (CARLA: every 2s, Autoware: every 5s)
+- ✅ Vehicle cleanup on Autoware loss (respawn requires bridge restart)
 - ✅ Responsive shutdown (100ms Ctrl-C exit)
-- ✅ Runtime verified with live Autoware + CARLA
 
-**Autonomous Driving Scripts (Python/rclpy)**:
-- ✅ **`drive_in_autoware.py`** - Full autonomous driving workflow
+**Autonomous Driving (carla_pilot ROS 2 package)**:
+- ✅ **`drive` node** - Full autonomous driving workflow
   - Uses modern Autoware 2024/2025 API services
-  - Initializes localization via `/api/localization/initialize`
-  - Sets route via `/api/routing/set_route_points`
-  - Engages autonomous mode via `/api/operation_mode/change_to_autonomous`
+  - Initializes localization, sets route, engages autonomous mode
   - Monitors progress until goal reached
-  - **Reusable**: Can run multiple times in single Autoware session
-- ✅ **`read_poses.py`** - Captures poses from RViz
+  - Poses loaded via `poses_file` ROS parameter
+- ✅ **`read_poses` node** - Captures poses from RViz
   - Subscribes to `/initialpose` and `/planning/mission_planning/goal`
-  - Saves to `scripts/poses.json` for autonomous driving
-- ✅ **`get_carla_spawn_points.py`** - Get valid CARLA spawn points
-  - Connects to CARLA and retrieves spawn points
-  - Suggests valid pose pairs for autonomous driving
+  - Output file via `output_file` ROS parameter
 
-### What's Next (Phase 4)
-- [x] Vehicle spawning with initial pose (via modern Autoware localization API) ✅ 2025-11-23
-- [ ] Sensor attachment with TF2 transforms (partially working, needs refinement)
-- [ ] Vehicle cleanup on Autoware loss (known issue: vehicle destroyed after spawn)
-- [ ] Pose teleportation updates
-- [ ] Sensor parameter configuration
+**Pre-converted Maps**:
+- ✅ Town01, Town02, Town03, Town05, Town10 in `data/carla-autoware-bridge/`
+- ✅ Each with lanelet2_map.osm, pointcloud_map.pcd, map_config.yaml, map_projector_info.yaml
+
+### What's Next
+- [ ] Vehicle calibration per CARLA model (steering multiplier, wheelbase)
+- [ ] Vehicle respawn after Autoware reconnection (currently requires bridge restart)
+- [ ] Formal test scripts and performance benchmarks
+- [ ] Map conversion automation (custom maps beyond pre-converted TUMFTM)
 
 ---
 
@@ -668,9 +669,9 @@ Our `carla_simulator.launch.xml` sets `system_run_mode=logging_simulation` to di
 
 ---
 
-**Last Updated**: 2025-12-12 (Session: MRM handler timeout configuration for CARLA)
-**Migration Status**: Phases 0-3 Complete + Phase 4 Vehicle Spawning (55%)
-**Autonomous Driving**: ✅ End-to-end working (Python scripts + Rust bridge with modern Autoware APIs)
+**Last Updated**: 2026-03-03 (Roadmap docs updated to reflect actual implementation status)
+**Status**: Phases 1-4 Complete - End-to-end autonomous driving working
+**Remaining**: Vehicle calibration (Phase 4.4), map automation (Phase 5), formal testing (Phase 6)
 **Recent Changes**:
 - ✅ **MRM handler timeout configuration for CARLA** (2025-12-12):
   - Fixed MRM oscillation causing EMERGENCY_STOP flickering and autonomous mode unavailability
