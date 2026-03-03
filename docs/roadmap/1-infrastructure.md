@@ -6,7 +6,7 @@ This document covers the core infrastructure work for the autoware_carla_bridge 
 
 ---
 
-## Phase 0: Preparation
+## Preparation
 
 **Objective**: Set up the development environment and understand the current codebase.
 
@@ -47,7 +47,7 @@ This document covers the core infrastructure work for the autoware_carla_bridge 
 
 ---
 
-## Phase 1: Core Infrastructure
+## Core Infrastructure
 
 **Objective**: Replace Zenoh session with rclrs context and node, update dependencies.
 
@@ -209,7 +209,7 @@ Files: `src/autoware.rs`, `src/utils.rs`
 
 ---
 
-## Phase 7: carla-rust Integration and Enhancements
+## carla-rust Integration and Enhancements
 
 **Objective**: Integrate local carla-rust repository for enhanced CARLA API access.
 
@@ -217,7 +217,7 @@ Files: `src/autoware.rs`, `src/utils.rs`
 
 **Duration**: 2-3 days
 
-### 7.1 Local Repository Integration - ✅ COMPLETE
+### 1.6 Local Repository Integration - ✅ COMPLETE
 
 - [x] Configure local path dependency in `Cargo.toml`:
   ```toml
@@ -233,7 +233,7 @@ Files: `src/autoware.rs`, `src/utils.rs`
 - Ability to contribute improvements back to carla-rust
 - Local debugging and development
 
-### 7.2 Build System Configuration - ✅ COMPLETE
+### 1.7 Build System Configuration - ✅ COMPLETE
 
 - [x] Configure direnv for automatic environment setup
 - [x] Update `.envrc` with CARLA_VERSION and paths
@@ -258,7 +258,7 @@ Files: `src/autoware.rs`, `src/utils.rs`
 - CARLA_VERSION environment variable selects CARLA version at build time
 - Three-stage build ensures correct dependency resolution
 
-### 7.3 Actor Cleanup Implementation - ⚠️ DEFERRED
+### 1.8 Actor Cleanup Implementation - ⚠️ DEFERRED
 
 **Note**: Actor cleanup APIs are available in carla-rust 0.12.0 but implementation is deferred to future phases when needed.
 
@@ -272,7 +272,7 @@ Files: `src/autoware.rs`, `src/utils.rs`
 - Phase 9: Testing cleanup between test runs
 - Error recovery scenarios
 
-### 7.4 Documentation - ✅ COMPLETE
+### 1.9 Documentation - ✅ COMPLETE
 
 - [x] Create `docs/carla-rust-integration.md` (386 lines)
   - Integration setup instructions
@@ -284,7 +284,7 @@ Files: `src/autoware.rs`, `src/utils.rs`
 - [x] Update roadmap with Phase 7 tasks
 - [x] Mark Phase 2 as runtime verified in roadmap
 
-### 7.5 Advanced Features - ⚠️ DEFERRED TO FUTURE
+### 1.10 Advanced Features - ⚠️ DEFERRED TO FUTURE
 
 The following enhancements are available but not yet implemented:
 
@@ -375,6 +375,6 @@ export CARLA_VERSION=0.9.16  # or 0.9.14, 0.9.15
 **Last Updated**: 2025-11-04
 **Related Documents**:
 - [roadmap.md](../roadmap.md) - Main roadmap index
-- [bridge.md](bridge.md) - Data bridge implementation (Phases 2, 5, 6, 8)
-- [integration.md](integration.md) - Autoware integration (Phases 3-4)
-- [testing-and-release.md](testing-and-release.md) - Testing and release (Phases 9-10)
+- [2-bridge.md](2-bridge.md) - Data bridge (Phase 2)
+- [3-integration.md](3-integration.md) - Autoware integration (Phase 3)
+- [6-testing-and-release.md](6-testing-and-release.md) - Testing and release (Phase 6)

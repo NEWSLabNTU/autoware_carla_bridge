@@ -8,7 +8,7 @@ This document covers the Autoware integration implementation for the autoware_ca
 
 ---
 
-## Phase 3: Autoware Integration Foundation
+## Autoware Integration Foundation
 
 **Objective**: Implement Autoware instance detection and sensor configuration extraction from Autoware topics.
 
@@ -343,7 +343,7 @@ This document covers the Autoware integration implementation for the autoware_ca
 
 ---
 
-### Phase 3 Summary
+### Summary
 
 **Deliverables**:
 - ✅ tf2_msgs integrated and building
@@ -373,7 +373,7 @@ This document covers the Autoware integration implementation for the autoware_ca
 
 ---
 
-## Phase 4: Vehicle Lifecycle Management
+## Vehicle Lifecycle Management
 
 **Objective**: Manage CARLA vehicle lifecycle tied to Autoware instance, including spawning, initial pose, and cleanup.
 
@@ -385,7 +385,7 @@ This document covers the Autoware integration implementation for the autoware_ca
 - Phase 3 complete (Autoware detection, sensor config) ✅
 - Understanding of Autoware initial pose workflow ✅
 
-### 4.1 Initial Pose Subscription
+### 3.6 Initial Pose Subscription
 
 **Objective**: Subscribe to `/initialpose` from RViz and use it to spawn/teleport vehicle.
 
@@ -442,7 +442,7 @@ This document covers the Autoware integration implementation for the autoware_ca
 
 ---
 
-### 4.2 Sensor Parameter Configuration
+### 3.7 Sensor Parameter Configuration
 
 **Objective**: Load CARLA sensor parameters from configuration file.
 
@@ -500,7 +500,7 @@ This document covers the Autoware integration implementation for the autoware_ca
 
 ---
 
-### 4.3 Vehicle Spawning Logic
+### 3.8 Vehicle Spawning Logic
 
 **Objective**: Spawn CARLA vehicle with sensors when all prerequisites ready.
 
@@ -564,7 +564,7 @@ This document covers the Autoware integration implementation for the autoware_ca
 
 ---
 
-### 4.4 Vehicle Cleanup on Autoware Loss
+### 3.9 Vehicle Cleanup on Autoware Loss
 
 **Objective**: Detect Autoware disappearance and clean up CARLA vehicle.
 
@@ -612,7 +612,7 @@ This document covers the Autoware integration implementation for the autoware_ca
 
 ---
 
-### 4.5 Vehicle Teleportation
+### 3.10 Vehicle Teleportation
 
 **Objective**: Update vehicle pose when receiving new `/initialpose` messages.
 
@@ -651,7 +651,7 @@ This document covers the Autoware integration implementation for the autoware_ca
 
 ---
 
-### Phase 4 Summary
+### Summary
 
 **Status**: 🔧 **IN PROGRESS** - Core module complete (2025-11-05), integration and testing pending
 
@@ -715,8 +715,8 @@ This document covers the Autoware integration implementation for the autoware_ca
 **Status**: Phase 3 Complete, Phase 4 In Progress (core module complete, integration pending)
 **Related Documents**:
 - [roadmap.md](../roadmap.md) - Main roadmap index
-- [infrastructure.md](infrastructure.md) - Infrastructure setup (Phases 0, 1, 7)
-- [bridge.md](bridge.md) - Data bridge implementation (Phases 2, 5, 6, 8)
-- [testing-and-release.md](testing-and-release.md) - Testing and release (Phases 9-10)
+- [1-infrastructure.md](1-infrastructure.md) - Infrastructure (Phase 1)
+- [2-bridge.md](2-bridge.md) - Data bridge (Phase 2)
+- [6-testing-and-release.md](6-testing-and-release.md) - Testing and release (Phase 6)
 - [../autoware-integration-design.md](../autoware-integration-design.md) - Detailed Autoware integration design
 - [../architecture.md](../architecture.md) - Architecture design and ADRs

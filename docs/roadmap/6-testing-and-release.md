@@ -6,7 +6,7 @@ This document covers integration testing, performance validation, documentation,
 
 ---
 
-## Phase 9: Integration Testing
+## Integration Testing
 
 **Objective**: End-to-end testing with complete Autoware integration workflow.
 
@@ -24,7 +24,7 @@ This document covers integration testing, performance validation, documentation,
 4. Bridge detects Autoware, spawns vehicle
 5. Compare data between CARLA and Autoware topics
 
-### 9.1 Autoware Detection Testing
+### 6.1 Autoware Detection Testing
 
 **Objective**: Verify Autoware instance detection and lifecycle management.
 
@@ -62,7 +62,7 @@ This document covers integration testing, performance validation, documentation,
 
 ---
 
-### 9.2 Sensor Data Validation
+### 6.2 Sensor Data Validation
 
 **Objective**: Verify sensor data accuracy and consistency between CARLA and Autoware.
 
@@ -117,7 +117,7 @@ This document covers integration testing, performance validation, documentation,
 
 ---
 
-### 9.3 Vehicle Control Testing
+### 6.3 Vehicle Control Testing
 
 **Objective**: Verify bidirectional vehicle control integration.
 
@@ -161,7 +161,7 @@ This document covers integration testing, performance validation, documentation,
 
 ---
 
-### 9.4 Lifecycle Testing
+### 6.4 Lifecycle Testing
 
 **Objective**: Verify complete vehicle lifecycle management.
 
@@ -205,7 +205,7 @@ This document covers integration testing, performance validation, documentation,
 
 ---
 
-### 9.5 Performance Testing
+### 6.5 Performance Testing
 
 **Objective**: Measure and validate system performance.
 
@@ -257,7 +257,7 @@ This document covers integration testing, performance validation, documentation,
 
 ---
 
-### Phase 9 Summary
+### Summary
 
 **Deliverables**:
 - [ ] Test scripts for all scenarios
@@ -295,7 +295,7 @@ This document covers integration testing, performance validation, documentation,
 
 ---
 
-## Phase 10: Documentation and Release
+## Documentation and Release
 
 **Objective**: Complete documentation and prepare v0.13.0 release.
 
@@ -306,7 +306,7 @@ This document covers integration testing, performance validation, documentation,
 **Prerequisites**:
 - Phase 9 complete (testing)
 
-### 10.1 Update README.md
+### 6.6 Update README.md
 
 **Objective**: Update main project README with Autoware integration.
 
@@ -366,7 +366,7 @@ This document covers integration testing, performance validation, documentation,
 
 ---
 
-### 10.2 Create Integration Guide
+### 6.7 Create Integration Guide
 
 **Objective**: Create comprehensive Autoware integration guide.
 
@@ -406,7 +406,7 @@ This document covers integration testing, performance validation, documentation,
 
 ---
 
-### 10.3 API Documentation
+### 6.8 API Documentation
 
 **Objective**: Document all modules and APIs.
 
@@ -443,7 +443,7 @@ This document covers integration testing, performance validation, documentation,
 
 ---
 
-### 10.4 Create Examples
+### 6.9 Create Examples
 
 **Objective**: Provide example configurations and scenarios.
 
@@ -472,7 +472,7 @@ This document covers integration testing, performance validation, documentation,
 
 ---
 
-### 10.5 Release Preparation
+### 6.10 Release Preparation
 
 **Objective**: Prepare and publish v0.13.0 release.
 
@@ -536,7 +536,7 @@ This document covers integration testing, performance validation, documentation,
 
 ---
 
-### Phase 10 Summary
+### Summary
 
 **Deliverables**:
 - [ ] Updated README.md
@@ -574,7 +574,7 @@ This document covers integration testing, performance validation, documentation,
 **Last Updated**: 2025-11-04
 **Related Documents**:
 - [roadmap.md](../roadmap.md) - Main roadmap index
-- [infrastructure.md](infrastructure.md) - Infrastructure setup (Phases 0, 1, 7)
-- [bridge.md](bridge.md) - Data bridge implementation (Phases 2, 5, 6, 8)
-- [integration.md](integration.md) - Autoware integration (Phases 3-4)
+- [1-infrastructure.md](1-infrastructure.md) - Infrastructure (Phase 1)
+- [2-bridge.md](2-bridge.md) - Data bridge (Phase 2)
+- [3-integration.md](3-integration.md) - Autoware integration (Phase 3)
 - [../architecture.md](../architecture.md) - Architecture design and ADRs

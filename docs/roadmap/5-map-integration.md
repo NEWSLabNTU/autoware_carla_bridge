@@ -31,7 +31,7 @@ Track progress for CARLA map integration with Autoware, including Lanelet2 conve
 
 ---
 
-## Phase 1: Quick Start with Pre-Converted Maps
+## Quick Start with Pre-Converted Maps
 
 **Objective**: Use TUMFTM's pre-converted maps to get running quickly
 
@@ -43,7 +43,7 @@ Track progress for CARLA map integration with Autoware, including Lanelet2 conve
 
 **Why This First**: Allows us to test bridge functionality without spending weeks on map conversion
 
-### 1.1 Download TUMFTM Maps
+### 5.1 Download TUMFTM Maps
 
 **Tasks**:
 - [ ] Download TUMFTM maps from https://syncandshare.lrz.de/getlink/fiBgYSNkmsmRB28meoX3gZ/
@@ -67,7 +67,7 @@ Track progress for CARLA map integration with Autoware, including Lanelet2 conve
 
 ---
 
-### 1.2 Configure Autoware for TUMFTM Maps
+### 5.2 Configure Autoware for TUMFTM Maps
 
 **Tasks**:
 - [ ] Create Autoware map configuration for each TUMFTM map
@@ -95,7 +95,7 @@ autoware_map/
 
 ---
 
-### 1.3 Validate Bridge with TUMFTM Maps
+### 5.3 Validate Bridge with TUMFTM Maps
 
 **Tasks**:
 - [ ] Test bridge with each TUMFTM map
@@ -110,7 +110,7 @@ autoware_map/
 
 ---
 
-## Phase 2: Automated Point Cloud Generation
+## Automated Point Cloud Generation
 
 **Objective**: Automate point cloud map creation from CARLA
 
@@ -122,7 +122,7 @@ autoware_map/
 
 **Why After Phase 1**: TUMFTM maps are good enough for initial testing
 
-### 2.1 Autopilot Recording Script
+### 5.4 Autopilot Recording Script
 
 **Objective**: Create script to record point clouds using CARLA autopilot
 
@@ -179,7 +179,7 @@ def generate_point_cloud(town, duration, output_path, **lidar_params):
 
 ---
 
-### 2.2 Map Quality Validation
+### 5.5 Map Quality Validation
 
 **Objective**: Ensure generated point clouds are suitable for NDT localization
 
@@ -206,7 +206,7 @@ def generate_point_cloud(town, duration, output_path, **lidar_params):
 
 ---
 
-## Phase 3: Lanelet2 Map Conversion
+## Lanelet2 Map Conversion
 
 **Objective**: Automate OpenDRIVE to Lanelet2 conversion
 
@@ -218,7 +218,7 @@ def generate_point_cloud(town, duration, output_path, **lidar_params):
 
 **Challenge**: Traffic light integration requires manual editing
 
-### 3.1 Install Conversion Tools
+### 5.6 Install Conversion Tools
 
 **Tasks**:
 - [ ] Install opendrive2lanelet (CommonRoad/TUM)
@@ -237,7 +237,7 @@ pip install opendrive2lanelet lxml numpy scipy matplotlib commonroad-io
 
 ---
 
-### 3.2 Automated Conversion Script
+### 5.7 Automated Conversion Script
 
 **Objective**: Script to convert any CARLA town to Lanelet2
 
@@ -292,7 +292,7 @@ def convert_carla_town(town, output_path, **options):
 
 ---
 
-### 3.3 Traffic Light Integration
+### 5.8 Traffic Light Integration
 
 **Objective**: Add traffic light regulatory elements to Lanelet2 maps
 
@@ -336,7 +336,7 @@ for tl in traffic_lights:
 
 ---
 
-## Phase 4: Map Management & Tooling
+## Map Management & Tooling
 
 **Objective**: Build infrastructure for managing and validating maps
 
@@ -346,7 +346,7 @@ for tl in traffic_lights:
 
 **Duration**: 1 week
 
-### 4.1 Map Repository Structure
+### 5.9 Map Repository Structure
 
 **Design**:
 ```
@@ -373,7 +373,7 @@ maps/
 
 ---
 
-### 4.2 Map Validation Suite
+### 5.10 Map Validation Suite
 
 **Objective**: Automated validation of map quality
 
@@ -401,7 +401,7 @@ maps/
 
 ---
 
-### 4.3 Map Catalog & Documentation
+### 5.11 Map Catalog & Documentation
 
 **Tasks**:
 - [ ] Document each available map
@@ -432,25 +432,25 @@ maps/
 
 ---
 
-## Phase 5: Advanced Map Features
+## Advanced Map Features
 
 **Status**: ⏳ **FUTURE**
 
 **Priority**: 🟢 **LOW** - Not critical
 
-### 5.1 Dynamic Map Elements
+### 5.12 Dynamic Map Elements
 
 - [ ] Movable objects (traffic cones, barriers)
 - [ ] Construction zones
 - [ ] Temporary lane closures
 
-### 5.2 Multi-Floor Maps
+### 5.13 Multi-Floor Maps
 
 - [ ] Parking garages
 - [ ] Multi-level interchanges
 - [ ] Bridge/tunnel handling
 
-### 5.3 HD Map Enhancements
+### 5.14 HD Map Enhancements
 
 - [ ] Lane markings (solid, dashed, etc.)
 - [ ] Road surface types

@@ -78,41 +78,41 @@ This document provides the main roadmap index and project overview for the autow
 ### 📋 Functional Areas
 
 #### Infrastructure
-**[infrastructure.md](roadmap/infrastructure.md)** - Phases 0, 1, 7
+**[1-infrastructure.md](roadmap/1-infrastructure.md)** - Phase 1
 - Environment setup and colcon workspace
 - Zenoh → rclrs core migration
 - carla-rust integration (local dependency)
 - Build system (three-stage colcon)
 
 #### Data Bridge
-**[bridge.md](roadmap/bridge.md)** - Phases 2, 5, 6, 8
+**[2-bridge.md](roadmap/2-bridge.md)** - Phase 2
 - Clock publisher (simple publisher proof-of-concept)
 - Sensor data publishing (Camera, LiDAR, IMU, GNSS)
 - Vehicle control integration (commands, status)
 - 1-to-1 architecture refactoring (vehicle selection, root namespace)
 
 #### Autoware Integration
-**[integration.md](roadmap/integration.md)** - Phases 3-4
+**[3-integration.md](roadmap/3-integration.md)** - Phase 3
 - Autoware instance detection (`/robot_description`, `/tf_static`)
 - URDF parsing and sensor configuration
 - TF2 transform parsing and coordinate conversion
 - Vehicle lifecycle management (spawning, cleanup, teleportation)
 
 #### Testing & Release
-**[testing-and-release.md](roadmap/testing-and-release.md)** - Phases 9-10
+**[6-testing-and-release.md](roadmap/6-testing-and-release.md)** - Phase 6
 - Integration testing (detection, sensors, control, lifecycle)
 - Performance testing and benchmarks
 - Documentation (README, integration guide, API docs)
 - Release preparation (v0.13.0)
 
 #### Feature Parity & Map Integration
-**[autoware-feature-parity.md](roadmap/autoware-feature-parity.md)** - TUMFTM Comparison
+**[4-autoware-feature-parity.md](roadmap/4-autoware-feature-parity.md)** - Phase 4
 - Vehicle control integration (control_cmd, status publishers)
 - Feature comparison with TUMFTM bridge
 - Performance benchmarks and improvements
 - Vehicle calibration system
 
-**[map-integration.md](roadmap/map-integration.md)** - CARLA Map Integration
+**[5-map-integration.md](roadmap/5-map-integration.md)** - Phase 5
 - TUMFTM pre-converted maps (quick start)
 - Automated point cloud generation
 - OpenDRIVE to Lanelet2 conversion
@@ -180,7 +180,7 @@ This document provides the main roadmap index and project overview for the autow
 **Project Completion**: 50% (Phases 0-3, 7-8 complete)
 
 **Documentation**:
-- 6 roadmap documents: infrastructure.md, bridge.md, integration.md, testing-and-release.md, **autoware-feature-parity.md**, **map-integration.md**
+- 6 roadmap documents: 1-infrastructure.md, 2-bridge.md, 3-integration.md, 4-autoware-feature-parity.md, 5-map-integration.md, 6-testing-and-release.md
 - 1 architecture document: architecture.md
 - 1 integration design: autoware-integration-design.md
 - 6 technical guides: API comparison, message migration, carla-rust integration, URDF integration, **sensor-configuration-strategy.md**, **automated-map-generation.md**
@@ -282,12 +282,12 @@ This document provides the main roadmap index and project overview for the autow
 **For New Contributors**:
 1. Read this roadmap for project overview
 2. Review [architecture.md](architecture.md) for design philosophy
-3. Check [infrastructure.md](roadmap/infrastructure.md) to understand what's been done
-4. See [integration.md](roadmap/integration.md) for current work (Autoware integration)
+3. Check [1-infrastructure.md](roadmap/1-infrastructure.md) to understand what's been done
+4. See [3-integration.md](roadmap/3-integration.md) for current work (Autoware integration)
 
 **For Testing**:
 - See [scripts/README.md](../scripts/README.md) for test environment setup
-- See [testing-and-release.md](roadmap/testing-and-release.md) for testing plans
+- See [6-testing-and-release.md](roadmap/6-testing-and-release.md) for testing plans
 - Run `just test-env` for automated testing
 
 **For Development**:

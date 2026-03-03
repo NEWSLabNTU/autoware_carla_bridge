@@ -43,7 +43,7 @@ Priority order based on Autoware integration requirements.
 
 ---
 
-## Phase 4: Vehicle Control Integration
+## Vehicle Control Integration
 
 **Objective**: Implement bidirectional vehicle control between Autoware and CARLA
 
@@ -171,7 +171,7 @@ covariance = [
 
 ---
 
-## Phase 5: Vehicle Calibration
+## Vehicle Calibration
 
 **Objective**: Add vehicle-specific calibration for different CARLA models
 
@@ -181,7 +181,7 @@ covariance = [
 
 **Duration**: 3-5 days
 
-### 5.1 Calibration Config File
+### 4.4 Calibration Config File
 
 **Objective**: Support per-vehicle calibration parameters
 
@@ -224,13 +224,13 @@ vehicles:
 
 ---
 
-## Phase 6: Advanced Features (Low Priority)
+## Advanced Features (Low Priority)
 
 **Status**: ⏳ **FUTURE**
 
 **Priority**: 🟢 **LOW** - Nice to have, not critical
 
-### 6.1 Manual/Autonomous Mode Switching
+### 4.5 Manual/Autonomous Mode Switching
 
 **Objective**: Support switching between manual and autonomous control
 
@@ -244,7 +244,7 @@ vehicles:
 
 ---
 
-### 6.2 Emergency Stop
+### 4.6 Emergency Stop
 
 **Objective**: Implement emergency stop functionality
 
@@ -260,24 +260,24 @@ vehicles:
 
 ### Metrics
 
-| Category | TUMFTM | Our Bridge | Status |
-|----------|--------|------------|--------|
-| **Publishers** |
-| Sensor data (camera, lidar, imu, gnss) | ✅ | ✅ | Done |
-| Kinematic state / Odometry | ✅ | ✅ | Done |
-| Velocity status | ✅ | ❌ | TODO Phase 4.2a |
-| Steering status | ✅ | ❌ | TODO Phase 4.2b |
-| Control mode | ✅ | ❌ | TODO Phase 4.2c |
-| Pose with covariance | ✅ | ⏳ | Investigate Phase 4.3 |
-| **Subscribers** |
-| Control command | ✅ | ❌ | TODO Phase 4.1 |
-| **Performance** |
-| Process count | 5+ | 1 | ⚡ Better |
-| Memory usage | ~500-800 MB | ~50-100 MB | ⚡ Better |
-| Latency | ~10-20 ms | ~1-5 ms | ⚡ Better |
-| **Integration** |
-| Sensor config | Static JSON | URDF + YAML | ⚡ Better |
-| Vehicle spawning | Manual | Automatic from RViz | ⚡ Better |
+| Category                               | TUMFTM      | Our Bridge          | Status                |
+|----------------------------------------|-------------|---------------------|-----------------------|
+| **Publishers**                         |             |                     |                       |
+| Sensor data (camera, lidar, imu, gnss) | ✅          | ✅                  | Done                  |
+| Kinematic state / Odometry             | ✅          | ✅                  | Done                  |
+| Velocity status                        | ✅          | ❌                  | TODO Phase 4.2a       |
+| Steering status                        | ✅          | ❌                  | TODO Phase 4.2b       |
+| Control mode                           | ✅          | ❌                  | TODO Phase 4.2c       |
+| Pose with covariance                   | ✅          | ⏳                  | Investigate Phase 4.3 |
+| **Subscribers**                        |             |                     |                       |
+| Control command                        | ✅          | ❌                  | TODO Phase 4.1        |
+| **Performance**                        |             |                     |                       |
+| Process count                          | 5+          | 1                   | ⚡ Better             |
+| Memory usage                           | ~500-800 MB | ~50-100 MB          | ⚡ Better             |
+| Latency                                | ~10-20 ms   | ~1-5 ms             | ⚡ Better             |
+| **Integration**                        |             |                     |                       |
+| Sensor config                          | Static JSON | URDF + YAML         | ⚡ Better             |
+| Vehicle spawning                       | Manual      | Automatic from RViz | ⚡ Better             |
 
 ### Completion Status
 

@@ -6,7 +6,7 @@ This document covers the data bridge implementation for the autoware_carla_bridg
 
 ---
 
-## Phase 2: Clock and Simple Publishers
+## Clock and Simple Publishers
 
 **Objective**: Migrate the simplest publisher (clock) as a proof of concept.
 
@@ -116,7 +116,7 @@ File: `src/utils.rs`
 
 ---
 
-## Phase 8: Architecture Refactoring - 1-to-1 Design
+## Architecture Refactoring - 1-to-1 Design
 
 **Objective**: Refactor bridge architecture to implement Autoware-centric 1-to-1 design where one bridge instance manages exactly one CARLA vehicle.
 
@@ -124,7 +124,7 @@ File: `src/utils.rs`
 
 **Duration**: 1 week
 
-### 8.1 Remove Simulation Control - ✅ COMPLETE
+### 2.4 Remove Simulation Control - ✅ COMPLETE
 
 - [x] ✅ Removed tick thread spawn logic
 - [x] ✅ Removed `tick` and `slowdown` CLI parameters
@@ -137,7 +137,7 @@ File: `src/utils.rs`
 - External scenario scripts control CARLA ticking
 - No risk of tick conflicts
 
-### 8.2 Add Vehicle Selection - ✅ COMPLETE
+### 2.5 Add Vehicle Selection - ✅ COMPLETE
 
 - [x] ✅ Added `--vehicle-name` CLI parameter for role_name selection
 - [x] ✅ Added `--vehicle-id` CLI parameter for actor ID selection
@@ -151,7 +151,7 @@ File: `src/utils.rs`
 - Supports both role_name and actor ID
 - Flexible timing (vehicle can spawn before/after bridge starts)
 
-### 8.3 Simplify Actor Management - ✅ COMPLETE
+### 2.6 Simplify Actor Management - ✅ COMPLETE
 
 - [x] ✅ Replaced HashMap-based multi-vehicle tracking with single ego vehicle
 - [x] ✅ Removed actor discovery diff logic (added_ids, deleted_ids)
@@ -166,7 +166,7 @@ File: `src/utils.rs`
 - No NPC filtering needed
 - Easier to understand and maintain
 
-### 8.4 Root Namespace Topics - ✅ COMPLETE
+### 2.7 Root Namespace Topics - ✅ COMPLETE
 
 **Changes**:
 - Topics now use standard Autoware names without vehicle prefixes:
@@ -215,7 +215,7 @@ File: `src/utils.rs`
 
 ---
 
-## Phase 5: Sensor Data Publishing
+## Sensor Data Publishing
 
 **Objective**: Implement sensor data publishing for Camera, LiDAR, IMU, and GNSS sensors.
 
@@ -234,7 +234,7 @@ File: `src/utils.rs`
 - ✅ Dynamic frame IDs from URDF (Phase 5.6, 2025-11-08)
 - ⏳ Runtime testing (pending)
 
-### 5.1 Camera Sensors
+### 2.8 Camera Sensors
 
 **Objective**: Publish camera sensor data to ROS topics
 
@@ -274,7 +274,7 @@ File: `src/utils.rs`
 - [x] Image encoding matches expectations (bgra8)
 - [ ] Publish rate verification (pending integration testing)
 
-### 5.2 LiDAR Sensors
+### 2.9 LiDAR Sensors
 
 **Objective**: Publish LiDAR point cloud data to ROS topics
 
@@ -324,7 +324,7 @@ File: `src/utils.rs`
 - [x] Intensity values included
 - [ ] Publish rate verification (pending integration testing)
 
-### 5.3 IMU Sensor
+### 2.10 IMU Sensor
 
 **Objective**: Publish IMU data to ROS topics
 
@@ -373,7 +373,7 @@ File: `src/utils.rs`
 - [x] Orientation quaternion conversion included
 - [ ] Publish rate verification (pending integration testing)
 
-### 5.4 GNSS Sensor
+### 2.11 GNSS Sensor
 
 **Objective**: Publish GNSS data to ROS topics
 
@@ -413,7 +413,7 @@ File: `src/utils.rs`
 - [x] Fix status and service type implemented
 - [ ] Publish rate verification (pending integration testing)
 
-### 5.5 Data Verification
+### 2.12 Data Verification
 
 **Objective**: Verify sensor data accuracy and consistency
 
@@ -447,7 +447,7 @@ File: `src/utils.rs`
 - [ ] Performance benchmarks (pending)
 - [ ] Autoware integration validation (pending)
 
-### 5.6 Sensor Bridge Connection
+### 2.13 Sensor Bridge Connection
 
 **Objective**: Connect existing sensor bridge code to spawned CARLA sensors
 
@@ -589,7 +589,7 @@ fn create_sensor_bridges(
 
 ---
 
-### Phase 5 Summary
+### Summary
 
 **Status**: 🔧 **IN PROGRESS** - Implementation complete (95%), runtime testing pending (5%)
 
@@ -677,7 +677,7 @@ fn create_sensor_bridges(
 
 ---
 
-## Phase 6: Vehicle Control Integration
+## Vehicle Control Integration
 
 **Objective**: Implement vehicle control command subscription and status publishing.
 
@@ -689,7 +689,7 @@ fn create_sensor_bridges(
 
 **Prerequisites**: Phase 5 (Sensor Data Publishing)
 
-### 6.1 Control Command Subscription
+### 2.14 Control Command Subscription
 
 **Objective**: Subscribe to Autoware control commands and apply to CARLA vehicle
 
@@ -736,7 +736,7 @@ fn create_sensor_bridges(
 - ⏳ Vehicle responds to throttle, brake, and steering (runtime test pending)
 - ⏳ No control command latency issues (runtime test pending)
 
-### 6.2 Vehicle Status Publishing
+### 2.15 Vehicle Status Publishing
 
 **Objective**: Publish CARLA vehicle status to Autoware
 
@@ -814,7 +814,7 @@ fn create_sensor_bridges(
 - ✅ Velocity and steering values accurate (calculations implemented)
 - ✅ Control mode reflects current state (always AUTONOMOUS)
 
-### 6.3 Control Verification
+### 2.16 Control Verification
 
 **Objective**: Verify bidirectional control integration
 
@@ -854,7 +854,7 @@ fn create_sensor_bridges(
 **Status**: Phase 2, 8 Complete | Phase 5 In Progress (95%) | Phase 6 In Progress (65% - Control Integration Complete, Testing Pending)
 **Related Documents**:
 - [roadmap.md](../roadmap.md) - Main roadmap index
-- [infrastructure.md](infrastructure.md) - Infrastructure setup (Phases 0, 1, 7)
-- [integration.md](integration.md) - Autoware integration (Phases 3-4)
-- [testing-and-release.md](testing-and-release.md) - Testing and release (Phases 9-10)
+- [1-infrastructure.md](1-infrastructure.md) - Infrastructure (Phase 1)
+- [3-integration.md](3-integration.md) - Autoware integration (Phase 3)
+- [6-testing-and-release.md](6-testing-and-release.md) - Testing and release (Phase 6)
 - [../architecture.md](../architecture.md) - Architecture design and ADRs
