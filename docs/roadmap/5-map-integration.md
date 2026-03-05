@@ -6,8 +6,32 @@ Track progress for CARLA map integration with Autoware, including Lanelet2 conve
 - `docs/guides/automated-map-generation.md` - Complete map generation guide
 - `docs/archive/carla-autoware-map-integration.md` - Map integration design
 - TUMFTM pre-converted maps: https://syncandshare.lrz.de/getlink/fiBgYSNkmsmRB28meoX3gZ/
+- Bitbucket pre-converted maps: https://bitbucket.org/carla-simulator/autoware-contents/src/master/maps/
 
-**Current Status**: 🟡 **PARTIALLY COMPLETE** - Pre-converted maps downloaded and working, automation scripts pending
+**Local Conversion Tools** (in `src/external/`):
+- `commonroad-scenario-designer/` - De facto standard converter (TUM, v0.8.5, Oct 2025)
+- `odr2lanelet2/` - Direct xodr→osm with traffic light support (Jul 2024)
+- `autoware_lanelet2_map_validator/` - Validates maps for Autoware compliance (v1.6.0, Jan 2026)
+
+**Current Status**: 🟡 **PARTIALLY COMPLETE** - Pre-converted maps working, map generation tools designed but not yet implemented
+
+---
+
+## Map Strategy
+
+**The bridge does not publish map topics.** Autoware loads maps from static files on disk via its own `map_loader`. Our job is to provide those files.
+
+**Map sources** (per CARLA town, pick the best available):
+1. **TUMFTM pre-converted maps** — manually curated, known working, available for Town01/02/03/05/10
+2. **Our `carla_map_gen` / `carla_pcd_gen` tools** — automated, works for any CARLA map
+
+**Approach**: Implement our tools based on CommonRoad, then compare generated maps against TUMFTM references. For each town, use whichever produces better results. For towns without TUMFTM coverage, our tools are the only option.
+
+**Map files** (stored in `data/carla-autoware-bridge/<map_name>/`):
+- `lanelet2_map.osm` — lane topology, traffic lights, regulatory elements
+- `pointcloud_map.pcd` — 3D point cloud for NDT localization
+- `map_config.yaml` — map origin (lat/lon/ele)
+- `map_projector_info.yaml` — projection type (local)
 
 ---
 
@@ -16,18 +40,22 @@ Track progress for CARLA map integration with Autoware, including Lanelet2 conve
 ### ✅ Completed
 
 - ✅ Pre-converted maps downloaded for Town01, Town02, Town03, Town05, Town10
-- ✅ Maps stored in `data/carla-autoware-bridge/` with full Autoware structure (lanelet2_map.osm, pointcloud_map.pcd, map_config.yaml, map_projector_info.yaml)
+- ✅ Maps stored in `data/carla-autoware-bridge/` with full Autoware structure
 - ✅ Helper scripts: `scripts/download_carla_maps_for_autoware.sh`, `scripts/find_map_offset.py`, `scripts/inspect_carla_map.py`
 - ✅ End-to-end autonomous driving verified with pre-converted maps
 - ✅ NDT localization works with point cloud maps
 - ✅ Routing and planning work with lanelet2 maps
+- ✅ CommonRoad Scenario Designer evaluated (v0.8.5, `autoware=True` produces TUMFTM-equivalent output)
+- ✅ Conversion tools cloned to `src/external/` (CommonRoad, odr2lanelet2, validator)
+- ✅ Map generation tools designed (`carla_map_gen` Python + `carla_pcd_gen` Rust)
 
-### 🔴 Not Started
+### 🟡 In Progress
 
-- Map conversion automation scripts (for custom maps)
-- Point cloud generation scripts
-- Traffic light configuration
-- Map validation tools
+- 🔴 Implement `carla_map_gen` tool (Lanelet2 + post-processing + projection files)
+- 🔴 Compare `carla_map_gen` output vs TUMFTM maps — identify and minimize gaps
+- 🔴 Implement `carla_pcd_gen` tool (LiDAR collection + voxel downsample + PCD writer)
+- 🔴 Test generated maps loading in Autoware
+- 🔴 Build and run autoware_lanelet2_map_validator
 
 ---
 
@@ -63,229 +91,274 @@ Download script: `scripts/download_carla_maps_for_autoware.sh`
 
 ---
 
-## Automated Point Cloud Generation
+## Map Generation Tools
 
-**Objective**: Automate point cloud map creation from CARLA
+**Objective**: Provide standalone tools that create Autoware-compatible maps from a running CARLA server. Implement, compare against TUMFTM references, and use the better map source per town.
 
-**Status**: 🔴 **NOT STARTED**
+**Status**: 🟡 **DESIGNED** — Tools designed, implementation pending
 
-**Priority**: 🟡 **MEDIUM** - Needed for custom maps
+**Priority**: 🟡 **MEDIUM** — Needed for maps beyond TUMFTM coverage, and to validate our pipeline against known-good references
 
-**Duration**: 1 week
+### Architecture
 
-**Why After Phase 1**: TUMFTM maps are good enough for initial testing
+Two standalone CLI tools that connect to a running CARLA server and produce the 4-file Autoware map structure:
 
-### 5.4 Autopilot Recording Script
+```
+                     ┌──────────────────────────────┐
+                     │   CARLA Server (running)      │
+                     └──────────┬───────────────────┘
+                                │
+          ┌─────────────────────┼─────────────────────┐
+          │                     │                      │
+          ▼                     │                      ▼
+  carla_map_gen (Python)        │          carla_pcd_gen (Rust)
+  ───────────────────           │          ────────────────────
+  1. Get OpenDRIVE via          │          1. Spawn vehicle + LiDAR
+     carla.Client               │          2. Autopilot through spawn
+  2. Convert via CommonRoad     │             points (~2-5 min)
+     (autoware=True)            │          3. Transform LiDAR to world
+  3. Post-process (fix TL       │          4. Voxel downsample
+     subtypes, remove empty     │
+     speed limits)              │
+          │                     │                      │
+          ▼                     │                      ▼
+  lanelet2_map.osm              │          pointcloud_map.pcd
+  map_config.yaml               │          map_config.yaml
+  map_projector_info.yaml       │          map_projector_info.yaml
+          │                     │                      │
+          └─────────────────────┼──────────────────────┘
+                                ▼
+              data/carla-autoware-bridge/<map_name>/
+```
 
-**Objective**: Create script to record point clouds using CARLA autopilot
+Both tools auto-detect the map name from CARLA and output to `data/carla-autoware-bridge/<map_name>/`.
 
-**Tasks**:
-- [ ] Port Python script from `docs/automated-map-generation.md`
-- [ ] Add CLI parameters (town, duration, output path)
-- [ ] Implement autopilot-based recording
-- [ ] Merge and downsample point clouds
-- [ ] Save to PCD format
+### Workflow
 
-**Script Design**:
+Map generation is a **one-time preparation step** per CARLA map. Once generated, maps are reused across sessions.
+
 ```bash
-# Usage
-./scripts/generate_pcd.py \
-    --town Town10HD \
-    --duration 300 \
-    --output maps/custom/Town10HD_custom.pcd \
-    --lidar-channels 64 \
-    --points-per-second 1000000
+# Step 1: Start CARLA with the desired map
+just carla start
+
+# Step 2: Generate Autoware maps (one-time per CARLA map)
+just generate-map              # Both Lanelet2 + PCD
+just generate-lanelet2         # Lanelet2 only (~5s)
+just generate-pcd              # PCD only (~2-5 min)
+
+# Step 3: Stop CARLA (map generation complete)
+just carla stop
+
+# Step 4: Use generated maps with demo (any number of times)
+MAP_NAME=Town01 just demo start
 ```
-
-**Implementation** (`scripts/generate_pcd.py`):
-```python
-#!/usr/bin/env python3
-"""
-Automated point cloud map generation for CARLA towns.
-
-Uses CARLA autopilot to drive through the entire map while recording
-LiDAR data, then merges into a single PCD file for Autoware localization.
-"""
-
-import carla
-import numpy as np
-import open3d as o3d
-import argparse
-from tqdm import tqdm
-
-def generate_point_cloud(town, duration, output_path, **lidar_params):
-    """Generate point cloud map for a CARLA town."""
-    # Implementation from automated-map-generation.md
-    # ... (full script documented in that file)
-```
-
-**Deliverables**:
-- Working PCD generation script
-- Can generate maps for any CARLA town
-- Output compatible with Autoware NDT
-
-**Testing**:
-- [ ] Generate PCD for Town01 (simple)
-- [ ] Generate PCD for Town10HD (complex)
-- [ ] Compare with TUMFTM maps for quality
-- [ ] Test localization with generated maps
 
 ---
 
-### 5.5 Map Quality Validation
+### 5.4 Tool: `carla_map_gen` (Python)
 
-**Objective**: Ensure generated point clouds are suitable for NDT localization
+**Location**: `src/carla_map_gen/`
+
+**Structure**:
+```
+src/carla_map_gen/
+├── package.xml              # ament_python
+├── setup.py                 # entry point: carla_map_gen
+├── setup.cfg
+├── resource/carla_map_gen
+└── carla_map_gen/
+    ├── __init__.py
+    ├── generate.py          # Main entry point + CLI
+    └── postprocess.py       # Fix TL subtypes, remove empty speed limits
+```
+
+**`generate.py` logic**:
+1. Connect to CARLA via `carla.Client(host, port)`
+2. Get OpenDRIVE XML: `world.get_map().to_opendrive()`
+3. Extract map name (e.g. `Town01` from `/Game/Carla/Maps/Town01/Town01`)
+4. Write OpenDRIVE to temp file → CommonRoad `opendrive_to_lanelet()` with `autoware=True`, `use_local_coordinates=True`
+5. Post-process: fix empty TL `subtype` → `red_yellow_green`, remove empty `speed_limit` elements
+6. Write `map_config.yaml` (all-zeros origin) and `map_projector_info.yaml` (`projector_type: local`)
+
+**CLI**: `carla_map_gen [--host HOST] [--port PORT] [--output-dir DIR] [--project-dir DIR]`
+
+**Dependencies**: `carla` (Python API), `commonroad-scenario-designer`, `lxml`
 
 **Tasks**:
-- [ ] Implement density analysis
-- [ ] Check for gaps/holes in coverage
-- [ ] Validate ground plane detection
-- [ ] Compare against reference maps
-
-**Validation Metrics**:
-- Point density (points/m²)
-- Coverage percentage
-- Ground plane flatness
-- Localization convergence rate
-
-**Tools**:
-- CloudCompare for visual inspection
-- Custom scripts for automated validation
-
-**Deliverables**:
-- Validation tool for PCD quality
-- Report template for map characteristics
-- Pass/fail criteria for maps
+- [ ] Create package structure (package.xml, setup.py, etc.)
+- [ ] Implement `generate.py` with CARLA connection + CommonRoad conversion
+- [ ] Implement `postprocess.py` (TL subtype fix, speed limit removal)
+- [ ] Add justfile recipe `generate-lanelet2`
+- [ ] Compare output vs TUMFTM for Town01/02/03/05/10 — identify remaining gaps
+- [ ] Iterate on post-processing to minimize differences
+- [ ] Decide per town: use tool output or TUMFTM (whichever is better)
 
 ---
 
-## Lanelet2 Map Conversion
+### 5.5 Tool: `carla_pcd_gen` (Rust)
 
-**Objective**: Automate OpenDRIVE to Lanelet2 conversion
+**Location**: `src/carla_pcd_gen/`
 
-**Status**: 🔴 **NOT STARTED**
+**Structure**:
+```
+src/carla_pcd_gen/
+├── Cargo.toml               # carla, nalgebra, clap, tracing, color-eyre
+├── package.xml               # ament_cargo
+└── src/
+    ├── main.rs               # CLI (clap), orchestration
+    ├── collector.rs           # LiDAR collection + world-frame transform
+    ├── pcd_writer.rs          # PCD v0.7 binary file writer
+    └── voxel_grid.rs          # HashMap-based voxel downsampling
+```
 
-**Priority**: 🟡 **MEDIUM** - Needed for custom maps
+**No ROS dependency** — standalone CARLA client binary. Users run this separately before starting Autoware.
 
-**Duration**: 1-2 weeks
+**Key APIs from carla-rust** (`~/repos/carla-rust/`):
+- `Client::connect(host, port, worker_threads)` — connect to CARLA
+- `world.map().name()` — get map name
+- `world.map().recommended_spawn_points()` — spawn point coverage
+- `world.spawn_actor(bp, transform)` — spawn vehicle + LiDAR
+- `Vehicle::set_autopilot(true)` — enable autopilot
+- `Sensor::listen(callback)` — receive LiDAR data on separate thread
+- `SensorDataBase::sensor_transform()` — world-frame transform at capture time
+- `LidarMeasurement::as_slice() → &[LidarDetection]` — zero-copy point access
+- `LidarDetection { point: FfiLocation { x, y, z: f32 }, intensity: f32 }`
+- `ActorBase::set_transform()` — teleport vehicle between spawn points
+- `Sensor::stop()` — stop listening
 
-**Challenge**: Traffic light integration requires manual editing
+**Coverage strategy**: Sequential multi-spawn-point autopilot
+- Get all recommended spawn points
+- For each: teleport → enable autopilot → collect LiDAR for N seconds → next
+- Configurable: `--spawn-points N` (0 = all), `--seconds-per-spawn N` (default: 10)
 
-### 5.6 Install Conversion Tools
+**Coordinate transform**: LiDAR points are sensor-local, must be transformed to world frame:
+```rust
+lidar.listen(move |data| {
+    let sensor_tf = data.sensor_transform();  // world-frame Transform
+    if let Ok(measurement) = LidarMeasurement::try_from(data) {
+        // world_point = rotation(sensor_tf.rotation) * local_point + sensor_tf.location
+        // Insert directly into voxel grid (online, caps memory)
+    }
+});
+```
+
+**Memory optimization**: Insert points directly into voxel grid `HashMap<(i32,i32,i32), (sum_xyz, count)>` during collection. This caps memory at ~200MB (voxel grid) instead of accumulating ~16GB of raw points.
+
+**Voxel downsampling**: HashMap keyed by `(floor(x/res), floor(y/res), floor(z/res))`, value is running average. Default resolution: 0.1m.
+
+**PCD output format**: PCD v0.7 binary, `FIELDS x y z intensity`, `DATA binary`. Autoware's `map_loader` supports this natively.
+
+**CLI**:
+```
+carla_pcd_gen [--host HOST] [--port PORT] [--output-dir DIR] [--project-dir DIR]
+              [--spawn-points N] [--seconds-per-spawn N] [--voxel-size F]
+              [--lidar-range F] [--lidar-channels N]
+```
 
 **Tasks**:
-- [ ] Install opendrive2lanelet (CommonRoad/TUM)
-- [ ] Install dependencies (Python packages)
-- [ ] Test with CARLA Town01
-- [ ] Verify output format
-
-**Installation**:
-```bash
-pip install opendrive2lanelet lxml numpy scipy matplotlib commonroad-io
-```
-
-**Deliverables**:
-- opendrive2lanelet installed and working
-- Tested on sample CARLA map
+- [ ] Create package structure + add to `Cargo.toml` workspace members
+- [ ] Implement `main.rs` with clap CLI + orchestration
+- [ ] Implement `collector.rs` with LiDAR listener + world-frame transform
+- [ ] Implement `voxel_grid.rs` with online HashMap insertion
+- [ ] Implement `pcd_writer.rs` with PCD v0.7 binary format
+- [ ] Add justfile recipes `generate-pcd`, `generate-map`
+- [ ] Test: generate PCD for Town01, load in Autoware, verify NDT localization
 
 ---
 
-### 5.7 Automated Conversion Script
+### 5.5.1 Map Quality Validation
 
-**Objective**: Script to convert any CARLA town to Lanelet2
+**Objective**: Compare tool-generated maps against TUMFTM and decide which to use per town
+
+**Comparison criteria**:
+1. **Structural match** — lanelet count, TL count, regulatory element count
+2. **Functional test** — load in Autoware, verify NDT localization, routing, autonomous driving
+3. **Validator pass** — run `autoware_lanelet2_map_validator`
+4. **PCD quality** — point density, NDT convergence rate
+
+**Decision per town**: If our tool output matches or exceeds TUMFTM quality, use it. Otherwise, keep TUMFTM. For towns without TUMFTM coverage, our tool is the only source.
 
 **Tasks**:
-- [ ] Export OpenDRIVE from CARLA
-- [ ] Run opendrive2lanelet conversion
-- [ ] Post-process OSM file (fix common issues)
-- [ ] Validate output with Autoware
-
-**Script Design**:
-```bash
-# Usage
-./scripts/convert_carla_map.py \
-    --town Town10HD \
-    --output maps/custom/Town10HD.osm \
-    --fix-traffic-lights
-```
-
-**Implementation** (`scripts/convert_carla_map.py`):
-```python
-#!/usr/bin/env python3
-"""
-Automated CARLA to Lanelet2 map conversion.
-
-Exports OpenDRIVE from CARLA, converts to Lanelet2 using opendrive2lanelet,
-and applies post-processing fixes for Autoware compatibility.
-"""
-
-import carla
-from opendrive2lanelet.io import opendrive_to_lanelet
-import argparse
-
-def convert_carla_town(town, output_path, **options):
-    """Convert CARLA town to Lanelet2 format."""
-    # 1. Connect to CARLA and get map
-    # 2. Export OpenDRIVE
-    # 3. Convert with opendrive2lanelet
-    # 4. Post-process OSM
-    # 5. Validate
-```
-
-**Deliverables**:
-- Automated conversion script
-- Can convert any CARLA town
-- Basic validation included
-
-**Testing**:
-- [ ] Convert Town01 and compare with TUMFTM
-- [ ] Convert Town10HD (complex map)
-- [ ] Load in Autoware and verify lane detection
-- [ ] Check routing functionality
+- [ ] Compare generated vs TUMFTM for Town01 (structural + functional)
+- [ ] Compare generated vs TUMFTM for remaining towns
+- [ ] Compare PCD density and NDT convergence
+- [ ] Build and run `autoware_lanelet2_map_validator` on both sources
+- [ ] Document which source is used per town and why
 
 ---
 
-### 5.8 Traffic Light Integration
+## Ecosystem Research (2026-03)
 
-**Objective**: Add traffic light regulatory elements to Lanelet2 maps
+No fully automated, Autoware-ready pipeline exists in the ecosystem. All projects (TUMFTM, TIER IV, Autoware Foundation ODD WG) use the same approach: **automated conversion + manual post-processing**.
 
-**Status**: 🔴 **NOT STARTED**
+**Autoware ODD Working Group findings** (2025):
+- Converted Lanelet2 maps lose speed limits, lane change flags, LHT/RHT info
+- Map bloat: 16,000 points on a 1km straight road (causes Autoware planning failures)
+- Proposal for native OpenDRIVE support in Autoware discussed but **not adopted**
+
+**Available conversion tools** (evaluated):
+
+| Tool                                  | Output          | Traffic Lights          | Status                    | Notes                              |
+|---------------------------------------|-----------------|-------------------------|---------------------------|------------------------------------|
+| **CommonRoad Scenario Designer**      | .osm (direct)   | No                      | Active (v0.8.5, Oct 2025) | De facto standard, used by TUMFTM  |
+| **joel-mb/odr2lanelet2**              | .osm (direct)   | Yes (with CARLA server) | Low activity (Jul 2024)   | Only tool with regulatory elements |
+| **usdot-fhwa-stol/opendrive2lanelet** | CommonRoad XML  | No                      | Active (Mar 2025)         | CARMA platform, extra step needed  |
+| **GDAL 3.10 XODR driver**             | Any GDAL format | No                      | New (Sep 2024)            | Unvalidated for Autoware           |
+| **TIER IV Vector Map Builder**        | .osm (manual)   | Yes (manual)            | Active (web tool)         | Post-processing / manual editing   |
+
+**Key insight**: `odr2lanelet2` (in `src/external/`) is the **only tool** that extracts traffic light regulatory elements from CARLA. It uses `carla.Map` Python API for lane conversion and requires a running CARLA server for traffic lights (accesses actor component transforms for bulb positions).
+
+### CommonRoad Evaluation Results
+
+**Status**: ✅ **EVALUATED** — CommonRoad with `autoware=True` produces TUMFTM-equivalent output. This is the basis for our `carla_map_gen` tool.
+
+**Town01** (CommonRoad `autoware=True` vs TUMFTM reference):
+- ✅ **300 lanelets** (exact match)
+- ✅ **43,154 nodes** with `local_x`/`local_y`, `mgrs_code`, `ele` (matches TUMFTM 43,082)
+- ✅ **36 TL ways** with `height=1.2` and 2-node format (matches TUMFTM)
+- ✅ **36 TL regulatory elements** with `refers` + `ref_line` members
+- ⚠️ TL way `subtype` empty (CommonRoad bug: `light.color` not populated from OpenDRIVE)
+- ⚠️ 36 speed_limit regulatory elements have zero members (empty shells)
+- ⚠️ 88 lanelets missing subtype (walkways)
+- ℹ️ `lane_change=no` added to all ways (TUMFTM removes these)
+
+**Town10HD**: ✅ **391 lanelets** (matches TUMFTM)
+
+**Known gaps** (to be addressed by post-processing in `carla_map_gen`):
+1. TL way `subtype` empty → fix to `red_yellow_green` (canonical Autoware value from `lanelet2_core::Attribute.h:329`)
+2. 36 empty speed_limit regulatory elements → remove
+3. 88 walkway lanelets missing subtype → (optional) reclassify
+
+---
+
+### 5.7 Traffic Light Integration
+
+**Objective**: Get traffic light regulatory elements into Lanelet2 maps
+
+**Status**: 🟡 **PARTIALLY EVALUATED** - CommonRoad produces TL structure but with empty subtypes; odr2lanelet2 not yet tested
 
 **Priority**: 🟢 **LOW** - Autoware can run without traffic lights
 
-**Challenge**: opendrive2lanelet doesn't preserve traffic lights well
+**Approach**: Use `odr2lanelet2` with `--carla` flag. It extracts:
+- Traffic light box geometry (bottom_left, bottom_right, height)
+- Individual bulb positions (green, yellow, red) as `light_bulbs` linestrings
+- Stop lines at landmark positions
+- Regulatory elements linking traffic lights to affected lanelets
+
+**Requirement**: Running CARLA server (traffic light actors must be spawned to read component transforms)
+
+**Fallback**: TIER IV Vector Map Builder (web, manual, ~30 min per town)
 
 **Tasks**:
-- [ ] Research traffic light data in CARLA
-- [ ] Find traffic light positions from CARLA API
-- [ ] Add regulatory elements to OSM manually or via script
-- [ ] Test with Autoware traffic light recognition
-
-**CARLA Traffic Light API**:
-```python
-# Get all traffic lights in world
-traffic_lights = world.get_actors().filter('traffic.traffic_light')
-
-for tl in traffic_lights:
-    location = tl.get_location()
-    state = tl.get_state()  # Red, Yellow, Green
-    # Map to Lanelet2 regulatory element
-```
-
-**Manual Editing** (if automation fails):
-- Use TIER IV Vector Map Builder
-- Web interface: https://tools.tier4.jp/vector_map_builder/
-- Add traffic light regulatory elements manually
-
-**Deliverables**:
-- Traffic light positions extracted from CARLA
-- Script or process to add to Lanelet2
-- Working traffic light detection in Autoware
+- [ ] Test odr2lanelet2 traffic light extraction on Town01
+- [ ] Validate output against Autoware Lanelet2 format extension spec
+- [ ] Test with Autoware traffic light recognition module
+- [ ] Document limitations and manual corrections needed
 
 **Testing**:
-- [ ] Verify Autoware detects traffic lights
-- [ ] Test traffic light state changes
-- [ ] Validate stopping at red lights
+- [ ] Verify Autoware detects traffic lights from converted map
+- [ ] Test traffic light state changes via bridge
+- [ ] Validate stopping behavior at red lights
 
 ---
 
@@ -413,37 +486,54 @@ maps/
 
 ## Tools & Dependencies
 
+### Map Generation Tools (in `src/`)
+
+- **`carla_map_gen/`** - Python CLI tool for Lanelet2 + projection file generation
+  - Depends on: `carla` (Python API), `commonroad-scenario-designer`, `lxml`
+  - Entry point: `carla_map_gen` CLI
+- **`carla_pcd_gen/`** - Rust CLI tool for PCD point cloud generation
+  - Depends on: `carla` (carla-rust), `nalgebra`, `clap`, `tracing`, `color-eyre`
+  - Entry point: `carla_pcd_gen` CLI (standalone, no ROS dependency)
+
 ### Python Packages
 
 ```bash
-# Map conversion
-pip install opendrive2lanelet lxml numpy scipy matplotlib commonroad-io
-
-# Point cloud processing
-pip install open3d numpy
-
-# CARLA Python API
-pip install carla  # or use CARLA's PythonAPI
+pip install commonroad-scenario-designer  # Lanelet2 conversion
+pip install carla                          # CARLA Python API
+pip install lxml                           # XML post-processing
 ```
+
+### Local Reference Tools (in `src/external/`)
+
+- **commonroad-scenario-designer/** - Source for understanding conversion internals
+- **odr2lanelet2/** - Converter with traffic light support (requires CARLA server)
+- **autoware_lanelet2_map_validator/** - Validates Lanelet2 maps for Autoware (C++, needs build)
 
 ### External Tools
 
-- **TIER IV Vector Map Builder**: https://tools.tier4.jp/vector_map_builder/
+- **TIER IV Vector Map Builder**: https://tools.tier4.jp/feature/vector_map_builder_ll2 (web, free)
 - **CloudCompare**: Point cloud visualization and editing
 - **JOSM**: OpenStreetMap editor (for Lanelet2 editing)
+
+### Related Projects
+
+- **tier4/carla-autoware-native**: CARLA fork with native Autoware integration + Map Editor GUI (active, Mar 2026)
+- **evshary/autoware_carla_launch**: Multi-vehicle CARLA-Autoware using Zenoh (active, Feb 2026)
+- **autoware_carla_interface**: Official Autoware CARLA integration in autoware_universe (active, Feb 2026)
 
 ---
 
 ## Automation Levels
 
-Based on `docs/automated-map-generation.md`:
+Updated based on ecosystem research (2026-03):
 
-| Task | Automation | Tool | Effort |
-|------|------------|------|--------|
-| **Point Cloud Generation** | ⭐⭐⭐⭐⭐ Fully Automated | Python + CARLA autopilot | 1 day |
-| **OpenDRIVE → Lanelet2** | ⭐⭐⭐⭐ 80% Automated | opendrive2lanelet | 2 days |
-| **Traffic Lights** | ⭐⭐ 40% Automated | Manual editing in Vector Map Builder | 1 week |
-| **Map Validation** | ⭐⭐⭐⭐ Automated | Custom scripts | 3 days |
+| Task                                           | Automation                 | Tool                             | Status     |
+|------------------------------------------------|----------------------------|----------------------------------|------------|
+| **Point Cloud Generation**                     | ⭐⭐⭐⭐⭐ Fully Automated | `carla_pcd_gen` tool (Rust)      | Designed   |
+| **OpenDRIVE → Lanelet2 (lanes + basic TL)**    | ⭐⭐⭐⭐ 90% Automated     | `carla_map_gen` tool (Python)    | Designed   |
+| **OpenDRIVE → Lanelet2 (full TL regulatory)**  | ⭐⭐⭐ 60% Automated       | odr2lanelet2 + CARLA server      | Evaluated  |
+| **Traffic Lights (manual fallback)**           | ⭐⭐ Manual                | TIER IV Vector Map Builder       | Available  |
+| **Map Validation**                             | ⭐⭐⭐⭐⭐ Fully Automated | autoware_lanelet2_map_validator  | Cloned     |
 
 ---
 
@@ -451,15 +541,15 @@ Based on `docs/automated-map-generation.md`:
 
 ### Completion Status
 
-| Phase | Status | Completion | Priority |
-|-------|--------|------------|----------|
-| Phase 1: TUMFTM Maps | ✅ Complete | 100% | Done |
-| Phase 2: PCD Generation | 🔴 Not Started | 0% | 🟡 MEDIUM |
-| Phase 3: Lanelet2 Conversion | 🔴 Not Started | 0% | 🟡 MEDIUM |
-| Phase 4: Map Management | 🔴 Not Started | 0% | 🟢 LOW |
-| Phase 5: Advanced Features | ⏳ Future | 0% | 🟢 LOW |
+| Phase                                | Status         | Completion | Priority  |
+|--------------------------------------|----------------|------------|-----------|
+| Phase 1: TUMFTM Maps                 | ✅ Complete    | 100%       | Done      |
+| Phase 2: Map Gen Tools               | 🟡 Designed    | 20%        | 🟡 MEDIUM |
+| Phase 3: Comparison with TUMFTM      | 🔴 Not Started | 0%         | 🟡 MEDIUM |
+| Phase 4: Map Management              | 🔴 Not Started | 0%         | 🟢 LOW    |
+| Phase 5: Advanced Features           | ⏳ Future      | 0%         | 🟢 LOW    |
 
-**Overall Progress**: 30% complete (pre-converted maps working, automation pending)
+**Overall Progress**: 40% complete (pre-converted maps working, CommonRoad evaluated, tools designed)
 
 **Estimated Total Time**: 3-4 weeks (Phase 1-3 only)
 
@@ -467,23 +557,39 @@ Based on `docs/automated-map-generation.md`:
 
 ## Recommended Workflow
 
-**Quick Start** (1-2 days):
-1. Download TUMFTM maps (Phase 1.1)
-2. Test with Autoware (Phase 1.2)
-3. Validate bridge works (Phase 1.3)
-4. Start testing scenarios
+### Option A: Use pre-converted TUMFTM maps
 
-**Custom Maps** (2-3 weeks):
-1. Set up PCD generation (Phase 2.1)
-2. Generate PCDs for needed towns (Phase 2.2)
-3. Convert OpenDRIVE to Lanelet2 (Phase 3.1-3.2)
-4. Manual traffic light editing if needed (Phase 3.3)
-5. Validate maps (Phase 2.2 + 4.2)
+For towns with TUMFTM coverage (Town01/02/03/05/10), these are known to work:
 
-**Long Term** (ongoing):
-1. Build map catalog (Phase 4.3)
-2. Improve automation (Phase 3.3, 5.x)
-3. Contribute improvements back to tools
+```bash
+just setup              # Downloads TUMFTM pre-converted maps
+MAP_NAME=Town01 just demo start
+```
+
+### Option B: Generate maps with our tools
+
+For towns without TUMFTM coverage, or when our tool produces better results:
+
+**Preparation** (one-time per CARLA map):
+```bash
+# 1. Start CARLA with the desired map
+just carla start
+
+# 2. Generate Autoware maps
+just generate-map       # Lanelet2 (~5s) + PCD (~2-5 min)
+
+# 3. Stop CARLA when done
+just carla stop
+```
+
+**Usage** (as many times as needed):
+```bash
+MAP_NAME=Town01 just demo start
+```
+
+### Choosing the map source
+
+For each town, the map in `data/carla-autoware-bridge/<map_name>/` is what Autoware loads. Either populate it from TUMFTM or generate with our tools — whichever works better for that town.
 
 ---
 
@@ -525,20 +631,21 @@ Based on `docs/automated-map-generation.md`:
 - [ ] Localization works reliably
 - [ ] Can run basic scenarios
 
-### Phase 2 Success
-- [ ] Can generate PCD for any CARLA town
-- [ ] Generated PCDs work with NDT localization
-- [ ] Quality comparable to TUMFTM maps
-- [ ] Process is fully automated
+### Phase 2 Success (Map Generation Tools)
+- [ ] `just build` builds both `carla_map_gen` and `carla_pcd_gen`
+- [ ] `just generate-lanelet2` produces valid Lanelet2 for any running CARLA map
+- [ ] `just generate-pcd` produces PCD with sufficient density for NDT
+- [ ] `just generate-map` produces complete 4-file Autoware map structure
+- [ ] Generated maps work end-to-end with Autoware (routing + autonomous driving)
 
-### Phase 3 Success
-- [ ] Can convert any CARLA town to Lanelet2
-- [ ] Autoware can load and use converted maps
-- [ ] Lane-following works correctly
-- [ ] Routing works between waypoints
+### Phase 3 Success (Comparison with TUMFTM)
+- [ ] Tool output compared against TUMFTM for all 5 towns
+- [ ] Remaining gaps identified and documented
+- [ ] Post-processing minimizes differences (TL subtypes, empty speed limits, etc.)
+- [ ] Per-town decision made: tool output vs TUMFTM
+- [ ] Generated PCD quality sufficient for NDT localization
 
 ### Overall Success
-- [ ] Have working maps for common CARLA towns
-- [ ] Can generate new maps in < 1 day
-- [ ] Maps support all Autoware features
+- [ ] Every supported CARLA town has a working Autoware map (from tool or TUMFTM)
+- [ ] User can generate maps for any CARLA map with `just generate-map`
 - [ ] Process is documented and repeatable

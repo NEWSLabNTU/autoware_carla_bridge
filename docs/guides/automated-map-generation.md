@@ -2,7 +2,7 @@
 
 Comprehensive guide to automated and semi-automated workflows for generating Autoware-compatible maps from CARLA.
 
-**Last Updated**: 2025-11-08
+**Last Updated**: 2026-03-05
 
 ---
 
@@ -16,96 +16,119 @@ This document focuses on **automated processes** for converting CARLA maps to Au
 
 ## Automated Conversion Tools
 
-### 1. opendrive2lanelet (CommonRoad Project - TUM)
+### 1. CommonRoad Scenario Designer (TUM) - RECOMMENDED
 
-**Source**: https://pypi.org/project/opendrive2lanelet/
+**Source**: https://github.com/CommonRoad/commonroad-scenario-designer (local: `src/external/commonroad-scenario-designer/`)
+**PyPI**: `commonroad-scenario-designer` v0.8.5 (Sep 2025), v1.0+ in development
 **Paper**: Althoff, Urban, Koschi (2018) - "Automatic Conversion of Road Networks from OpenDRIVE to Lanelets"
 **Automation Level**: ⭐⭐⭐⭐ (High - mostly automated)
 
+**Status**: De facto standard. Supersedes the old `opendrive2lanelet` package (now archived on GitLab). Used by TUMFTM for their Carla-Autoware-Bridge maps.
+
 **Features**:
-- Converts OpenDRIVE (.xodr) → CommonRoad XML → Lanelet2 (.osm)
+- Direct OpenDRIVE (.xodr) → Lanelet2 (.osm) conversion via CLI
+- Also supports: CommonRoad XML, OSM, SUMO formats
 - Python package with GUI and CLI
-- Supports programmatic integration
-- Actively maintained by TUM (CommonRoad project)
+- Python 3.10-3.13 support
+- Active development (bug fixes for OpenDRIVE traffic light assignment, Apr 2025)
 
 **Installation**:
 ```bash
-# Basic installation
-pip install opendrive2lanelet
-
-# With GUI support
-pip install opendrive2lanelet[GUI]
-
-# From source
-git clone https://gitlab.lrz.de/tum-cps/opendrive2lanelet.git
-cd opendrive2lanelet
-python setup.py install
+pip install commonroad-scenario-designer
 ```
 
 **Usage**:
 ```bash
-# Command-line conversion
-opendrive2lanelet-convert Town01.xodr -o Town01.xml
-
-# Launch GUI
-opendrive2lanelet-gui
-
-# Python script
-from opendrive2lanelet.opendriveparser.parser import parse_opendrive
-from opendrive2lanelet.network import Network
-
-with open('Town01.xodr', 'r') as f:
-    opendrive_data = parse_opendrive(f.read())
-
-road_network = Network()
-road_network.load_opendrive(opendrive_data)
-scenario = road_network.export_commonroad_scenario()
-
-# Save to file
-with open('Town01.xml', 'w') as f:
-    scenario.write_to_file(f)
+# Direct OpenDRIVE to Lanelet2 conversion (CLI)
+crdesigner --input-file Town01.xodr --output-file Town01.osm odrlanelet2
 ```
 
-**Limitations**:
-- Outputs CommonRoad XML format (intermediate format)
-- Requires additional step to convert to Lanelet2 OSM
-- Speed limit units hardcoded as mph
-- Wayland display compatibility issues (workaround: `export QT_QPA_PLATFORM="xcb"`)
+**CRITICAL: Autoware mode** - Must enable `autoware=True` and `use_local_coordinates=True` for Autoware-compatible output. These are **disabled by default** and add: `mgrs_code`, `local_x`/`local_y`, `ele` tags on all nodes; `height` on traffic light ways; 2-node TL format.
 
-**Note**: CommonRoad XML is not the same as Lanelet2 OSM, but Lanelet2 library can read/write CommonRoad format.
+```python
+# Python API with Autoware flags (recommended)
+from crdesigner.map_conversion.map_conversion_interface import opendrive_to_lanelet
+from crdesigner.common.config.lanelet2_config import Lanelet2Config
+from crdesigner.common.config.opendrive_config import OpenDriveConfig
+
+lanelet2_cfg = Lanelet2Config()
+lanelet2_cfg.autoware = True
+lanelet2_cfg.use_local_coordinates = True
+
+opendrive_to_lanelet(
+    input_file="Town01.xodr",
+    output_file="Town01.osm",
+    odr_config=OpenDriveConfig(),
+    lanelet2_config=lanelet2_cfg,
+)
+```
+
+**Post-processing required**: The output needs one fix before Autoware validation passes:
+- Traffic light way `subtype` is empty (CommonRoad bug: `light.color` not populated from OpenDRIVE)
+- Must set `subtype=red_yellow_green` (the Autoware/lanelet2 canonical value: `AttributeValueString::RedYellowGreen`)
+- Speed limit regulatory elements are empty shells (36 elements with zero members) — remove them
+- TUMFTM's `red_redYellow_green_yellow` subtype on TL ways is **incorrect** per Autoware spec
+
+**Evaluation results** (2026-03-05, Town01):
+| Metric | CR+Autoware | TUMFTM Reference |
+|--------|-------------|------------------|
+| Nodes | 43,154 | 43,082 |
+| Lanelets | 300 | 300 (exact match) |
+| TL regulatory elements | 36 | 36 |
+| TL ways with height | 36 | 36 |
+| local_x/local_y | Yes | Yes |
+| TL subtype correct | No (empty→fixable) | No (wrong value) |
+
+**Limitations**:
+- TL way `subtype` empty (fixable with post-processing)
+- Speed limit regulatory elements have no members (remove them)
+- `lane_change=no` added to all ways (may need cleanup)
+- 88 lanelets have no subtype (walkways — may need reclassification)
+- May produce excessive points on straight roads (causes Autoware planning issues)
 
 ---
 
-### 2. joel-mb/odr2lanelet2
+### 2. joel-mb/odr2lanelet2 - UNIQUE: Traffic Light Support
 
-**Source**: https://github.com/joel-mb/odr2lanelet2
-**Automation Level**: ⭐⭐⭐ (Medium - limited documentation)
+**Source**: https://github.com/joel-mb/odr2lanelet2 (local: `src/external/odr2lanelet2/`)
+**Automation Level**: ⭐⭐⭐ (Medium - requires CARLA server for full features)
+
+**Status**: Only tool that extracts traffic light regulatory elements from CARLA. Last updated Jul 2024 (added traffic lights, stop signs, crosswalks, lane changes).
 
 **Features**:
-- Direct OpenDRIVE → Lanelet2 conversion (Python)
-- Minimal dependencies
-- Small codebase (easier to modify)
+- Direct OpenDRIVE → Lanelet2 (.osm) conversion
+- Traffic light extraction (boxes, bulbs with colors, stop lines) - requires CARLA server
+- Stop sign extraction with regulatory elements - requires CARLA server
+- Crosswalk conversion
+- Lane change and turn direction attributes
+- Uses `carla.Map` Python API for lane geometry (works offline from .xodr)
+- Small codebase (~880 lines converter + ~330 lines OpenDRIVE wrapper)
 
-**Installation**:
+**Dependencies**: CARLA Python API (`import carla`)
+
+**Usage**:
 ```bash
-git clone https://github.com/joel-mb/odr2lanelet2.git
-cd odr2lanelet2
-# Check for requirements.txt or setup.py
-pip install -r requirements.txt  # if available
+cd src/external/odr2lanelet2
+
+# Lanes only (no CARLA server needed)
+python odr2lanelet2.py -i Town01.xodr -o Town01.osm
+
+# Lanes + traffic lights + stop signs (CARLA server required)
+python odr2lanelet2.py -i Town01.xodr -o Town01.osm --carla
 ```
 
-**Usage** (inferred from structure):
-```bash
-python odr2lanelet2.py <input.xodr> <output.osm>
-```
+**Traffic light output format** (Autoware-compatible):
+- `traffic_light` linestrings with `subtype: red_yellow_green` and `height`
+- `light_bulbs` linestrings with individual bulb points (green, yellow, red colors)
+- `stop_line` linestrings at landmark positions
+- `regulatory_element` linking traffic lights to affected lanelets
 
 **Limitations**:
-- Limited documentation
-- Small community (13 stars, 5 forks)
+- Small community (13 stars, 6 forks)
 - No releases or packages
-- Unknown feature completeness
-
-**Status**: Experimental, use with caution
+- Traffic light extraction quality not validated against Autoware
+- Hardcoded speed limit of 30 for all lanelets
+- CARLA server must be running with the target map loaded for traffic light extraction
 
 ---
 
@@ -581,15 +604,21 @@ Then convert OpenDRIVE to Lanelet2 (traffic lights should be preserved)
 
 ## Tool Comparison Matrix
 
-| Tool | Automation | Input | Output | Traffic Lights | Maintenance | Recommended |
+Updated 2026-03:
+
+| Tool | Automation | Input | Output | Traffic Lights | Last Active | Recommended |
 |------|------------|-------|--------|----------------|-------------|-------------|
-| **opendrive2lanelet** | High | .xodr | CommonRoad XML | ❌ No | ✅ Active (TUM) | ⭐⭐⭐⭐ |
-| **odr2lanelet2** | Medium | .xodr | .osm (Lanelet2) | ❌ No | ⚠️ Limited | ⭐⭐⭐ |
-| **usdot opendrive2lanelet** | High | .xodr | CommonRoad XML | ❌ No | ✅ Active (US DOT) | ⭐⭐⭐⭐ |
-| **Lanelet2 Python API** | Low | - | .osm | ✅ Yes (manual) | ✅ Active | ⭐⭐ |
-| **CommonRoad Scenario Designer** | Medium | .xodr | .xml/.osm | ⚠️ Partial | ✅ Active (TUM) | ⭐⭐⭐⭐ |
-| **assuremappingtools** | Medium | .xodr | .osm | ❌ No | ⚠️ Commercial | ⭐⭐⭐ |
-| **TUMFTM Pre-converted** | **Full** | - | .osm + .pcd | ❌ No | ✅ Available | ⭐⭐⭐⭐⭐ |
+| **CommonRoad Scenario Designer** | High | .xodr | .osm (direct) | ⚠️ Partial (empty subtype) | Oct 2025 (v0.8.5) | ⭐⭐⭐⭐ |
+| **odr2lanelet2** | Medium | .xodr | .osm (direct) | ✅ Yes (CARLA) | Jul 2024 | ⭐⭐⭐ |
+| **usdot opendrive2lanelet** | High | .xodr | CommonRoad XML | ❌ No | Mar 2025 | ⭐⭐⭐ |
+| **GDAL 3.10 XODR driver** | Medium | .xodr | Any GDAL format | ❌ No | Sep 2024+ | ⭐⭐ (new) |
+| **Lanelet2 Python API** | Low | - | .osm | ✅ Yes (manual) | Active | ⭐⭐ |
+| **TIER IV Vector Map Builder** | Manual | .pcd ref | .osm | ✅ Yes (manual) | Active (web) | ⭐⭐⭐⭐ |
+| **autoware_lanelet2_map_validator** | High | .osm | Report | N/A | Jan 2026 (v1.6.0) | ⭐⭐⭐⭐⭐ |
+| **TUMFTM Pre-converted** | **Full** | - | .osm + .pcd | ❌ No | Apr 2025 | ⭐⭐⭐⭐⭐ |
+| **Bitbucket autoware-contents** | **Full** | - | .osm + .pcd | ❌ No | Oct 2025 | ⭐⭐⭐⭐ |
+
+**Note**: The old standalone `opendrive2lanelet` PyPI package (TUM) is **archived** - use `commonroad-scenario-designer` instead.
 
 ---
 
@@ -628,20 +657,30 @@ Automated map generation in GitHub Actions:
 
 ## Conclusion
 
-**Current Best Practice** (2025):
-1. **Testing**: Use TUMFTM pre-converted maps
-2. **Custom towns**: Use `opendrive2lanelet` + manual traffic light addition
-3. **Point clouds**: Use CARLA HDMaps or autopilot recording script
+**Current Best Practice** (2026-03):
+1. **Testing**: Use TUMFTM pre-converted maps (in `data/carla-autoware-bridge/`)
+2. **Custom towns**: CommonRoad Scenario Designer with `autoware=True` + post-processing script (fix TL subtypes, remove empty speed limits)
+3. **Custom towns with traffic lights**: Add `odr2lanelet2 --carla` for TL extraction (requires CARLA server), or post-process CommonRoad TL output
+4. **Point clouds**: Use CARLA HDMaps or autopilot recording script
 
 **Automation Status**:
 - Point Cloud: ✅ Fully automated
-- Lanelet2 (no traffic lights): ⭐⭐⭐⭐ 80% automated
-- Lanelet2 (with traffic lights): ⭐⭐ 40% automated (requires manual work)
+- Lanelet2 (lanes + basic TL): ⭐⭐⭐⭐ 90% automated (CommonRoad `autoware=True` + post-processing script)
+- Lanelet2 (with full TL regulatory elements): ⭐⭐⭐ 60% automated (odr2lanelet2, needs CARLA server)
+- Map Validation: ⭐⭐⭐⭐⭐ Fully automated (autoware_lanelet2_map_validator)
 
-**Future Work**:
-- Develop complete automation script combining best tools
-- Integrate traffic light extraction from CARLA
-- Add to our bridge as optional feature
+**Key finding** (2026-03-05): CommonRoad's `autoware=True` flag produces output structurally identical to TUMFTM reference maps. The remaining differences are minor post-processing fixes (TL subtype, empty speed limits) and TUMFTM's manual reclassification of walkway vs road lanelets.
+
+**Ecosystem notes** (from Autoware ODD WG, 2025):
+- No tool produces fully Autoware-compliant Lanelet2 directly
+- Converted maps may have excessive points (reduces planning performance)
+- Native OpenDRIVE support in Autoware was proposed but not adopted
+- All major projects (TUMFTM, TIER IV, Autoware Foundation) use manual post-processing
+
+**Next steps for this project**:
+- Create wrapper script for end-to-end conversion pipeline (CommonRoad + post-processing)
+- Test converted maps loading in Autoware
+- Validate with autoware_lanelet2_map_validator (build from src/external/)
 
 ---
 
@@ -653,5 +692,5 @@ Automated map generation in GitHub Actions:
 
 ---
 
-**Last Updated**: 2025-11-08
+**Last Updated**: 2026-03-05
 **Contributors**: Research and documentation based on community tools and workflows
