@@ -139,3 +139,14 @@ run-read-poses:
     set -euo pipefail
     source "{{project}}/install/setup.bash"
     exec play_launch run carla_pilot read_poses --ros-args -p output_file:="{{project}}/scripts/poses.json"
+
+# Generate Lanelet2 map from running CARLA server
+generate-lanelet2:
+    #!/usr/bin/env bash
+    set -eo pipefail
+    source "{{project}}/install/setup.bash"
+    ros2 run carla_map_gen carla_map_gen -- --port {{carla_port}} --project-dir "{{project}}"
+
+# Compare generated Lanelet2 map against reference
+compare-lanelet2 generated reference:
+    python3 "{{project}}/scripts/compare_lanelet2.py" "{{generated}}" "{{reference}}"
