@@ -1,11 +1,15 @@
-"""Generate Autoware-compatible Lanelet2 maps from a running CARLA server."""
+"""Generate Autoware-compatible Lanelet2 maps from CARLA.
+
+Supports two modes:
+  - Live: Connect to a running CARLA server and extract the OpenDRIVE map
+  - Offline: Use a local .xodr file directly (no CARLA server needed)
+"""
 
 import argparse
 import os
 import tempfile
 from pathlib import Path
 
-import carla
 from crdesigner.common.config.lanelet2_config import Lanelet2Config
 from crdesigner.common.config.opendrive_config import OpenDriveConfig
 from crdesigner.map_conversion.map_conversion_interface import opendrive_to_lanelet
@@ -33,44 +37,61 @@ mgrs_grid: 31NAA
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate Autoware Lanelet2 map from a running CARLA server")
+        description="Generate Autoware Lanelet2 map from CARLA")
     parser.add_argument("--host", default="localhost",
                         help="CARLA server host (default: localhost)")
     parser.add_argument("--port", type=int, default=2000,
                         help="CARLA server port (default: 2000)")
+    parser.add_argument("--xodr",
+                        help="Path to .xodr file (offline mode, no CARLA needed)")
     parser.add_argument("--output-dir",
                         help="Output directory (default: auto-detect from map name)")
     parser.add_argument("--project-dir",
                         help="Project root directory (default: auto-detect)")
     args = parser.parse_args()
 
-    # Connect to CARLA
-    print(f"Connecting to CARLA at {args.host}:{args.port}...")
-    client = carla.Client(args.host, args.port)
-    client.set_timeout(30.0)
+    if args.xodr:
+        # Offline mode: use local .xodr file
+        xodr_path = Path(args.xodr)
+        if not xodr_path.exists():
+            raise FileNotFoundError(f"OpenDRIVE file not found: {xodr_path}")
+        map_name = xodr_path.stem  # e.g. "Town01" from "Town01.xodr"
+        odr_path = str(xodr_path)
+        cleanup_odr = False
+        print(f"Using OpenDRIVE file: {xodr_path}")
+    else:
+        # Live mode: connect to CARLA
+        import carla
+        print(f"Connecting to CARLA at {args.host}:{args.port}...")
+        client = carla.Client(args.host, args.port)
+        client.set_timeout(30.0)
 
-    world = client.get_world()
-    carla_map = world.get_map()
+        world = client.get_world()
+        carla_map = world.get_map()
 
-    # Extract map name (e.g. "Town01" from "/Game/Carla/Maps/Town01/Town01")
-    map_name = carla_map.name.split("/")[-1]
+        # Extract map name (e.g. "Town01" from "Carla/Maps/Town01")
+        map_name = carla_map.name.split("/")[-1]
+
+        # Write OpenDRIVE to temp file
+        odr_string = carla_map.to_opendrive()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".xodr",
+                                         delete=False) as f:
+            f.write(odr_string)
+            odr_path = f.name
+        cleanup_odr = True
+
     print(f"Map: {map_name}")
 
     # Determine output directory
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
-        project_dir = Path(args.project_dir) if args.project_dir else _find_project_dir()
+        project_dir = (Path(args.project_dir) if args.project_dir
+                       else _find_project_dir())
         output_dir = project_dir / "data" / "carla-autoware-bridge" / map_name
 
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Output: {output_dir}")
-
-    # Extract OpenDRIVE and write to temp file
-    odr_string = carla_map.to_opendrive()
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".xodr", delete=False) as f:
-        f.write(odr_string)
-        odr_path = f.name
 
     try:
         # Convert OpenDRIVE to Lanelet2
@@ -89,7 +110,8 @@ def main():
         # Post-process
         postprocess_osm(osm_path)
     finally:
-        os.unlink(odr_path)
+        if cleanup_odr:
+            os.unlink(odr_path)
 
     # Write config files
     (output_dir / "map_config.yaml").write_text(MAP_CONFIG_YAML)
