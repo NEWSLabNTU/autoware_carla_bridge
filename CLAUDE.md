@@ -240,8 +240,21 @@ colcon list | grep autoware_vehicle_msgs
 - **nav_msgs**: Standard ROS navigation messages (for odometry/kinematic state)
 
 ### Coordinate Systems
-- Position: meters ↔ cm, Y-axis flip
-- Rotation: radians ↔ degrees, roll/yaw sign flips
+
+CARLA uses a left-handed system (Y = right), ROS uses right-handed (Y = left). The conversion is a Y-axis flip on positions and roll/yaw sign flips on rotations (see `coordinate_conversion.rs`).
+
+**The Y-flip is NOT applied uniformly.** LiDAR point data stays in CARLA's native coordinates, while poses and velocities are converted to ROS coordinates:
+
+| Data | Coordinate System | Y-Flip? | Why |
+|------|-------------------|---------|-----|
+| LiDAR points (live scan) | CARLA native | No | Must match PCD map for NDT |
+| PCD map (carla_pcd_gen) | CARLA native | No | Must match live LiDAR scans |
+| Vehicle pose, GNSS | ROS (right-handed) | Yes | Autoware planning expects ROS coords |
+| Velocities | ROS (right-handed) | Yes | Autoware control expects ROS coords |
+| Lanelet2 map | Local coordinates | No | Generated from OpenDRIVE, consistent with poses |
+
+NDT scan matching is purely geometric -- it aligns point cloud shapes. As long as the live LiDAR scans and PCD map are in the same coordinate system, NDT works regardless of handedness convention. The raw numbers are unchanged; handedness only affects interpretation.
+
 - Transform chain: Multi-hop TF2 traversal (max depth: 20)
 
 ---

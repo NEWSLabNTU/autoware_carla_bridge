@@ -93,7 +93,9 @@ pub fn collect(
                 for det in measure.as_slice() {
                     let local_pt = Point3::new(det.point.x, det.point.y, det.point.z);
                     let world_pt = sensor_tf * local_pt;
-                    // Best-effort send; drop points if channel is full
+                    // Points are stored in CARLA's native coordinate system (no Y-flip).
+                    // The bridge also publishes live LiDAR scans in CARLA coordinates
+                    // (see sensor_bridge.rs publish_lidar), so NDT matching is consistent.
                     let _ = tx.try_send((world_pt.x, world_pt.y, world_pt.z, det.intensity));
                 }
             }
