@@ -141,11 +141,11 @@ run-read-poses:
     exec play_launch run carla_pilot read_poses --ros-args -p output_file:="{{project}}/scripts/poses.json"
 
 # Generate Lanelet2 map from running CARLA server
-generate-lanelet2:
+generate-lanelet2 map_dir:
     #!/usr/bin/env bash
     set -eo pipefail
     source "{{project}}/install/setup.bash"
-    ros2 run carla_map_gen carla_map_gen -- --port {{carla_port}} --project-dir "{{project}}"
+    ros2 run carla_map_gen carla_map_gen -- --port {{carla_port}} --output-dir "{{map_dir}}"
 
 # Compare generated Lanelet2 map against reference
 compare-lanelet2 generated reference:
@@ -163,5 +163,5 @@ generate-map map_dir:
     #!/usr/bin/env bash
     set -eo pipefail
     source "{{project}}/install/setup.bash"
-    ros2 run carla_map_gen carla_map_gen -- --port {{carla_port}} --project-dir "{{project}}"
+    ros2 run carla_map_gen carla_map_gen -- --port {{carla_port}} --output-dir "{{map_dir}}"
     carla_pcd_gen --port {{carla_port}} --map-dir "{{map_dir}}"

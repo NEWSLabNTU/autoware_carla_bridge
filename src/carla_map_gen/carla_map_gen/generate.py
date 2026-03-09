@@ -44,10 +44,8 @@ def main():
                         help="CARLA server port (default: 2000)")
     parser.add_argument("--xodr",
                         help="Path to .xodr file (offline mode, no CARLA needed)")
-    parser.add_argument("--output-dir",
-                        help="Output directory (default: auto-detect from map name)")
-    parser.add_argument("--project-dir",
-                        help="Project root directory (default: auto-detect)")
+    parser.add_argument("--output-dir", required=True,
+                        help="Output directory for generated map files")
     args = parser.parse_args()
 
     if args.xodr:
@@ -82,13 +80,7 @@ def main():
 
     print(f"Map: {map_name}")
 
-    # Determine output directory
-    if args.output_dir:
-        output_dir = Path(args.output_dir)
-    else:
-        project_dir = (Path(args.project_dir) if args.project_dir
-                       else _find_project_dir())
-        output_dir = project_dir / "data" / "carla-autoware-bridge" / map_name
+    output_dir = Path(args.output_dir)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Output: {output_dir}")
@@ -123,14 +115,6 @@ def main():
         size = f.stat().st_size
         print(f"  {f.name} ({size:,} bytes)")
 
-
-def _find_project_dir() -> Path:
-    """Find project root by walking up from this file's location."""
-    path = Path(__file__).resolve()
-    for parent in path.parents:
-        if (parent / "justfile").exists():
-            return parent
-    raise RuntimeError("Could not find project root (no justfile found)")
 
 
 if __name__ == "__main__":
