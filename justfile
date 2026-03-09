@@ -156,7 +156,7 @@ generate-pcd map_dir:
     #!/usr/bin/env bash
     set -eo pipefail
     source "{{project}}/install/setup.bash"
-    carla_pcd_gen --port {{carla_port}} --map-dir "{{map_dir}}"
+    ros2 run carla_pcd_gen carla_pcd_gen -- --port {{carla_port}} --map-dir "{{map_dir}}"
 
 # Generate both Lanelet2 + PCD maps
 generate-map map_dir:
@@ -164,4 +164,4 @@ generate-map map_dir:
     set -eo pipefail
     source "{{project}}/install/setup.bash"
     ros2 run carla_map_gen carla_map_gen -- --port {{carla_port}} --output-dir "{{map_dir}}"
-    carla_pcd_gen --port {{carla_port}} --map-dir "{{map_dir}}"
+    ros2 run carla_pcd_gen carla_pcd_gen -- --port {{carla_port}} --map-dir "{{map_dir}}"
