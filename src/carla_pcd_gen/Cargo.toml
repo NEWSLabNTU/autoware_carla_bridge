@@ -1,0 +1,19 @@
+[package]
+name = "carla_pcd_gen"
+version = "0.1.0"
+edition = "2021"
+description = "Generate Autoware-compatible point cloud maps from CARLA"
+license = "Apache-2.0"
+
+[dependencies]
+carla = "0.13.0"
+nalgebra = "0.34.1"
+clap = { version = "4", features = ["derive"] }
+eyre = "0.6"
+color-eyre = "0.6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+crossbeam = "0.8"
+pcd-rs = { version = "0.10", features = ["derive"] }
+
+[package.metadata.ros]

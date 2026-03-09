@@ -234,12 +234,12 @@ Improvements over TUMFTM: properly typed TL regulatory elements and way subtypes
 **Structure**:
 ```
 src/carla_pcd_gen/
-├── Cargo.toml               # carla (workspace), nalgebra, clap, tracing, color-eyre, pcd-rs
+├── Cargo.toml               # carla (workspace), nalgebra, crossbeam, clap, tracing, color-eyre, pcd-rs
 ├── package.xml               # ament_cargo
 └── src/
     ├── main.rs               # CLI (clap), connect + orchestrate + write config files
-    ├── collector.rs           # Spawn vehicle + LiDAR, teleport through spawn points
-    ├── voxel_grid.rs          # HashMap-based online voxel accumulator
+    ├── collector.rs           # Spawn N vehicles + LiDARs, parallel batch teleport, sensor callbacks
+    ├── voxel_grid.rs          # HashMap-based online voxel accumulator with density cap
     └── pcd_writer.rs          # PCD v0.7 binary file writer
 ```
 
@@ -247,19 +247,19 @@ src/carla_pcd_gen/
 
 #### Design changes from old `carla-pcd-generator`
 
-| Aspect | Old (carla-rust 0.8.0) | Modern (carla-rust 0.13.0) |
-|--------|------------------------|----------------------------|
-| **LiDAR type** | `sensor.lidar.ray_cast_semantic` | `sensor.lidar.ray_cast` |
-| **Output** | Per-frame PCD files (`00000.pcd`, ...) | Single merged + voxel-downsampled PCD |
-| **GUI** | kiss3d 3D viewer | None (CLI-only, use RViz for viz) |
-| **Errors** | `anyhow` | `color-eyre` (matches bridge) |
-| **Vehicle strategy** | N cars driving with autopilot | Single vehicle teleporting through spawn points |
-| **Memory** | Unbounded (raw frames on disk) | Bounded ~200MB (voxel grid HashMap) |
-| **Build** | Standalone `cargo build` | ament_cargo (`just build`) |
-| **carla dep** | Pinned 0.8.0 | Workspace dep (0.13.0) |
-| **Spawning API** | `world.actor_builder(id).spawn_vehicle(isometry)` | `world.spawn_actor(&blueprint, &transform)` |
-| **Transforms** | `Isometry3<f32>` throughout | `Transform { location, rotation }` + `.to_na()` |
-| **Sensor data** | `SemanticLidarDetection { point, cos_inc_angle, object_idx, object_tag }` | `LidarDetection { point: Location { x, y, z }, intensity: f32 }` |
+| Aspect               | Old (carla-rust 0.8.0)                                                    | Modern (carla-rust 0.13.0)                                       |
+|----------------------|---------------------------------------------------------------------------|------------------------------------------------------------------|
+| **LiDAR type**       | `sensor.lidar.ray_cast_semantic`                                          | `sensor.lidar.ray_cast`                                          |
+| **Output**           | Per-frame PCD files (`00000.pcd`, ...)                                    | Single merged + voxel-downsampled PCD                            |
+| **GUI**              | kiss3d 3D viewer                                                          | None (CLI-only, use RViz for viz)                                |
+| **Errors**           | `anyhow`                                                                  | `color-eyre` (matches bridge)                                    |
+| **Vehicle strategy** | N cars driving with autopilot                                             | N bare LiDARs teleporting through spawn points (no vehicles)     |
+| **Memory**           | Unbounded (raw frames on disk)                                            | Bounded ~200MB (voxel grid HashMap, max_samples cap)             |
+| **Build**            | Standalone `cargo build`                                                  | ament_cargo (`just build`)                                       |
+| **carla dep**        | Pinned 0.8.0                                                              | Workspace dep (0.13.0)                                           |
+| **Spawning API**     | `world.actor_builder(id).spawn_vehicle(isometry)`                         | `world.spawn_actor(&blueprint, &transform)`                      |
+| **Transforms**       | `Isometry3<f32>` throughout                                               | `Transform { location, rotation }` + `.to_na()`                  |
+| **Sensor data**      | `SemanticLidarDetection { point, cos_inc_angle, object_idx, object_tag }` | `LidarDetection { point: Location { x, y, z }, intensity: f32 }` |
 
 #### Key carla-rust 0.13.0 APIs
 
@@ -274,84 +274,126 @@ settings.synchronous_mode = true;
 settings.fixed_delta_seconds = Some(0.05);  // 50ms timestep
 world.apply_settings(&settings, Duration::from_secs(10));
 
-// Spawn vehicle
-let bp_lib = world.blueprint_library();
-let mut vehicle_bp = bp_lib.find("vehicle.tesla.model3").unwrap();
-vehicle_bp.set_attribute("role_name", "pcd_gen");
-let actor = world.spawn_actor(&vehicle_bp, &spawn_transform)?;
-let vehicle = Vehicle::try_from(actor)?;
-vehicle.set_autopilot(true);
+// Channel-based aggregation (N LiDARs → 1 grid thread)
+let (tx, rx) = crossbeam::channel::bounded(4096);
 
-// Spawn LiDAR attached to vehicle
+// Spawn N bare LiDAR sensors (no vehicles)
+let bp_lib = world.blueprint_library();
 let mut lidar_bp = bp_lib.find("sensor.lidar.ray_cast").unwrap();
 lidar_bp.set_attribute("channels", "64");
 lidar_bp.set_attribute("range", "100.0");
 lidar_bp.set_attribute("points_per_second", "600000");
 lidar_bp.set_attribute("rotation_frequency", "20.0");
-let lidar_tf = Transform {
-    location: Location::new(0.0, 0.0, 2.5),
-    rotation: Rotation::zero(),
-};
-let lidar_actor = world.spawn_actor_attached(
-    &lidar_bp, &lidar_tf, &vehicle, AttachmentType::Rigid,
-)?;
-let sensor = Sensor::try_from(lidar_actor)?;
 
-// Listen for LiDAR data
-let grid = Arc::new(Mutex::new(VoxelGrid::new(0.1)));
-let grid_clone = grid.clone();
-sensor.listen(move |data| {
-    let sensor_tf = data.sensor_transform().to_na();  // Isometry3<f32>
-    if let Ok(measure) = LidarMeasurement::try_from(data) {
-        let mut grid = grid_clone.lock().unwrap();
-        for det in measure.as_slice() {
-            let local = Point3::new(det.point.x, det.point.y, det.point.z);
-            let world = sensor_tf * local;
-            grid.insert(world.x, world.y, world.z, det.intensity);
+let mut sensors = Vec::new();
+for _ in 0..num_lidars {
+    let initial_tf = Transform { location: Location::new(0.0, 0.0, 100.0), ..default };
+    let actor = world.spawn_actor(&lidar_bp, &initial_tf)?;
+    let sensor = Sensor::try_from(actor)?;
+    let tx_clone = tx.clone();
+    sensor.listen(move |data| {
+        let sensor_tf = data.sensor_transform().to_na();
+        if let Ok(measure) = LidarMeasurement::try_from(data) {
+            for det in measure.as_slice() {
+                let local = Point3::new(det.point.x, det.point.y, det.point.z);
+                let world_pt = sensor_tf * local;
+                let _ = tx_clone.try_send((world_pt.x, world_pt.y, world_pt.z, det.intensity));
+            }
         }
+    });
+    sensors.push(sensor);
+}
+drop(tx);
+
+// Aggregator thread — owns the voxel grid, no mutex needed
+let grid_handle = std::thread::spawn(move || {
+    let mut grid = VoxelGrid::new(voxel_size, max_samples);
+    while let Ok((x, y, z, i)) = rx.recv() {
+        grid.insert(x, y, z, i);
     }
+    grid
 });
 
-// Teleport through spawn points
+// Batch teleport through spawn points (no driving, just place + tick)
 let spawn_points = world.map().recommended_spawn_points();
-for sp in &spawn_points {
-    vehicle.set_transform(sp);
-    vehicle.set_autopilot(true);
-    for _ in 0..(seconds_per_spawn * 20) {  // 20 ticks/sec at 0.05s
-        world.tick();
+for batch in spawn_points.chunks(num_lidars) {
+    for (sensor, sp) in sensors.iter().zip(batch) {
+        let mut tf = sp.clone();
+        tf.location.z += 2.5;  // LiDAR height above ground
+        sensor.set_transform(&tf);
+    }
+    for _ in 0..ticks_per_position {
+        world.tick();  // Each tick = one LiDAR rotation at 20Hz
     }
 }
 ```
 
-#### Coverage strategy
+#### Coverage strategy: parallel stationary LiDARs
 
-Sequential teleport through all recommended spawn points:
+Spawn **N bare LiDAR sensors** (default: 8) directly in the world — no vehicles needed. Teleport them to spawn points, tick a few frames to collect one full rotation each, then move to the next batch. No driving, no physics, no autopilot overhead.
+
+**Workflow**:
 1. Get `map.recommended_spawn_points()` (typically 100-300 per town)
-2. Teleport vehicle to each point
-3. Enable autopilot, tick world for N seconds (default: 10s)
-4. LiDAR callback inserts points into voxel grid in real time
-5. After all spawn points: write merged PCD
+2. Spawn N LiDAR sensors (unattached, free-standing in world)
+3. Process spawn points in batches of N:
+   a. Teleport each LiDAR to its assigned spawn point (at +2.5m height)
+   b. Tick world for `--ticks-per-position` frames (default: 2, enough for one full LiDAR rotation at 20Hz)
+   c. Sensor callbacks transform points to world frame and send to aggregator
+4. After all spawn points: drain channel, write merged PCD
 
-Configurable: `--spawn-points N` (0 = all), `--seconds-per-spawn N` (default: 10)
+A full town with 200 spawn points at 2 ticks each = 400 ticks = **20 seconds** at 50ms timestep. With 8 parallel LiDARs: **~25 batches × 2 ticks = ~3 seconds of sim time**.
+
+**Concurrency model**: Each LiDAR sensor callback sends points through a channel (`crossbeam::channel`) to a single aggregator thread that owns the voxel grid. Sensor callbacks only do coordinate transform + channel send (cheap); the aggregator does all grid insertion.
+
+```
+  LiDAR 0 ──► channel::Sender ──┐
+  LiDAR 1 ──► channel::Sender ──┤
+  ...                            ├──► channel::Receiver ──► VoxelGrid (single thread)
+  LiDAR 7 ──► channel::Sender ──┘
+```
+
+Configurable: `--lidars N` (default: 8), `--spawn-points N` (0 = all), `--ticks-per-position N` (default: 2)
+
+#### Point density control
+
+The voxel grid enforces a **maximum samples per voxel** (`--max-samples N`, default: 5). Once a voxel reaches this count, further insertions are dropped. This prevents overly dense regions near spawn points from consuming memory and computation while adding no value.
+
+Combined with **adaptive dwell time** (early batch termination when insertion rate drops), this ensures the tool spends time where coverage is sparse and moves on quickly from well-covered areas.
+
+**Density metrics** (printed per batch):
+- New voxels created in this batch
+- Total voxels so far
+- Estimated coverage area (voxel count × resolution²)
 
 #### Voxel grid (memory-bounded accumulation)
 
 ```rust
 struct VoxelGrid {
     cells: HashMap<(i32, i32, i32), VoxelCell>,
-    resolution: f32,  // default 0.1m
+    resolution: f32,       // default 0.1m
+    max_samples: u32,      // default 5, drop inserts beyond this
 }
 struct VoxelCell {
     sum_x: f64, sum_y: f64, sum_z: f64,
     sum_intensity: f64,
     count: u32,
 }
+impl VoxelGrid {
+    fn insert(&mut self, x: f32, y: f32, z: f32, intensity: f32) -> bool {
+        let key = (floor(x/res), floor(y/res), floor(z/res));
+        let cell = self.cells.entry(key).or_default();
+        if cell.count >= self.max_samples { return false; }  // density cap
+        cell.sum_x += x as f64; // ...
+        cell.count += 1;
+        true  // returns whether a new contribution was accepted
+    }
+}
 // Key = (floor(x/res), floor(y/res), floor(z/res))
 // Final point = (sum_x/count, sum_y/count, sum_z/count, sum_intensity/count)
 // Memory: ~200MB for a typical town at 0.1m resolution
 ```
 
-Insert directly into voxel grid during collection (not after). This caps memory at the grid size instead of accumulating raw points (~16GB for a full town).
+Insert directly into voxel grid during collection (not after). This caps memory at the grid size instead of accumulating raw points (~16GB for a full town). The `max_samples` cap further bounds memory by preventing voxels from accumulating unbounded statistics.
 
 #### PCD output
 
@@ -372,22 +414,24 @@ Written via `pcd-rs` crate (derive macro for binary serialization).
 
 ```
 carla_pcd_gen [--host HOST] [--port PORT] [--output-dir DIR] [--project-dir DIR]
-              [--spawn-points N] [--seconds-per-spawn N] [--voxel-size F]
+              [--lidars N] [--spawn-points N] [--ticks-per-position N]
+              [--voxel-size F] [--max-samples N]
               [--lidar-range F] [--lidar-channels N]
 ```
 
-Defaults: `--lidar-range 100.0`, `--lidar-channels 64`, `--voxel-size 0.1`, `--seconds-per-spawn 10`
+Defaults: `--lidars 8`, `--lidar-range 100.0`, `--lidar-channels 64`, `--voxel-size 0.1`, `--max-samples 5`, `--ticks-per-position 2`
 
 #### Tasks
 
 - [ ] Create package structure (Cargo.toml, package.xml) + add to workspace members
 - [ ] Implement `main.rs` - clap CLI, CARLA connection, synchronous mode, config file output
-- [ ] Implement `collector.rs` - vehicle + LiDAR spawning, teleport loop, sensor callback
-- [ ] Implement `voxel_grid.rs` - HashMap accumulator with running averages
+- [ ] Implement `collector.rs` - N bare LiDAR spawning, batch teleport, channel-based sensor callbacks
+- [ ] Implement `voxel_grid.rs` - HashMap accumulator with running averages + max_samples density cap
 - [ ] Implement `pcd_writer.rs` - PCD v0.7 binary via pcd-rs
 - [ ] Add justfile recipes `generate-pcd`, `generate-map`
 - [ ] Test: generate PCD for Town01, load in Autoware, verify NDT localization
 - [ ] Compare PCD density vs TUMFTM reference
+- [ ] Tune defaults: vehicles count, max_samples, min_new_voxels_per_tick thresholds
 
 ---
 

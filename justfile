@@ -150,3 +150,18 @@ generate-lanelet2:
 # Compare generated Lanelet2 map against reference
 compare-lanelet2 generated reference:
     python3 "{{project}}/scripts/compare_lanelet2.py" "{{generated}}" "{{reference}}"
+
+# Generate point cloud map from running CARLA server
+generate-pcd map_dir:
+    #!/usr/bin/env bash
+    set -eo pipefail
+    source "{{project}}/install/setup.bash"
+    carla_pcd_gen --port {{carla_port}} --map-dir "{{map_dir}}"
+
+# Generate both Lanelet2 + PCD maps
+generate-map map_dir:
+    #!/usr/bin/env bash
+    set -eo pipefail
+    source "{{project}}/install/setup.bash"
+    ros2 run carla_map_gen carla_map_gen -- --port {{carla_port}} --project-dir "{{project}}"
+    carla_pcd_gen --port {{carla_port}} --map-dir "{{map_dir}}"
