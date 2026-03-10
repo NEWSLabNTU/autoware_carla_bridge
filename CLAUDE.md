@@ -41,15 +41,15 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
 - ✅ Vehicle cleanup on Autoware loss (respawn requires bridge restart)
 - ✅ Responsive shutdown (100ms Ctrl-C exit)
 
-**Autonomous Driving (carla_pilot ROS 2 package)**:
-- ✅ **`drive` node** - Full autonomous driving workflow
-  - Uses modern Autoware 2024/2025 API services
-  - Initializes localization, sets route, engages autonomous mode
-  - Monitors progress until goal reached
-  - Poses loaded via `poses_file` ROS parameter
-- ✅ **`read_poses` node** - Captures poses from RViz
-  - Subscribes to `/initialpose` and `/planning/mission_planning/goal`
-  - Output file via `output_file` ROS parameter
+**Autonomous Driving (standalone scripts)**:
+- ✅ **`scripts/auto_drive.py`** - Full autonomous driving workflow
+  - 6-step sequence: localize → wait → route → wait → engage → wait for arrival
+  - Uses Autoware AD API v1 services with retry logic and state monitoring
+  - Options: `--poses`, `--timeout`, `--no-wait-arrival`
+- ✅ **`scripts/capture_poses.py`** - Captures poses from RViz
+  - Subscribes to `/initialpose`, `/planning/mission_planning/goal`, `/rviz/routing/rough_goal`
+  - Saves to YAML with flat format `{x, y, z, qx, qy, qz, qw}` + covariance
+  - Partial save on Ctrl-C
 
 **Pre-converted Maps**:
 - ✅ Town01, Town02, Town03, Town05, Town10 in `data/carla-autoware-bridge/`
@@ -123,10 +123,10 @@ The demo workflow:
 just demo start
 
 # Capture poses from RViz (if not already captured)
-./scripts/read_poses.py
+just run-capture-poses
 
 # Run autonomous driving
-just drive
+just run-drive
 
 # Watch bridge logs (in another terminal)
 just bridge logs -f
@@ -134,8 +134,6 @@ just bridge logs -f
 # Stop all services
 just demo stop
 ```
-
-The `just drive` command runs `./scripts/drive_in_autoware.py` with automatic poses.json validation.
 
 **Environment Variables**: The justfile automatically passes `RMW_IMPLEMENTATION`, `ROS_DOMAIN_ID`, and `ROS_LOCALHOST_ONLY` to Autoware if set.
 
@@ -206,10 +204,10 @@ colcon list | grep autoware_vehicle_msgs
 │   ├── roadmap/                   # Phase 1-6 roadmap docs
 │   └── archive/                   # Historical migration docs
 ├── scripts/                       # Python utilities
-│   ├── get_carla_spawn_points.py # Get valid CARLA spawn points
-│   ├── setup_carla.py             # Configure CARLA
-│   ├── set_initial_pose.py        # Set initial pose
-│   ├── poses.json                 # Current poses (auto-generated)
+│   ├── auto_drive.py              # Autonomous driving sequence
+│   ├── capture_poses.py           # Capture poses from RViz
+│   ├── get_carla_spawn_points.py  # Get valid CARLA spawn points
+│   ├── poses.yaml                 # Current poses (auto-generated)
 │   └── README.md                  # Scripts documentation
 ├── third_party/
 │   ├── autoware@                  # Symlink for just commands
@@ -567,13 +565,13 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
    # - Click "2D Goal Pose" → set goal position
 
    # Capture poses:
-   ./scripts/read_poses.py
-   # Saves to scripts/poses.json
+   just run-capture-poses
+   # Saves to scripts/poses.yaml
    ```
 
 3. **Run Autonomous Driving**:
    ```bash
-   just drive
+   just run-drive
    ```
 
 4. **Monitor** (optional, in another terminal):
@@ -588,17 +586,18 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 
 ### Script Details
 
-**`drive_in_autoware.py`** performs these steps:
-1. Load poses from `poses.json`
-2. Initialize localization via `/api/localization/initialize` service
-3. Clear existing route via `/api/routing/clear_route`
-4. Set new route via `/api/routing/set_route_points`
-5. Engage autonomous mode via `/api/operation_mode/change_to_autonomous`
-6. Monitor progress (velocity, distance, route state) until goal reached
+**`scripts/auto_drive.py`** performs a 6-step sequence:
+1. Initialize localization (publishes to `/initialpose` + calls `/api/localization/initialize`)
+2. Wait for localization convergence (monitors `/api/operation_mode/state`)
+3. Set route via `/api/routing/set_route_points` (with retry)
+4. Wait for route state to become SET
+5. Engage autonomous mode via `/api/operation_mode/change_to_autonomous` (with retry)
+6. Wait for arrival (route state becomes ARRIVED)
 
-**Reusability**: Can be run multiple times in a single Autoware session without restarting.
+**Options**: `--poses <file>`, `--timeout <secs>`, `--no-wait-arrival`
 
-**Troubleshooting**: See `scripts/README.md` for common issues and solutions.
+**`scripts/capture_poses.py`** captures poses from RViz to a YAML file.
+**Options**: `-o <file>`
 
 ---
 

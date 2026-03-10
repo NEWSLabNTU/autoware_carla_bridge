@@ -116,29 +116,23 @@ run-demo:
         carla_port:={{carla_port}} \
         map_name:={{map_name}}
 
-# Run autonomous driving demo
-run-pilot:
+# Run autonomous driving demo (optional: just run-pilot /path/to/poses.yaml)
+run-pilot poses_file="":
     #!/usr/bin/env bash
     set -euo pipefail
-    POSES_FILE="{{project}}/scripts/poses.json"
-    if [ ! -f "$POSES_FILE" ]; then
-        echo "Error: poses.json not found at $POSES_FILE"
-        echo ""
-        echo "Please capture poses first:"
-        echo "  1. In RViz, click '2D Pose Estimate' and set initial pose"
-        echo "  2. In RViz, click '2D Goal Pose' and set goal pose"
-        echo "  3. Run: just run-read-poses"
-        exit 1
-    fi
     source "{{project}}/install/setup.bash"
-    exec play_launch run carla_pilot drive --ros-args -p poses_file:="$POSES_FILE"
+    POSES_FILE="{{poses_file}}"
+    if [ -z "$POSES_FILE" ]; then
+        POSES_FILE="$(ros2 pkg prefix carla_pilot)/share/carla_pilot/config/example_poses.yaml"
+    fi
+    exec ros2 run carla_pilot auto_drive --ros-args -p poses_file:="$POSES_FILE"
 
 # Capture poses from RViz interactively
-run-read-poses:
+run-capture-poses output_file:
     #!/usr/bin/env bash
     set -euo pipefail
     source "{{project}}/install/setup.bash"
-    exec play_launch run carla_pilot read_poses --ros-args -p output_file:="{{project}}/scripts/poses.json"
+    exec ros2 run carla_pilot capture_poses --ros-args -p output_file:="{{output_file}}"
 
 # Generate Lanelet2 map from running CARLA server
 generate-lanelet2 map_dir:

@@ -47,8 +47,9 @@
     name="demo_scenario"/>
 
   <!-- 5. Autonomous driving pilot -->
-  <node pkg="carla_pilot" exec="drive" name="drive_pilot" output="screen">
-    <param name="poses_file" value="$(var project_dir)/scripts/poses.json"/>
+  <node pkg="carla_pilot" exec="auto_drive" name="auto_drive" output="screen">
+    <param name="poses_file" value="$(find-pkg-share carla_pilot)/config/example_poses.yaml"/>
+    <param name="wait_for_arrival" value="false"/>
   </node>
 
   <!-- 6. Manual control monitor GUI -->
