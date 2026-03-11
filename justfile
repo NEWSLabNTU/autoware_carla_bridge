@@ -3,6 +3,7 @@
 carla_version := env_var_or_default('CARLA_VERSION', '0.9.16')
 carla_port := env_var_or_default('CARLA_PORT', '2000')
 map_name := env_var_or_default('MAP_NAME', 'Town01')
+data_path := env_var_or_default('AUTOWARE_DATA_PATH', '/opt/autoware/1.5.0/data')
 project := justfile_directory()
 
 # List available recipes
@@ -73,19 +74,20 @@ run-autoware:
     set -e
     export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
     source "{{project}}/install/setup.bash"
-    exec play_launch launch \
+    exec play_launch launch --web-addr 0.0.0.0:8080 \
         carla_autoware_launch carla_simulator.launch.xml \
         map_path:="{{project}}/data/carla-autoware-bridge/{{map_name}}" \
         vehicle_model:=carla_vehicle \
         sensor_model:=carla_sensor_kit \
-        use_sim_time:=true
+        use_sim_time:=true \
+        data_path:="{{data_path}}"
 
 # Run CARLA-Autoware bridge (foreground)
 run-bridge:
     #!/usr/bin/env bash
     set -e
     source "{{project}}/install/setup.bash"
-    exec play_launch launch \
+    exec play_launch launch --web-addr 0.0.0.0:8080 \
         autoware_carla_bridge autoware_carla_bridge.launch.xml \
         carla_port:={{carla_port}}
 
@@ -109,12 +111,13 @@ run-demo:
     set -e
     export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
     source "{{project}}/install/setup.bash"
-    exec play_launch launch \
+    exec play_launch launch --web-addr 0.0.0.0:8080 \
         carla_demo_launch demo.launch.xml \
         project_dir:="{{project}}" \
         carla_version:={{carla_version}} \
         carla_port:={{carla_port}} \
-        map_name:={{map_name}}
+        map_name:={{map_name}} \
+        data_path:="{{data_path}}"
 
 # Run autonomous driving demo (optional: just run-pilot /path/to/poses.yaml)
 run-pilot poses_file="":
