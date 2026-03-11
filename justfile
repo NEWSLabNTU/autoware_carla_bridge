@@ -64,9 +64,24 @@ test:
 run-carla:
     #!/usr/bin/env bash
     set -e
-    export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
-    cd "{{project}}/third_party/carla/carla-{{carla_version}}"
-    exec ./CarlaUE4.sh -quality-level=Low -carla-rpc-port={{carla_port}}
+    export CARLA_PORT={{carla_port}}
+    exec "{{project}}/third_party/carla/run.sh"
+
+# Start CARLA simulator as a background service
+carla-start:
+    ./scripts/carla_start.sh {{carla_port}}
+
+# Stop CARLA simulator service
+carla-stop:
+    ./scripts/carla_stop.sh {{carla_port}}
+
+# Check CARLA service status
+carla-status:
+    systemctl --user status "carla-run-{{carla_port}}" || true
+
+# View CARLA service logs
+carla-logs *args:
+    journalctl --user -u "carla-run-{{carla_port}}" {{args}}
 
 # Run Autoware planning simulator (foreground)
 run-autoware:
@@ -101,11 +116,10 @@ run-scenario:
 run-monitor:
     #!/usr/bin/env bash
     set -e
-    export CARLA_VERSION={{carla_version}}
     source "{{project}}/install/setup.bash"
     exec play_launch run manual_control manual_control
 
-# Run full demo - CARLA + Autoware + bridge + scenario + pilot + monitor (foreground)
+# Run full demo - Autoware + bridge + scenario + pilot + monitor (CARLA must be running)
 run-demo:
     #!/usr/bin/env bash
     set -e
@@ -114,7 +128,6 @@ run-demo:
     exec play_launch launch --web-addr 0.0.0.0:8080 \
         carla_demo_launch demo.launch.xml \
         project_dir:="{{project}}" \
-        carla_version:={{carla_version}} \
         carla_port:={{carla_port}} \
         map_name:={{map_name}} \
         data_path:="{{data_path}}"

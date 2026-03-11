@@ -80,62 +80,58 @@ No manual staging or configuration required - builds like any ROS 2 package.
 
 ### Runtime Management (justfile)
 
-**Autoware Management**:
+**CARLA Management** (systemd service):
 ```bash
-just autoware start     # Start Autoware planning simulator
-just autoware restart   # Restart Autoware
-just autoware stop      # Stop Autoware
-just autoware logs      # View logs
-just autoware status    # Check status
+just carla-start    # Start CARLA as background service
+just carla-stop     # Stop CARLA service
+just carla-status   # Check CARLA service status
+just carla-logs     # View CARLA service logs
 ```
 
-**CARLA Management**:
+**Foreground Commands**:
 ```bash
-just carla start 0.9.16 2000   # Start CARLA (version, port)
-just carla stop 0.9.16 2000    # Stop CARLA
-just carla logs 0.9.16 2000    # View logs
-just carla status 0.9.16 2000  # Check status
+just run-autoware   # Start Autoware planning simulator (foreground)
+just run-bridge     # Start CARLA-Autoware bridge (foreground)
+just run-demo       # Start Autoware + bridge + scenario + pilot + monitor (foreground)
+just run-monitor    # Start vehicle monitor GUI (foreground)
+just run-scenario   # Start demo scenario (foreground)
+just run-pilot      # Start autonomous driving pilot (foreground)
 ```
 
-**Bridge Management**:
+**Demo Workflow** (two-step):
 ```bash
-just bridge start [port]  # Start bridge (default: 2000)
-just bridge stop          # Stop bridge
-just bridge logs          # View logs
-just bridge status        # Check status
+# 1. Start CARLA (background service, takes ~30s)
+just carla-start
+
+# 2. Start everything else (Autoware + bridge + scenario + pilot + monitor)
+just run-demo
+
+# Check CARLA status
+just carla-status
+
+# Stop CARLA when done
+just carla-stop
 ```
 
-**Demo (All-in-One)**:
-```bash
-just demo start    # Start CARLA + Autoware + Bridge
-just demo stop     # Stop all services
-just demo status   # Check all services
-just demo logs     # View all logs
-```
-
-The demo workflow:
-1. **Phase 1**: Starts CARLA and Autoware in parallel using GNU Parallel
-2. **Phase 2**: Starts bridge after both are ready (5s initialization wait)
+CARLA is started separately because it takes a long time to initialize. The bridge and scenario have retry loops for CARLA connection.
 
 **Autonomous Driving**:
 ```bash
-# Start all services
-just demo start
+# Start CARLA
+just carla-start
 
-# Capture poses from RViz (if not already captured)
-just run-capture-poses
+# Start demo
+just run-demo
 
-# Run autonomous driving
-just run-drive
+# (Optional) Capture poses from RViz
+just run-capture-poses /path/to/output.yaml
 
-# Watch bridge logs (in another terminal)
-just bridge logs -f
+# (Optional) Run pilot separately
+just run-pilot /path/to/poses.yaml
 
-# Stop all services
-just demo stop
+# Stop CARLA
+just carla-stop
 ```
-
-**Environment Variables**: The justfile automatically passes `RMW_IMPLEMENTATION`, `ROS_DOMAIN_ID`, and `ROS_LOCALHOST_ONLY` to Autoware if set.
 
 ---
 
@@ -408,18 +404,18 @@ mapping values are not allowed here
 
 ```bash
 # Correct - simple command in background
-env DISPLAY=:1 just demo start 2>&1
+just run-demo 2>&1
 # (with run_in_background=true)
 
 # Incorrect - don't add sleep/echo/wait patterns
-env DISPLAY=:1 just demo start 2>&1 &
+just run-demo 2>&1 &
 sleep 80
 echo "=== Done ==="
 ```
 
 The Bash tool's `run_in_background` parameter handles background execution properly. Adding shell backgrounding (`&`), sleep/wait patterns clutters the command and makes output harder to track.
 
-**Checking status**: Use `just demo status` or `BashOutput` tool to check background job output.
+**Checking status**: Use `just carla-status` or `BashOutput` tool to check background job output.
 
 ### Systemd Service Commands
 
@@ -552,36 +548,34 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 
 ### Quick Start
 
-1. **Start all services**:
+1. **Start CARLA** (background service):
    ```bash
-   just demo start
-   # Starts CARLA + Autoware + Bridge
+   just carla-start
    ```
 
-2. **Capture Poses in RViz** (if not already captured):
+2. **Start demo** (Autoware + bridge + scenario + pilot + monitor):
+   ```bash
+   just run-demo
+   ```
+
+3. **Capture Poses in RViz** (if not already captured):
    ```bash
    # In RViz:
    # - Click "2D Pose Estimate" → set initial position
    # - Click "2D Goal Pose" → set goal position
 
    # Capture poses:
-   just run-capture-poses
-   # Saves to scripts/poses.yaml
-   ```
-
-3. **Run Autonomous Driving**:
-   ```bash
-   just run-drive
+   just run-capture-poses /path/to/output.yaml
    ```
 
 4. **Monitor** (optional, in another terminal):
    ```bash
-   just bridge logs -f
+   just carla-logs -f
    ```
 
-5. **Stop all services**:
+5. **Stop CARLA**:
    ```bash
-   just demo stop
+   just carla-stop
    ```
 
 ### Script Details

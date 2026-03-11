@@ -7,19 +7,24 @@ Native ROS 2 bridge between CARLA and Autoware. Written in Rust.
 - Auto-detects Autoware and reads sensor config from URDF
 - Spawns vehicles in CARLA with matching sensors
 - Bridges sensor data (LiDAR, cameras, GNSS, IMU) to ROS 2
-- Supports CARLA 0.9.14, 0.9.15, 0.9.16
+- Supports CARLA 0.9.16
 
 ## Quick Start
 
+Ensure `DISPLAY` is set to an available display before starting CARLA or Autoware.
+
 ```bash
-# One command to run everything
-env DISPLAY=:1 just demo start
+# 1. Start CARLA (runs as background service)
+just carla-start
+
+# 2. Start demo (Autoware + bridge + scenario)
+just run-demo
 
 # Check status
-just demo status
+just carla-status
 
 # Stop
-just demo stop
+just carla-stop
 ```
 
 ## Setup
@@ -43,56 +48,52 @@ git submodule update --init --recursive
 mkdir -p third_party/autoware
 ln -s /path/to/autoware/workspace third_party/autoware/autoware_repo
 
-# 3. Configure CARLA symlinks (for just commands)
-cd third_party/carla
-ln -s /path/to/CARLA_0.9.16 carla-0.9.16
-ln -s /path/to/CARLA_0.9.15 carla-0.9.15  # optional
-cd ../..
+# 3. Configure CARLA path
+# Edit CARLA_DIR in third_party/carla/run.sh to point to your installation
+vi third_party/carla/run.sh
 
 # 4. Install deps and build
-just install-deps
+just setup
 just build
 ```
-
-**Run scripts**: CARLA run scripts (`run-0.9.*.sh`) are provided in `third_party/carla/`. Autoware run script (`run-planning-simulation.sh`) is provided in `third_party/autoware/`.
 
 ## Running
 
 ### Demo Mode
 
 ```bash
-env DISPLAY=:1 just demo start    # Start all
-just demo logs                     # View logs
-just demo stop                     # Stop all
+just carla-start             # Start CARLA service
+just run-demo                # Start Autoware + bridge + scenario
+just carla-stop              # Stop CARLA service
 ```
 
 ### Manual
 
 ```bash
-just carla start 0.9.16 2000      # Start CARLA
-just autoware start                # Start Autoware
-just bridge start                  # Start bridge
+just carla-start      # Start CARLA
+just run-autoware     # Start Autoware (foreground)
+just run-bridge       # Start bridge (foreground)
 ```
 
 ### Direct
 
 ```bash
 source install/setup.bash
-ros2 run autoware_carla_bridge autoware_carla_bridge --carla-port 2000
+ros2 launch autoware_carla_bridge autoware_carla_bridge.launch.xml carla_port:=2000
 ```
 
 ## Configuration
 
-**CARLA symlinks:** Configured in `third_party/carla/carla-0.9.*/` (see Install step 3)
+**CARLA path:** Edit `CARLA_DIR` in `third_party/carla/run.sh` (see Install step 3)
 
-**Autoware maps:** Uses `~/autoware_map/sample-map-planning` in demo mode
+**Autoware maps:** Pre-converted maps in `data/carla-autoware-bridge/` (Town01-10)
 
 ## Verify
 
 ```bash
 ros2 topic list
 ros2 topic echo /clock
-just bridge logs
+just carla-status
 ```
 
 ## Troubleshooting
@@ -100,15 +101,15 @@ just bridge logs
 | Issue               | Solution                                              |
 |---------------------|-------------------------------------------------------|
 | Can't find Autoware | Check `ls -la third_party/autoware/autoware_repo`     |
-| CARLA run script not found | Configure symlinks: `ls -la third_party/carla/` |
-| CARLA timeout       | Verify CARLA running: `just carla status 0.9.16 2000` |
+| CARLA run script not found | Edit `CARLA_DIR` in `third_party/carla/run.sh`  |
+| CARLA timeout       | Verify CARLA running: `just carla-status`             |
 | Build fails         | Run `just clean && just build`                        |
 
 ## Docs
 
-- [Sensor Configuration](docs/sensor-configuration-strategy.md)
-- [Map Integration](docs/carla-autoware-map-integration.md)
-- [Development Roadmap](docs/roadmap.md)
+- [Sensor Configuration](docs/design/sensor-configuration-strategy.md)
+- [Map Generation Guide](docs/guides/automated-map-generation.md)
+- [Development Roadmap](docs/roadmap/)
 
 ## License
 

@@ -1,34 +1,25 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- CARLA Demo Launch
-     Launches the full CARLA + Autoware + bridge demo stack in one command.
+     Launches Autoware + bridge + scenario + pilot + monitor.
+     CARLA must be started separately via `just carla-start`.
 
      Components launched:
-     1. CARLA simulator (executable)
-     2. Autoware planning simulator (via carla_simulator.launch.xml)
-     3. CARLA-Autoware bridge (via autoware_carla_bridge.launch.xml)
-     4. Demo scenario - loads map and configures CARLA (executable)
-     5. Autonomous driving pilot (node)
-     6. Manual control monitor GUI (node)
+     1. Autoware planning simulator (via carla_simulator.launch.xml)
+     2. CARLA-Autoware bridge (via autoware_carla_bridge.launch.xml)
+     3. Demo scenario - loads map and configures CARLA (executable)
+     4. Autonomous driving pilot (node)
+     5. Manual control monitor GUI (node)
 -->
 <launch>
   <!-- Required args -->
   <arg name="project_dir" description="Project root directory"/>
 
   <!-- Configurable args with defaults matching justfile -->
-  <arg name="carla_version" default="0.9.16" description="CARLA version"/>
   <arg name="carla_port" default="2000" description="CARLA RPC port"/>
   <arg name="map_name" default="Town01" description="CARLA map name"/>
   <arg name="data_path" default="/opt/autoware/1.5.0/data" description="Autoware ML models and data directory"/>
 
-  <!-- 1. CARLA simulator -->
-  <executable
-    cmd="$(var project_dir)/third_party/carla/carla-$(var carla_version)/CarlaUE4.sh -quality-level=Low -carla-rpc-port=$(var carla_port)"
-    output="screen"
-    name="carla_simulator">
-    <env name="VK_ICD_FILENAMES" value="/usr/share/vulkan/icd.d/nvidia_icd.json"/>
-  </executable>
-
-  <!-- 2. Autoware planning simulator -->
+  <!-- 1. Autoware planning simulator -->
   <include file="$(find-pkg-share carla_autoware_launch)/launch/carla_simulator.launch.xml">
     <arg name="map_path" value="$(var project_dir)/data/carla-autoware-bridge/$(var map_name)"/>
     <arg name="vehicle_model" value="carla_vehicle"/>
@@ -37,25 +28,23 @@
     <arg name="data_path" value="$(var data_path)"/>
   </include>
 
-  <!-- 3. CARLA-Autoware bridge -->
+  <!-- 2. CARLA-Autoware bridge -->
   <include file="$(find-pkg-share autoware_carla_bridge)/launch/autoware_carla_bridge.launch.xml">
     <arg name="carla_port" value="$(var carla_port)"/>
   </include>
 
-  <!-- 4. Demo scenario - loads map and configures CARLA -->
+  <!-- 3. Demo scenario - loads map and configures CARLA -->
   <executable
     cmd="$(var project_dir)/scripts/demo_scenario.py --port $(var carla_port) --map $(var map_name)"
     output="screen"
     name="demo_scenario"/>
 
-  <!-- 5. Autonomous driving pilot -->
+  <!-- 4. Autonomous driving pilot -->
   <node pkg="carla_pilot" exec="auto_drive" name="auto_drive" output="screen">
     <param name="poses_file" value="$(find-pkg-share carla_pilot)/config/example_poses.yaml"/>
     <param name="wait_for_arrival" value="false"/>
   </node>
 
-  <!-- 6. Manual control monitor GUI -->
-  <node pkg="manual_control" exec="manual_control" name="manual_control" output="screen">
-    <env name="CARLA_VERSION" value="$(var carla_version)"/>
-  </node>
+  <!-- 5. Manual control monitor GUI -->
+  <node pkg="manual_control" exec="manual_control" name="manual_control" output="screen"/>
 </launch>
