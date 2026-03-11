@@ -7,7 +7,7 @@
      - Includes autoware.launch.xml with launch_localization=false
      - Includes tier4_localization_component separately with CARLA-optimized NDT parameters
      - Disables traffic light recognition (use_traffic_light_recognition=false)
-     - Includes autoware_carla_interface when simulator_type is carla
+     - autoware_carla_interface disabled (replaced by native Rust bridge)
 -->
 <launch>
   <!-- Essential parameters -->
@@ -20,7 +20,7 @@
   <arg name="map_path" description="point cloud and lanelet2 map directory path"/>
   <arg name="vehicle_model" default="sample_vehicle" description="vehicle model name"/>
   <arg name="sensor_model" default="sample_sensor_kit" description="sensor model name"/>
-  <arg name="data_path" default="$(env HOME)/autoware_data" description="packages data and artifacts directory path"/>
+  <arg name="data_path" default="/opt/autoware/1.5.0/data" description="packages data and artifacts directory path"/>
   <arg name="simulator_type" default="carla" description="select the simulator type"/>
 
   <!-- launch module preset -->
@@ -66,10 +66,10 @@
   <!-- CARLA-optimized MRM handler config - relaxed timeouts for simulation -->
   <arg name="carla_mrm_handler_path" default="$(find-pkg-share carla_autoware_launch)/config/system/mrm_handler/mrm_handler.param.yaml"/>
 
-  <!-- Include autoware_carla_interface for CARLA integration -->
-  <group scoped="false" if="$(eval &quot;'$(var simulator_type)' == 'carla'&quot;)">
+  <!-- autoware_carla_interface is replaced by our native Rust bridge (autoware_carla_bridge) -->
+  <!-- <group scoped="false" if="$(eval &quot;'$(var simulator_type)' == 'carla'&quot;)">
     <include file="$(find-pkg-share autoware_carla_interface)/autoware_carla_interface.launch.xml"/>
-  </group>
+  </group> -->
 
   <!-- Pre-set CARLA planning args before autoware.launch.xml includes the
        default_preset.yaml. YAML includes modify the parent context, and child

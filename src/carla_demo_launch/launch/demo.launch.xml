@@ -18,6 +18,7 @@
   <arg name="carla_version" default="0.9.16" description="CARLA version"/>
   <arg name="carla_port" default="2000" description="CARLA RPC port"/>
   <arg name="map_name" default="Town01" description="CARLA map name"/>
+  <arg name="data_path" default="/opt/autoware/1.5.0/data" description="Autoware ML models and data directory"/>
 
   <!-- 1. CARLA simulator -->
   <executable
@@ -33,6 +34,7 @@
     <arg name="vehicle_model" value="carla_vehicle"/>
     <arg name="sensor_model" value="carla_sensor_kit"/>
     <arg name="use_sim_time" value="true"/>
+    <arg name="data_path" value="$(var data_path)"/>
   </include>
 
   <!-- 3. CARLA-Autoware bridge -->
