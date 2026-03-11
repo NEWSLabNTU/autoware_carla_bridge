@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.dependencies]
-carla = "0.13.0"
+carla = "0.14.0"
 
 # Custom profile: release with debug info and assertions
 # Useful for debugging performance issues while maintaining release optimizations

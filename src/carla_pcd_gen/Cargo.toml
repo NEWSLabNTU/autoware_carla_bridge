@@ -6,7 +6,7 @@ description = "Generate Autoware-compatible point cloud maps from CARLA"
 license = "Apache-2.0"
 
 [dependencies]
-carla = "0.13.0"
+carla.workspace = true
 nalgebra = "0.34.1"
 clap = { version = "4", features = ["derive"] }
 eyre = "0.6"

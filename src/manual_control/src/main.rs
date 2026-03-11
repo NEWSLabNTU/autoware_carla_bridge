@@ -112,13 +112,42 @@ async fn main() -> Result<()> {
     // Parse configuration (TODO: Add CLI arguments)
     let config = Config::default();
 
-    // Connect to CARLA server
+    // Connect to CARLA server with retry loop
     info!("Connecting to CARLA at {}:{}", config.host, config.port);
-    let mut client = carla::client::Client::connect(&config.host, config.port, None);
+    let mut client = loop {
+        match carla::client::Client::try_connect(&config.host, config.port, None) {
+            Ok(mut c) => {
+                c.set_timeout(std::time::Duration::from_secs(30));
+                match c.try_world() {
+                    Ok(_) => {
+                        info!("Connected to CARLA successfully");
+                        break c;
+                    }
+                    Err(e) => {
+                        info!("CARLA not ready: {e}, retrying in 5 seconds...");
+                        std::thread::sleep(std::time::Duration::from_secs(5));
+                    }
+                }
+            }
+            Err(e) => {
+                info!("Failed to connect to CARLA: {e}, retrying in 5 seconds...");
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        }
+    };
 
-    // ✅ Subphase 12.1.2: Create world and spawn vehicle
-    let mut world = self::world::World::new(&client, &config)?;
-    info!("✓ World initialized, vehicle spawned");
+    // Wait for a vehicle to appear (spawned by the bridge)
+    info!("Waiting for bridge to spawn a vehicle...");
+    let mut world = loop {
+        match self::world::World::new(&client, &config) {
+            Ok(w) => break w,
+            Err(_) => {
+                info!("No vehicle found yet, retrying in 5 seconds...");
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        }
+    };
+    info!("✓ World initialized, attached to vehicle");
 
     // ✅ Subphase 12.2.1: Create camera manager and spawn RGB camera
     let mut camera = self::camera::CameraManager::new(config.width, config.height, config.gamma);

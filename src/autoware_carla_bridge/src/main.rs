@@ -228,25 +228,24 @@ fn main() -> Result<()> {
 
     // Retry connecting to CARLA in an infinite loop
     let client = loop {
-        match std::panic::catch_unwind(|| {
-            Client::connect(&params.carla_address, params.carla_port, None)
-        }) {
-            Ok(client) => {
+        match Client::try_connect(&params.carla_address, params.carla_port, None) {
+            Ok(mut client) => {
+                client.set_timeout(Duration::from_secs(30));
                 // Try to access world to verify connection is working
-                match std::panic::catch_unwind(|| client.world()) {
+                match client.try_world() {
                     Ok(_) => {
                         tracing::info!("Connected to CARLA successfully");
                         break client;
                     }
-                    Err(_) => {
-                        tracing::warn!("CARLA connection failed, retrying in 2 seconds...");
-                        std::thread::sleep(Duration::from_secs(2));
+                    Err(e) => {
+                        tracing::warn!("CARLA not ready: {e}, retrying in 5 seconds...");
+                        std::thread::sleep(Duration::from_secs(5));
                     }
                 }
             }
-            Err(_) => {
-                tracing::warn!("Failed to connect to CARLA, retrying in 2 seconds...");
-                std::thread::sleep(Duration::from_secs(2));
+            Err(e) => {
+                tracing::warn!("Failed to connect to CARLA: {e}, retrying in 5 seconds...");
+                std::thread::sleep(Duration::from_secs(5));
             }
         }
 
