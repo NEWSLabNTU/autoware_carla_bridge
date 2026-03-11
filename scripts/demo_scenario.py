@@ -164,8 +164,16 @@ def main():
     # Create and run scenario
     scenario = DemoScenario(host=args.host, port=args.port, map_name=args.map)
 
-    if not scenario.connect():
-        sys.exit(1)
+    # Retry connecting to CARLA until it's ready
+    while True:
+        if scenario.connect():
+            break
+        print("Retrying in 5 seconds...")
+        try:
+            time.sleep(5)
+        except KeyboardInterrupt:
+            print("\nAborted.")
+            sys.exit(0)
 
     if not scenario.setup():
         sys.exit(1)
