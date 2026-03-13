@@ -18,8 +18,3 @@ spawn_pose:
 # (bypasses Autoware localization - useful for testing)
 # Ground truth is always published to /carla/ground_truth/* for debug/evaluation
 publish_direct_localization: false
-
-# Automatic localization initialization
-# Set to true to automatically call /api/localization/initialize service
-# after Autoware is detected. Uses spawn_pose as the initial pose for NDT.
-auto_initialize_localization: true

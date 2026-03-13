@@ -33,7 +33,7 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
 - ✅ Vehicle control:
   - Subscribes to `/control/command/actuation_cmd` (ActuationCommandStamped)
   - Publishes VelocityReport, SteeringReport, ControlModeReport, GearReport at ~20Hz
-  - GNSS PoseWithCovarianceStamped for localization (bypasses gnss_poser)
+  - GNSS NavSatFix → gnss_poser → pose_initializer (standard Autoware localization)
 - ✅ Connection robustness:
   - Infinite retry loops for CARLA connection with panic catching
   - Infinite wait for Autoware detection with executor spinning
@@ -278,19 +278,19 @@ NDT scan matching is purely geometric -- it aligns point cloud shapes. As long a
 - `/api/routing/clear_route` - Clear existing route
 - `/api/operation_mode/change_to_autonomous` - Engage autonomous mode (not `change_operation_mode`)
 
-**Topic Endpoints** (used by Rust bridge):
+**Topic Endpoints** (monitored by Rust bridge):
 - `/localization/initialization_state` (autoware_adapi_v1_msgs/LocalizationInitializationState)
   - State values: 0=UNKNOWN, 1=UNINITIALIZED, 2=INITIALIZING, 3=INITIALIZED
-  - Bridge monitors state changes to trigger vehicle spawning
+  - Bridge monitors state changes (reserved for future respawn support)
 - `/localization/kinematic_state` (nav_msgs/Odometry)
   - Provides current vehicle pose in map frame
-  - Bridge uses this as initial pose when state becomes INITIALIZED
+  - Bridge captures pose when state becomes INITIALIZED (reserved for future respawn)
 
 **Bridge Integration**:
-- Bridge subscribes to both topics on startup
-- When localization state transitions to INITIALIZED (3), bridge extracts pose from kinematic state
-- Vehicle spawns at this pose in CARLA
-- No backward compatibility with legacy `/initialpose` topic (removed as of 2025-11-23)
+- Bridge subscribes to both topics on startup for monitoring and future respawn support
+- Localization initialization is handled externally (e.g., by `carla_pilot` / `auto_drive.py`)
+- Bridge publishes GNSS NavSatFix → gnss_poser converts to PoseWithCovariance for pose_initializer
+- Maps use `projector_type: TransverseMercator` (matching CARLA's `+proj=tmerc +lat_0=0 +lon_0=0`)
 
 **Important**:
 - Route planning requires poses on **connected lanes** in lanelet2 map
@@ -679,6 +679,11 @@ Our `carla_simulator.launch.xml` sets `system_run_mode=logging_simulation` to di
 **Status**: Phases 1-4 Complete - End-to-end autonomous driving working
 **Remaining**: Vehicle calibration (Phase 4.4), map automation (Phase 5), formal testing (Phase 6)
 **Recent Changes**:
+- ✅ **Standard GNSS→NDT localization pipeline** (2026-03-11):
+  - Removed bridge localization init bypass (no longer publishes to `/sensing/gnss/pose_with_covariance` or calls `/api/localization/initialize`)
+  - Enabled gnss_poser in sensing pipeline (`sensing.launch.xml`)
+  - Changed map projector from `local` to `TransverseMercator` (matches CARLA's `+proj=tmerc +lat_0=0 +lon_0=0`)
+  - Localization initialization now handled externally (e.g., `carla_pilot` / `auto_drive.py`)
 - ✅ **MRM handler timeout configuration for CARLA** (2025-12-12):
   - Fixed MRM oscillation causing EMERGENCY_STOP flickering and autonomous mode unavailability
   - Root cause: Default MRM handler timeouts too aggressive for simulation (0.5s availability, 0.01s behavior calls)
@@ -715,7 +720,5 @@ Our `carla_simulator.launch.xml` sets `system_run_mode=logging_simulation` to di
   - Fixed duplicate link error in sensor_kit.xacro
   - Removed colon-containing XML comments causing YAML parsing failures
   - Demo environment stability verified (all services running)
-- ✅ Bridge now uses modern Autoware localization API exclusively (2025-11-23)
-- ✅ Removed backward compatibility with legacy `/initialpose` topic (2025-11-23)
-- ✅ Vehicle spawning triggered by localization state transitions (2025-11-23)
+- ✅ Bridge monitors Autoware localization state for future respawn support (2025-11-23)
 - ✅ End-to-end autonomous driving test confirmed working (2025-11-23)

@@ -277,7 +277,6 @@ fn main() -> Result<()> {
     let mut autoware = autoware::Autoware::new(
         node.clone(),
         bridge_config.publish_direct_localization,
-        bridge_config.auto_initialize_localization,
     )?;
 
     tracing::info!("Waiting for Autoware to start...");

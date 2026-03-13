@@ -19,11 +19,6 @@ pub struct BridgeConfig {
     /// Set to true for testing without Autoware localization
     #[serde(default)]
     pub publish_direct_localization: bool,
-
-    /// Automatically initialize localization via /api/localization/initialize service
-    /// Uses spawn_pose as the initial pose for NDT localization
-    #[serde(default)]
-    pub auto_initialize_localization: bool,
 }
 
 /// Vehicle spawn pose configuration (CARLA coordinates)
@@ -88,14 +83,6 @@ impl BridgeConfig {
                 "disabled"
             }
         );
-        tracing::info!(
-            "Auto-initialize localization: {}",
-            if config.auto_initialize_localization {
-                "enabled"
-            } else {
-                "disabled"
-            }
-        );
 
         Ok(config)
     }
@@ -112,49 +99,4 @@ impl BridgeConfig {
         nalgebra::Isometry3::from_parts(translation, rotation)
     }
 
-    /// Convert spawn pose to ROS PoseWithCovarianceStamped for localization init
-    ///
-    /// NOTE: The pointcloud map was created with CARLA's native coordinate system,
-    /// so we pass the CARLA coordinates directly (no Y-axis flip or yaw sign flip).
-    /// This ensures the initial pose matches the map's coordinate convention.
-    pub fn to_ros_pose_with_covariance(&self) -> geometry_msgs::msg::PoseWithCovarianceStamped {
-        use crate::coordinate_conversion;
-
-        // Use CARLA coordinates directly (no conversion)
-        // The pointcloud map was created with CARLA's native coordinate system
-        let pos_x = self.spawn_pose.position.x;
-        let pos_y = self.spawn_pose.position.y;
-        let pos_z = self.spawn_pose.position.z;
-
-        // Use CARLA yaw directly (no sign flip)
-        let yaw_rad = self.spawn_pose.orientation.yaw.to_radians();
-
-        // Convert to quaternion
-        let quat = coordinate_conversion::euler_to_quaternion(0.0, 0.0, yaw_rad);
-
-        // Build message
-        let mut msg = geometry_msgs::msg::PoseWithCovarianceStamped::default();
-        msg.header.frame_id = "map".to_string();
-        // Timestamp will be set by caller
-
-        msg.pose.pose.position.x = pos_x;
-        msg.pose.pose.position.y = pos_y;
-        msg.pose.pose.position.z = pos_z;
-
-        msg.pose.pose.orientation.w = quat.w;
-        msg.pose.pose.orientation.x = quat.i;
-        msg.pose.pose.orientation.y = quat.j;
-        msg.pose.pose.orientation.z = quat.k;
-
-        // Set covariance (small values indicate high confidence)
-        // Same as drive_in_autoware.py
-        msg.pose.covariance[0] = 0.25; // x variance
-        msg.pose.covariance[7] = 0.25; // y variance
-        msg.pose.covariance[14] = 0.25; // z variance
-        msg.pose.covariance[21] = 0.01; // roll variance
-        msg.pose.covariance[28] = 0.01; // pitch variance
-        msg.pose.covariance[35] = 0.06853891909122467; // yaw variance
-
-        msg
-    }
 }

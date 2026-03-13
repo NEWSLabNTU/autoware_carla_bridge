@@ -29,9 +29,12 @@ MAP_CONFIG_YAML = """\
 """
 
 MAP_PROJECTOR_INFO_YAML = """\
-projector_type: local
+projector_type: TransverseMercator
 vertical_datum: WGS84
-mgrs_grid: 31NAA
+map_origin:
+  latitude: 0.0
+  longitude: 0.0
+scale_factor: 1.0
 """
 
 
