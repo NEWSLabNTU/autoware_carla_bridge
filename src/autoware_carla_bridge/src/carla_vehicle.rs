@@ -60,7 +60,7 @@ impl CarlaVehicle {
         let vehicle = Self::spawn_vehicle(world, &vehicle_config.vehicle.blueprint, initial_pose)?;
 
         // Log actual spawned position in CARLA
-        let spawned_transform = vehicle.transform();
+        let spawned_transform = vehicle.transform()?;
         tracing::info!(
             "Vehicle spawned in CARLA (CARLA coords): x={:.1}, y={:.1}, z={:.1}",
             spawned_transform.location.x,
@@ -101,7 +101,7 @@ impl CarlaVehicle {
         initial_pose: &nalgebra::Isometry3<f32>,
     ) -> Result<Vehicle> {
         // Get blueprint from library
-        let blueprint_library = world.blueprint_library();
+        let blueprint_library = world.blueprint_library()?;
         let vehicle_bp = blueprint_library.find(vehicle_blueprint).ok_or_else(|| {
             BridgeError::AutowareIssue(format!(
                 "Vehicle blueprint '{}' not found",
@@ -142,7 +142,7 @@ impl CarlaVehicle {
         // Wait for CARLA to process the spawn before querying actor state
         // Works for both sync mode (waits for tick) and async mode (times out after 100ms)
         tracing::debug!("Waiting for CARLA to process spawn...");
-        let _ = world.wait_for_tick_or_timeout(std::time::Duration::from_millis(100));
+        let _ = world.wait_for_tick_or_timeout(std::time::Duration::from_millis(100))?;
 
         let vehicle = match actor.into_kinds() {
             carla::client::ActorKind::Vehicle(v) => v,
@@ -163,7 +163,7 @@ impl CarlaVehicle {
         vehicle_config: &VehicleConfig,
         tf_buffer: &TFBuffer,
     ) -> Result<(HashMap<String, Sensor>, HashMap<String, SensorType>)> {
-        let blueprint_library = world.blueprint_library();
+        let blueprint_library = world.blueprint_library()?;
         let mut spawned_sensors = HashMap::new();
         let mut sensor_types = HashMap::new();
 
@@ -300,22 +300,24 @@ impl CarlaVehicle {
         // Destroy all sensors first
         for (name, sensor) in self.sensors.drain() {
             tracing::info!("Destroying sensor '{}' (ID: {})", name, sensor.id());
-            let destroyed = sensor.destroy();
-            if !destroyed {
-                tracing::warn!(
+            match sensor.destroy() {
+                Ok(true) => {}
+                Ok(false) => tracing::warn!(
                     "Sensor '{}' destroy returned false - may already be destroyed",
                     name
-                );
+                ),
+                Err(e) => tracing::warn!("Sensor '{}' destroy failed: {e}", name),
             }
         }
 
         // Destroy vehicle
         tracing::info!("Destroying vehicle: ID={}", self.vehicle.id());
-        let destroyed = self.vehicle.destroy();
-        if !destroyed {
-            tracing::warn!("Vehicle destroy returned false - may already be destroyed");
-        } else {
-            tracing::info!("Vehicle destroyed successfully");
+        match self.vehicle.destroy() {
+            Ok(true) => tracing::info!("Vehicle destroyed successfully"),
+            Ok(false) => {
+                tracing::warn!("Vehicle destroy returned false - may already be destroyed")
+            }
+            Err(e) => tracing::warn!("Vehicle destroy failed: {e}"),
         }
 
         Ok(())

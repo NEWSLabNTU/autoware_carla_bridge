@@ -128,12 +128,12 @@ impl SensorBridge {
 
         // Check if sensor has a parent (should have one if attached to vehicle)
         let _parent = actor
-            .parent()
+            .parent()?
             .ok_or(BridgeError::OwnerlessSensor { sensor_id })?;
 
         // Get sensor name
         let sensor_name = actor
-            .attributes()
+            .attributes()?
             .iter()
             .find(|attr| attr.id() == "role_name")
             .map(|attr| attr.value_string())
@@ -236,7 +236,7 @@ fn register_camera_rgb(
 
     // Get camera parameters
     let width = actor
-        .attributes()
+        .attributes()?
         .iter()
         .find(|attr| attr.id() == "image_size_x")
         .ok_or(BridgeError::CarlaIssue("no image_size_x"))?
@@ -245,7 +245,7 @@ fn register_camera_rgb(
         .try_into_int()
         .or(Err(BridgeError::CarlaIssue("Unable to transform into int")))? as u32;
     let height = actor
-        .attributes()
+        .attributes()?
         .iter()
         .find(|attr| attr.id() == "image_size_y")
         .ok_or(BridgeError::CarlaIssue("no image_size_y"))?
@@ -254,7 +254,7 @@ fn register_camera_rgb(
         .try_into_int()
         .or(Err(BridgeError::CarlaIssue("Unable to transform into int")))? as u32;
     let fov = actor
-        .attributes()
+        .attributes()?
         .iter()
         .find(|attr| attr.id() == "fov")
         .ok_or(BridgeError::CarlaIssue("no fov"))?
@@ -284,7 +284,7 @@ fn register_camera_rgb(
         } else {
             tracing::error!("Failed to transform camera image");
         }
-    });
+    })?;
 
     Ok(())
 }
@@ -316,7 +316,7 @@ fn register_lidar_raycast(
         } else {
             tracing::error!("Failed to transform lidar data");
         }
-    });
+    })?;
 
     Ok(())
 }
@@ -348,7 +348,7 @@ fn register_lidar_raycast_semantic(
         } else {
             tracing::error!("Failed to transform semantic lidar data");
         }
-    });
+    })?;
 
     Ok(())
 }
@@ -378,7 +378,7 @@ fn register_imu(
         } else {
             tracing::error!("Failed to transform IMU data");
         }
-    });
+    })?;
 
     Ok(())
 }
@@ -408,7 +408,7 @@ fn register_gnss(
         } else {
             tracing::error!("Failed to transform GNSS data");
         }
-    });
+    })?;
 
     Ok(())
 }

@@ -18,6 +18,9 @@ pub enum BridgeError {
     #[error("The issue is from Carla: {0}")]
     CarlaIssue(&'static str),
 
+    #[error("CARLA error: {0}")]
+    Carla(#[from] carla::CarlaError),
+
     #[error("Autoware detection error: {0}")]
     AutowareIssue(String),
 

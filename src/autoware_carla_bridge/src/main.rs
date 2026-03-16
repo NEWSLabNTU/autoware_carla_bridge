@@ -183,6 +183,61 @@ impl BridgeParams {
     }
 }
 
+/// Connect to CARLA with infinite retry loop.
+///
+/// Returns a connected Client with timeout configured. Checks the `running` flag
+/// between attempts to allow graceful shutdown via Ctrl-C.
+fn connect_to_carla(params: &BridgeParams, running: &AtomicBool) -> Option<Client> {
+    tracing::info!(
+        "Connecting to CARLA at {}:{}...",
+        params.carla_address,
+        params.carla_port
+    );
+
+    loop {
+        match Client::connect(&params.carla_address, params.carla_port, None) {
+            Ok(mut client) => {
+                if let Err(e) = client.set_timeout(Duration::from_secs(30)) {
+                    tracing::warn!("Failed to set timeout: {e}, retrying in 5 seconds...");
+                    std::thread::sleep(Duration::from_secs(5));
+                    continue;
+                }
+                match client.world() {
+                    Ok(_) => {
+                        tracing::info!("Connected to CARLA successfully");
+                        return Some(client);
+                    }
+                    Err(e) => {
+                        tracing::warn!("CARLA not ready: {e}, retrying in 5 seconds...");
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to connect to CARLA: {e}, retrying in 5 seconds...");
+            }
+        }
+
+        if !running.load(Ordering::SeqCst) {
+            tracing::info!("Shutdown requested while connecting to CARLA");
+            return None;
+        }
+
+        std::thread::sleep(Duration::from_secs(5));
+    }
+}
+
+/// Run one CARLA tick iteration, returning the elapsed simulation seconds.
+///
+/// Returns `Err` if CARLA is disconnected. The caller should reconnect.
+fn carla_tick(
+    world: &carla::client::World,
+    timeout: Duration,
+) -> std::result::Result<f64, carla::CarlaError> {
+    let _ = world.wait_for_tick_or_timeout(timeout)?;
+    let snapshot = world.snapshot()?;
+    Ok(snapshot.timestamp().elapsed_seconds)
+}
+
 fn main() -> Result<()> {
     // Install color-eyre for better error reporting
     color_eyre::install().expect("Failed to install color-eyre");
@@ -219,53 +274,7 @@ fn main() -> Result<()> {
     tracing::info!("=== Autoware-CARLA Bridge (Autoware-centric) ===");
     tracing::info!("Vehicle blueprint: {}", params.vehicle_blueprint);
 
-    // === Step 3: Connect to CARLA ===
-    tracing::info!(
-        "Connecting to CARLA at {}:{}...",
-        params.carla_address,
-        params.carla_port
-    );
-
-    // Retry connecting to CARLA in an infinite loop
-    let client = loop {
-        match Client::try_connect(&params.carla_address, params.carla_port, None) {
-            Ok(mut client) => {
-                client.set_timeout(Duration::from_secs(30));
-                // Try to access world to verify connection is working
-                match client.try_world() {
-                    Ok(_) => {
-                        tracing::info!("Connected to CARLA successfully");
-                        break client;
-                    }
-                    Err(e) => {
-                        tracing::warn!("CARLA not ready: {e}, retrying in 5 seconds...");
-                        std::thread::sleep(Duration::from_secs(5));
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Failed to connect to CARLA: {e}, retrying in 5 seconds...");
-                std::thread::sleep(Duration::from_secs(5));
-            }
-        }
-
-        // Check for Ctrl-C during retry
-        if !running.load(Ordering::SeqCst) {
-            tracing::info!("Shutdown requested while connecting to CARLA");
-            return Ok(());
-        }
-    };
-
-    // Load map if specified, otherwise use current map
-    let mut world = if let Some(ref map_name) = params.map_name {
-        tracing::info!("Loading CARLA map: {}", map_name);
-        utils::load_world_smart(&client, map_name)
-    } else {
-        tracing::info!("Using current CARLA map");
-        client.world()
-    };
-
-    // Create clock publisher
+    // Create clock publisher (persists across reconnections)
     let simulator_clock = SimulatorClock::new(node.clone())?;
 
     // === Step 3: Load bridge configuration ===
@@ -274,23 +283,19 @@ fn main() -> Result<()> {
 
     // === Step 4: Create Autoware coordinator and wait for Autoware ===
     tracing::info!("Creating Autoware coordinator...");
-    let mut autoware = autoware::Autoware::new(
-        node.clone(),
-        bridge_config.publish_direct_localization,
-    )?;
+    let mut autoware =
+        autoware::Autoware::new(node.clone(), bridge_config.publish_direct_localization)?;
 
     tracing::info!("Waiting for Autoware to start...");
     tracing::info!("(Start Autoware planning simulator with sample_sensor_kit)");
     tracing::info!("Listening for /robot_description topic...");
 
     // Wait for Autoware indefinitely (user controls timeout via Ctrl-C)
-    // Note: autoware_timeout CLI parameter is ignored for robustness
     let start_time = std::time::Instant::now();
     let mut last_log_time = std::time::Instant::now();
     let mut attempt_count = 0u32;
 
     loop {
-        // Spin executor to process ROS callbacks (e.g., /robot_description subscription)
         executor.spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(100)));
 
         if autoware.is_alive() {
@@ -304,7 +309,6 @@ fn main() -> Result<()> {
 
         attempt_count += 1;
 
-        // Log progress every 5 seconds
         if last_log_time.elapsed() >= Duration::from_secs(5) {
             tracing::info!(
                 "Still waiting for Autoware... (attempt {}, {:.0}s elapsed)",
@@ -324,21 +328,17 @@ fn main() -> Result<()> {
     tracing::info!("Autoware detected!");
 
     // === Step 4.5: Wait for TF transforms to be fully received ===
-    // The /tf_static topic may arrive in multiple messages from different publishers
-    // We need to ensure all transforms from the sensor_kit are available before spawning
     tracing::info!("Waiting for TF transforms to be received...");
     let tf_start_time = std::time::Instant::now();
     let tf_timeout = Duration::from_secs(10);
-    let min_transforms = 4; // At minimum: sensor_kit_base_link, top_base_link, top, and at least one sensor
+    let min_transforms = 4;
 
     loop {
-        // Spin executor to process TF callbacks
         executor.spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(100)));
 
         let tf_count = autoware.get_tf_buffer().get_all_frames().len();
         if tf_count >= min_transforms {
             tracing::info!("TF transforms ready: {} frames available", tf_count);
-            // Log available frames for debugging
             let frames = autoware.get_tf_buffer().get_all_frames();
             tracing::debug!("Available TF frames: {:?}", frames);
             break;
@@ -355,7 +355,6 @@ fn main() -> Result<()> {
                 "Available frames: {:?}",
                 autoware.get_tf_buffer().get_all_frames()
             );
-            // Continue anyway - the sensor spawning will fail with more specific error
             break;
         }
 
@@ -364,7 +363,6 @@ fn main() -> Result<()> {
             return Ok(());
         }
 
-        // Log progress every 2 seconds
         if tf_start_time.elapsed().as_secs() % 2 == 0 {
             tracing::debug!(
                 "Waiting for TF... {} transforms (need {})",
@@ -394,145 +392,209 @@ fn main() -> Result<()> {
         );
     }
 
-    // === Step 6: Spawn vehicle and sensors in CARLA ===
-    tracing::info!("Spawning vehicle and sensors in CARLA...");
-    let carla_vehicle = CarlaVehicle::new(
-        &mut world,
-        &initial_pose,
-        &vehicle_config,
-        autoware.get_tf_buffer(),
-    )?;
+    // ========================================================================
+    // CARLA connection loop: connect → spawn → run → reconnect on disconnect
+    // ========================================================================
+    loop {
+        // === Connect to CARLA ===
+        let client = match connect_to_carla(&params, &running) {
+            Some(c) => c,
+            None => return Ok(()), // Ctrl-C during connection
+        };
 
-    // Wrap CarlaVehicle in Arc<Mutex<>> for shared access
-    let carla_vehicle = Arc::new(Mutex::new(carla_vehicle));
+        // Load map if specified, otherwise use current map
+        let mut world = {
+            let result = if let Some(ref map_name) = params.map_name {
+                tracing::info!("Loading CARLA map: {}", map_name);
+                utils::load_world_smart(&client, map_name)
+            } else {
+                tracing::info!("Using current CARLA map");
+                client.world()
+            };
+            match result {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::error!("Failed to get CARLA world: {e}, reconnecting...");
+                    continue;
+                }
+            }
+        };
 
-    // Set vehicle reference in Autoware for ground truth publishing and localization init
-    autoware.set_vehicle(carla_vehicle.clone());
-
-    // Get raw vehicle for control callbacks (must be done after wrapping)
-    let vehicle_guard = carla_vehicle.lock().unwrap();
-    let vehicle = vehicle_guard.get_vehicle();
-    let vehicle_shared = Arc::new(Mutex::new(Some(vehicle.clone())));
-    drop(vehicle_guard);
-
-    tracing::info!("Vehicle and sensors spawned successfully!");
-
-    // === Step 7: Register sensors with Autoware for topic mapping ===
-    tracing::info!("Registering sensors with Autoware...");
-    for (link_name, sensor_type) in carla_vehicle.lock().unwrap().get_sensor_types() {
-        // Map sensor_config::SensorType to bridge::sensor_bridge::SensorType
-        let bridge_sensor_type = match sensor_type {
-            sensor_config::SensorType::Camera => bridge::sensor_bridge::SensorType::CameraRgb,
-            sensor_config::SensorType::Lidar => bridge::sensor_bridge::SensorType::LidarRayCast,
-            sensor_config::SensorType::Imu => bridge::sensor_bridge::SensorType::Imu,
-            sensor_config::SensorType::Gnss => bridge::sensor_bridge::SensorType::Gnss,
-            sensor_config::SensorType::Radar => {
-                tracing::debug!(
-                    "Radar sensor '{}' not yet supported for topic mapping",
-                    link_name
-                );
+        // === Spawn vehicle and sensors in CARLA ===
+        tracing::info!("Spawning vehicle and sensors in CARLA...");
+        let carla_vehicle = match CarlaVehicle::new(
+            &mut world,
+            &initial_pose,
+            &vehicle_config,
+            autoware.get_tf_buffer(),
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!("Failed to spawn vehicle: {e}, reconnecting in 5s...");
+                std::thread::sleep(Duration::from_secs(5));
                 continue;
             }
         };
 
-        autoware.add_sensors(bridge_sensor_type, link_name.clone());
-        tracing::info!(
-            "  Registered sensor '{}' (type: {:?})",
-            link_name,
-            sensor_type
-        );
-    }
+        let carla_vehicle = Arc::new(Mutex::new(carla_vehicle));
+        autoware.set_vehicle(carla_vehicle.clone());
 
-    // === Step 8: Create sensor bridges ===
-    tracing::info!("Creating sensor bridges...");
-    let _sensor_bridges =
-        create_sensor_bridges(node.clone(), &carla_vehicle.lock().unwrap(), &autoware)?;
-    tracing::info!("Created {} sensor bridges", _sensor_bridges.len());
+        let vehicle_guard = carla_vehicle.lock().unwrap();
+        let vehicle = vehicle_guard.get_vehicle();
+        let vehicle_shared = Arc::new(Mutex::new(Some(vehicle.clone())));
+        drop(vehicle_guard);
 
-    // === Step 9: Create vehicle control bridge ===
-    tracing::info!("Creating vehicle control bridge...");
-    let vehicle_control =
-        vehicle_control::VehicleControlBridge::new(node.clone(), vehicle_shared.clone())?;
-    tracing::info!("Vehicle control bridge created");
+        tracing::info!("Vehicle and sensors spawned successfully!");
 
-    tracing::info!("=== Bridge running ===");
-
-    // Main loop timing: 20Hz (50ms per iteration)
-    // Used for rate limiting in async mode
-    const LOOP_RATE_HZ: u64 = 20;
-    let loop_duration = Duration::from_millis(1000 / LOOP_RATE_HZ);
-
-    // === Main Loop ===
-    // Works in both sync and async modes:
-    // - Sync mode: wait_for_tick blocks until CARLA ticks
-    // - Async mode: wait_for_tick times out, rate limiting prevents busy loop
-    while running.load(Ordering::SeqCst) {
-        let loop_start = std::time::Instant::now();
-
-        // Check Autoware health
-        autoware.health_check();
-        if !autoware.is_alive() {
-            tracing::warn!("Autoware connection lost! Cleaning up...");
-            carla_vehicle.lock().unwrap().cleanup()?;
-            tracing::info!("Cleanup complete. Waiting for Autoware to restart...");
-
-            // Wait for Autoware to come back
-            loop {
-                // Spin executor to process ROS callbacks
-                executor.spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(100)));
-
-                if autoware.is_alive() {
-                    tracing::info!("Autoware reconnected!");
-                    break;
+        // === Register sensors with Autoware for topic mapping ===
+        tracing::info!("Registering sensors with Autoware...");
+        for (link_name, sensor_type) in carla_vehicle.lock().unwrap().get_sensor_types() {
+            let bridge_sensor_type = match sensor_type {
+                sensor_config::SensorType::Camera => bridge::sensor_bridge::SensorType::CameraRgb,
+                sensor_config::SensorType::Lidar => bridge::sensor_bridge::SensorType::LidarRayCast,
+                sensor_config::SensorType::Imu => bridge::sensor_bridge::SensorType::Imu,
+                sensor_config::SensorType::Gnss => bridge::sensor_bridge::SensorType::Gnss,
+                sensor_config::SensorType::Radar => {
+                    tracing::debug!(
+                        "Radar sensor '{}' not yet supported for topic mapping",
+                        link_name
+                    );
+                    continue;
                 }
-                if !running.load(Ordering::SeqCst) {
-                    tracing::info!("Shutdown requested during Autoware wait");
-                    return Ok(());
-                }
+            };
+
+            autoware.add_sensors(bridge_sensor_type, link_name.clone());
+            tracing::info!(
+                "  Registered sensor '{}' (type: {:?})",
+                link_name,
+                sensor_type
+            );
+        }
+
+        // === Create sensor bridges ===
+        tracing::info!("Creating sensor bridges...");
+        let _sensor_bridges =
+            create_sensor_bridges(node.clone(), &carla_vehicle.lock().unwrap(), &autoware)?;
+        tracing::info!("Created {} sensor bridges", _sensor_bridges.len());
+
+        // === Create vehicle control bridge ===
+        tracing::info!("Creating vehicle control bridge...");
+        let vehicle_control =
+            vehicle_control::VehicleControlBridge::new(node.clone(), vehicle_shared.clone())?;
+        tracing::info!("Vehicle control bridge created");
+
+        tracing::info!("=== Bridge running ===");
+
+        // Main loop timing: 20Hz (50ms per iteration)
+        const LOOP_RATE_HZ: u64 = 20;
+        let loop_duration = Duration::from_millis(1000 / LOOP_RATE_HZ);
+
+        // Track consecutive CARLA failures to distinguish transient from persistent issues
+        let mut consecutive_failures: u32 = 0;
+        const MAX_CONSECUTIVE_FAILURES: u32 = 3;
+
+        // === Main Loop ===
+        let carla_disconnected = loop {
+            if !running.load(Ordering::SeqCst) {
+                break false;
             }
 
-            // TODO: Re-spawn vehicle and sensors
-            tracing::warn!("Autoware reconnected, but vehicle respawn not yet implemented");
-            tracing::warn!("Please restart the bridge");
-            break;
+            let loop_start = std::time::Instant::now();
+
+            // Check Autoware health
+            autoware.health_check();
+            if !autoware.is_alive() {
+                tracing::warn!("Autoware connection lost! Cleaning up...");
+                let _ = carla_vehicle.lock().unwrap().cleanup();
+                tracing::info!("Cleanup complete. Waiting for Autoware to restart...");
+
+                loop {
+                    executor
+                        .spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(100)));
+
+                    if autoware.is_alive() {
+                        tracing::info!("Autoware reconnected!");
+                        break;
+                    }
+                    if !running.load(Ordering::SeqCst) {
+                        tracing::info!("Shutdown requested during Autoware wait");
+                        return Ok(());
+                    }
+                }
+
+                // TODO: Re-spawn vehicle and sensors
+                tracing::warn!("Autoware reconnected, but vehicle respawn not yet implemented");
+                tracing::warn!("Please restart the bridge");
+                return Ok(());
+            }
+
+            // Wait for next CARLA tick and get simulation time.
+            let sec = match carla_tick(&world, loop_duration) {
+                Ok(sec) => {
+                    consecutive_failures = 0;
+                    sec
+                }
+                Err(e) => {
+                    consecutive_failures += 1;
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                        tracing::error!(
+                            "CARLA disconnected ({consecutive_failures} consecutive failures, \
+                             last error: {e}), will reconnect..."
+                        );
+                        break true;
+                    }
+                    tracing::warn!(
+                        "CARLA tick failed ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}): \
+                         {e}, retrying..."
+                    );
+                    std::thread::sleep(Duration::from_secs(1));
+                    continue;
+                }
+            };
+
+            // Publish clock
+            if let Err(e) = simulator_clock.publish_clock(Some(sec)) {
+                tracing::warn!("Failed to publish clock: {e}");
+            }
+
+            // Spin executor to process ROS callbacks (subscriptions)
+            executor.spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(10)));
+
+            // Main tick: ground truth publishing
+            if let Err(e) = autoware.tick(sec) {
+                tracing::warn!("Autoware tick failed: {}", e);
+            }
+
+            // Publish vehicle status (velocity, steering, control mode)
+            if let Err(e) = vehicle_control.publish_status(sec) {
+                tracing::warn!("Failed to publish vehicle status: {e}");
+            }
+
+            // Rate limiting
+            let next_iteration = loop_start + loop_duration;
+            let now = std::time::Instant::now();
+            if next_iteration > now {
+                std::thread::sleep(next_iteration - now);
+            }
+        };
+
+        // Clean up old vehicle before reconnecting or exiting
+        tracing::info!("Cleaning up CARLA actors...");
+        // Best-effort cleanup: CARLA may already be gone
+        if let Err(e) = carla_vehicle.lock().unwrap().cleanup() {
+            tracing::warn!("Cleanup failed (CARLA may be gone): {e}");
         }
 
-        // Wait for next CARLA tick (sync mode) or timeout (async mode)
-        // Short timeout allows responsive shutdown and works for async mode
-        let _ = world.wait_for_tick_or_timeout(loop_duration);
+        // Clear vehicle reference so stale pointers aren't used
+        vehicle_shared.lock().unwrap().take();
 
-        // Get current simulation time
-        let snapshot = world.snapshot();
-        let timestamp = snapshot.timestamp();
-        let sec = timestamp.elapsed_seconds;
-
-        // Publish clock
-        simulator_clock.publish_clock(Some(sec))?;
-
-        // Spin executor to process ROS callbacks (subscriptions)
-        executor.spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(10)));
-
-        // === Main tick: ground truth publishing + localization init ===
-        // All pose/init logic is now encapsulated in autoware.tick()
-        if let Err(e) = autoware.tick(sec as f64) {
-            tracing::warn!("Autoware tick failed: {}", e);
+        if !carla_disconnected {
+            // Normal shutdown (Ctrl-C)
+            tracing::info!("Bridge shutdown complete");
+            return Ok(());
         }
 
-        // Publish vehicle status (velocity, steering, control mode)
-        vehicle_control.publish_status(sec)?;
-
-        // Rate limiting: sleep until next scheduled iteration
-        // This prevents timing drift from accumulating
-        let next_iteration = loop_start + loop_duration;
-        let now = std::time::Instant::now();
-        if next_iteration > now {
-            std::thread::sleep(next_iteration - now);
-        }
+        // CARLA disconnected — loop back to reconnect
+        tracing::info!("Attempting to reconnect to CARLA...");
     }
-
-    tracing::info!("Cleaning up...");
-    carla_vehicle.lock().unwrap().cleanup()?;
-    tracing::info!("Bridge shutdown complete");
-
-    Ok(())
 }

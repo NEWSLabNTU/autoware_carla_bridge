@@ -124,7 +124,7 @@ impl VehicleControlBridge {
             }
 
             // Apply control to vehicle
-            v.apply_control(&control);
+            v.apply_control(&control)?;
 
             tracing::debug!(
                 "Applied control: steer={:.3}, throttle={:.3}, brake={:.3}",
@@ -152,9 +152,9 @@ impl VehicleControlBridge {
             };
 
             // Get vehicle state from CARLA
-            let velocity_vec = vehicle.velocity();
-            let angular_velocity_vec = vehicle.angular_velocity();
-            let control = vehicle.control();
+            let velocity_vec = vehicle.velocity()?;
+            let angular_velocity_vec = vehicle.angular_velocity()?;
+            let control = vehicle.control()?;
 
             // Calculate velocities
             let longitudinal_velocity =

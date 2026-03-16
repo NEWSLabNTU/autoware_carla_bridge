@@ -78,7 +78,7 @@ impl VehicleBridge {
 
         // Get vehicle name from role_name attribute for logging
         let vehicle_name = actor
-            .attributes()
+            .attributes()?
             .iter()
             .find(|attr| attr.id() == "role_name")
             .map(|attr| attr.value_string())
@@ -214,7 +214,7 @@ impl VehicleBridge {
     }
 
     fn pub_current_actuation(&mut self, timestamp: f64) -> Result<()> {
-        let control = self.actor.control();
+        let control = self.actor.control()?;
         let mut header = utils::create_ros_header(Some(timestamp));
         header.frame_id = String::from("base_link");
 
@@ -239,14 +239,14 @@ impl VehicleBridge {
     }
 
     fn pub_current_velocity(&mut self, timestamp: f64) -> Result<()> {
-        let velocity = self.actor.velocity();
+        let velocity = self.actor.velocity()?;
         let mut header = utils::create_ros_header(Some(timestamp));
         header.frame_id = String::from("base_link");
 
         let velocity_msg = autoware_vehicle_msgs::msg::VelocityReport {
             header,
             // Since the velocity report from Carla is always positive, we need to check reverse.
-            longitudinal_velocity: if self.actor.control().reverse {
+            longitudinal_velocity: if self.actor.control()?.reverse {
                 -velocity.norm()
             } else {
                 velocity.norm()
@@ -254,7 +254,7 @@ impl VehicleBridge {
             lateral_velocity: 0.0,
             heading_rate: -self
                 .actor
-                .wheel_steer_angle(VehicleWheelLocation::FL_Wheel)
+                .wheel_steer_angle(VehicleWheelLocation::FL_Wheel)?
                 .to_radians(),
         };
 
@@ -278,7 +278,7 @@ impl VehicleBridge {
             },
             steering_tire_angle: -self
                 .actor
-                .wheel_steer_angle(VehicleWheelLocation::FL_Wheel)
+                .wheel_steer_angle(VehicleWheelLocation::FL_Wheel)?
                 .to_radians(),
         };
 
@@ -363,7 +363,7 @@ impl VehicleBridge {
         out
     }
 
-    fn update_carla_control(&mut self, timestamp: f64) {
+    fn update_carla_control(&mut self, timestamp: f64) -> Result<()> {
         let tier4_vehicle_msgs::msg::ActuationCommandStamped {
             actuation:
                 tier4_vehicle_msgs::msg::ActuationCommand {
@@ -399,11 +399,12 @@ impl VehicleBridge {
         };
 
         // Convert steer_cmd based on steering curve and speed of the vehicle
-        let steering_curve = self.actor.physics_control().steering_curve;
+        let physics = self.actor.physics_control()?;
+        let steering_curve = physics.steering_curve;
         let v_x: Vec<f32> = steering_curve.iter().map(|v| v.x).collect();
         let v_y: Vec<f32> = steering_curve.iter().map(|v| v.y).collect();
 
-        let current_speed = self.actor.velocity().x.abs();
+        let current_speed = self.actor.velocity()?.x.abs();
         let max_steer_ratio = interp(&v_x, &v_y, current_speed, &InterpMode::default());
 
         let steer_norm = self.first_order_steering((-steer_cmd) as f32, timestamp);
@@ -417,7 +418,7 @@ impl VehicleBridge {
             reverse,
             manual_gear_shift: false,
             gear: 0,
-        });
+        })?;
 
         tracing::debug!(
             "Bridge => Carla: throttle={:.3}, steer={:.3}, brake={:.3}, hand_brake={}, reverse={}",
@@ -427,6 +428,7 @@ impl VehicleBridge {
             hand_brake,
             reverse,
         );
+        Ok(())
     }
 
     pub fn vehicle_name(&self) -> &str {
@@ -443,7 +445,7 @@ impl ActorBridge for VehicleBridge {
         self.pub_current_control(timestamp)?;
         self.pub_current_indicator(timestamp)?;
         self.pub_hazard_light(timestamp)?;
-        self.update_carla_control(timestamp);
+        self.update_carla_control(timestamp)?;
         Ok(())
     }
 }
@@ -451,13 +453,13 @@ impl ActorBridge for VehicleBridge {
 impl Drop for VehicleBridge {
     fn drop(&mut self) {
         tracing::info!("Cleaning up vehicle bridge: {}", self.vehicle_name());
-        if self.actor.destroy() {
-            tracing::info!("Destroyed vehicle actor: {}", self.vehicle_name());
-        } else {
-            tracing::warn!(
-                "Failed to destroy vehicle actor: {} (may have already been destroyed)",
+        match self.actor.destroy() {
+            Ok(true) => tracing::info!("Destroyed vehicle actor: {}", self.vehicle_name()),
+            Ok(false) => tracing::warn!(
+                "Vehicle actor destroy returned false: {} (may have already been destroyed)",
                 self.vehicle_name()
-            );
+            ),
+            Err(e) => tracing::warn!("Vehicle actor destroy failed: {e}"),
         }
     }
 }

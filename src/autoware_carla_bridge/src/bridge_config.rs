@@ -98,5 +98,4 @@ impl BridgeConfig {
         );
         nalgebra::Isometry3::from_parts(translation, rotation)
     }
-
 }

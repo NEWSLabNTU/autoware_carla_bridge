@@ -161,10 +161,7 @@ impl Autoware {
     ///
     /// # Returns
     /// Result containing Autoware instance or error
-    pub fn new(
-        node: rclrs::Node,
-        publish_direct_localization: bool,
-    ) -> Result<Self> {
+    pub fn new(node: rclrs::Node, publish_direct_localization: bool) -> Result<Self> {
         tracing::info!("Initializing Autoware coordinator...");
         tracing::info!(
             "Direct localization publishing: {}",
@@ -639,9 +636,9 @@ impl Autoware {
         let vehicle = vehicle_guard.get_vehicle();
 
         // Get CARLA transform/velocity
-        let transform = vehicle.transform();
-        let velocity = vehicle.velocity();
-        let angular_velocity = vehicle.angular_velocity();
+        let transform = vehicle.transform()?;
+        let velocity = vehicle.velocity()?;
+        let angular_velocity = vehicle.angular_velocity()?;
 
         // Convert to nalgebra for coordinate conversion
         let na_transform = transform.to_na();
