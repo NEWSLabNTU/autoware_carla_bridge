@@ -9,6 +9,9 @@ members = [
 [workspace.dependencies]
 carla = "0.14.0"
 
+[patch.crates-io]
+carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "b26f9c7" }
+
 # Custom profile: release with debug info and assertions
 # Useful for debugging performance issues while maintaining release optimizations
 [profile.dev-release]
