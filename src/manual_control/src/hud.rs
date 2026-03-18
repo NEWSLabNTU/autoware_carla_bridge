@@ -137,18 +137,17 @@ impl Hud {
         // ✅ Subphase 12.4.2: Gather vehicle telemetry
         if let Some(ref player) = world.player {
             // Get vehicle transform and velocity
-            let transform = player.transform();
-            let velocity = player.velocity();
+            if let (Ok(transform), Ok(velocity)) = (player.transform(), player.velocity()) {
+                // Calculate speed in km/h
+                let velocity_ms =
+                    (velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z)
+                        .sqrt();
+                self.speed_kmh = velocity_ms * 3.6; // m/s to km/h
 
-            // Calculate speed in km/h
-            let velocity_ms =
-                (velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z)
-                    .sqrt();
-            self.speed_kmh = velocity_ms * 3.6; // m/s to km/h
-
-            // Get location from transform
-            let location = transform.location;
-            self.location = (location.x, location.y, location.z);
+                // Get location from transform
+                let location = transform.location;
+                self.location = (location.x, location.y, location.z);
+            }
 
             // Get vehicle blueprint ID as name
             if self.vehicle_name.is_empty() {
@@ -159,8 +158,9 @@ impl Hud {
 
         // Get map name
         if self.map_name.is_empty() {
-            let map = world.world.map();
-            self.map_name = map.name();
+            if let Ok(map) = world.world.map() {
+                self.map_name = map.name();
+            }
         }
 
         // ✅ Subphase 12.5.3: Update collision sensor frame count
@@ -170,14 +170,15 @@ impl Hud {
 
         // ✅ Subphase 12.6.1: Get vehicle control state
         if let Some(ref player) = world.player {
-            let control = player.control();
-            self.throttle = control.throttle;
-            self.steer = control.steer;
-            self.brake = control.brake;
-            self.hand_brake = control.hand_brake;
-            self.reverse = control.reverse;
-            self.gear = control.gear;
-            self.manual_gear_shift = control.manual_gear_shift;
+            if let Ok(control) = player.control() {
+                self.throttle = control.throttle;
+                self.steer = control.steer;
+                self.brake = control.brake;
+                self.hand_brake = control.hand_brake;
+                self.reverse = control.reverse;
+                self.gear = control.gear;
+                self.manual_gear_shift = control.manual_gear_shift;
+            }
         }
 
         // ✅ Subphase 12.6.2: Calculate nearby vehicles
@@ -195,10 +196,16 @@ impl Hud {
             None => return,
         };
 
-        let player_location = player.transform().location;
+        let player_location = match player.transform() {
+            Ok(t) => t.location,
+            Err(_) => return,
+        };
 
         // Get all actors and filter for vehicles
-        let actors = world.world.actors();
+        let actors = match world.world.actors() {
+            Ok(a) => a,
+            Err(_) => return,
+        };
         let vehicles: Vec<_> = actors
             .iter()
             .filter(|a| a.type_id().starts_with("vehicle."))
@@ -208,8 +215,8 @@ impl Hud {
         // Calculate distances and filter within 200m
         let mut nearby: Vec<(String, f32)> = vehicles
             .iter()
-            .map(|v| {
-                let v_location = v.transform().location;
+            .filter_map(|v| {
+                let v_location = v.transform().ok()?.location;
                 let dx = v_location.x - player_location.x;
                 let dy = v_location.y - player_location.y;
                 let distance = (dx * dx + dy * dy).sqrt();
@@ -222,7 +229,7 @@ impl Hud {
                     .unwrap_or("unknown")
                     .to_string();
 
-                (name, distance)
+                Some((name, distance))
             })
             .filter(|(_, dist)| *dist <= 200.0)
             .collect();

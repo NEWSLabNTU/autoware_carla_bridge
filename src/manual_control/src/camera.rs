@@ -360,9 +360,9 @@ impl CameraManager {
         let sensor_def = &self.sensors[self.current_sensor].clone();
 
         // Get blueprint for current sensor
-        let blueprint_library = world.world.blueprint_library();
+        let blueprint_library = world.world.blueprint_library()?;
         let mut sensor_bp = blueprint_library
-            .find(&sensor_def.blueprint_id)
+            .find(&sensor_def.blueprint_id)?
             .ok_or_else(|| eyre!("{} blueprint not found", sensor_def.blueprint_id))?;
 
         // Set common camera attributes
@@ -376,8 +376,10 @@ impl CameraManager {
             if !sensor_bp.set_attribute("fov", "110.0") {
                 return Err(eyre!("Failed to set fov"));
             }
-            // Set gamma (silently fails if attribute doesn't exist)
-            let _ = sensor_bp.set_attribute("gamma", &self.gamma.to_string());
+            // Gamma attribute may not exist on all sensor types
+            if !sensor_bp.set_attribute("gamma", &self.gamma.to_string()) {
+                tracing::debug!("Could not set gamma attribute (not supported by this sensor)");
+            }
         }
 
         // Set custom attributes from sensor definition
@@ -435,7 +437,7 @@ impl CameraManager {
                         Arc::clone(&recording_frame_clone),
                     );
                 }
-            });
+            })?;
         } else {
             // LiDAR sensor
             let lidar_points_clone = Arc::clone(&self.lidar_points);
@@ -453,7 +455,7 @@ impl CameraManager {
                         height,
                     );
                 }
-            });
+            })?;
         }
 
         self.sensor = Some(sensor);
@@ -471,7 +473,9 @@ impl CameraManager {
     pub fn toggle_camera(&mut self, world: &mut crate::world::World) -> Result<()> {
         // Destroy current sensor
         if let Some(ref sensor) = self.sensor {
-            sensor.destroy();
+            if let Err(e) = sensor.destroy() {
+                tracing::warn!("Failed to destroy sensor: {e}");
+            }
         }
         self.sensor = None;
 
@@ -491,7 +495,9 @@ impl CameraManager {
     pub fn next_sensor(&mut self, world: &mut crate::world::World) -> Result<String> {
         // Destroy current sensor
         if let Some(ref sensor) = self.sensor {
-            sensor.destroy();
+            if let Err(e) = sensor.destroy() {
+                tracing::warn!("Failed to destroy sensor: {e}");
+            }
         }
         self.sensor = None;
 
@@ -524,7 +530,9 @@ impl CameraManager {
 
         // Destroy current sensor
         if let Some(ref sensor) = self.sensor {
-            sensor.destroy();
+            if let Err(e) = sensor.destroy() {
+                tracing::warn!("Failed to destroy sensor: {e}");
+            }
         }
         self.sensor = None;
 
@@ -758,7 +766,9 @@ impl CameraManager {
     pub fn destroy(&mut self) {
         if let Some(ref sensor) = self.sensor {
             info!("Destroying camera sensor...");
-            sensor.destroy();
+            if let Err(e) = sensor.destroy() {
+                tracing::warn!("Failed to destroy sensor: {e}");
+            }
         }
         self.sensor = None;
     }

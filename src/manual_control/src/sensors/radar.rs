@@ -46,15 +46,15 @@ impl RadarSensor {
             .ok_or_else(|| eyre!("No player vehicle available"))?;
 
         // Get blueprint for sensor.other.radar
-        let blueprint_library = world.world.blueprint_library();
+        let blueprint_library = world.world.blueprint_library()?;
         let mut radar_bp = blueprint_library
-            .find("sensor.other.radar")
+            .find("sensor.other.radar")?
             .ok_or_else(|| eyre!("sensor.other.radar blueprint not found"))?;
 
         // Set radar attributes
-        let _ = radar_bp.set_attribute("horizontal_fov", "35");
-        let _ = radar_bp.set_attribute("vertical_fov", "20");
-        let _ = radar_bp.set_attribute("points_per_second", "1500");
+        eyre::ensure!(radar_bp.set_attribute("horizontal_fov", "35"), "failed to set horizontal_fov");
+        eyre::ensure!(radar_bp.set_attribute("vertical_fov", "20"), "failed to set vertical_fov");
+        eyre::ensure!(radar_bp.set_attribute("points_per_second", "1500"), "failed to set points_per_second");
 
         info!("Spawning radar sensor with FOV 35°x20°");
 
@@ -93,7 +93,10 @@ impl RadarSensor {
 
             // Convert sensor data to radar measurement
             if let Ok(radar_data) = RadarMeasurement::try_from(sensor_data) {
-                let debug = carla_world.debug();
+                let debug = match carla_world.debug() {
+                    Ok(d) => d,
+                    Err(_) => return,
+                };
                 let detections = radar_data.as_slice();
 
                 // Draw each detection as a debug point
@@ -123,10 +126,12 @@ impl RadarSensor {
                     };
 
                     // Draw debug point (size 0.1m, lifetime 0.1s)
-                    debug.draw_point(location, 0.1, color, 0.1, false);
+                    if let Err(e) = debug.draw_point(location, 0.1, color, 0.1, false) {
+                        tracing::warn!("Failed to draw radar point: {e}");
+                    }
                 }
             }
-        });
+        })?;
 
         self.sensor = Some(radar_sensor);
         info!("✓ Radar sensor spawned and listening");

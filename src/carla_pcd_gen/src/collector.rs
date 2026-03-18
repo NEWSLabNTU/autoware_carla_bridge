@@ -40,9 +40,9 @@ pub fn collect(
     });
 
     // Configure LiDAR blueprint
-    let bp_lib = world.blueprint_library();
+    let bp_lib = world.blueprint_library()?;
     let mut bp = bp_lib
-        .find("sensor.lidar.ray_cast")
+        .find("sensor.lidar.ray_cast")?
         .ok_or_else(|| eyre::eyre!("sensor.lidar.ray_cast blueprint not found"))?;
 
     let range_str = config.lidar_range.to_string();
@@ -99,7 +99,7 @@ pub fn collect(
                     let _ = tx.try_send((world_pt.x, world_pt.y, world_pt.z, det.intensity));
                 }
             }
-        });
+        })?;
 
         sensors.push(sensor);
     }
@@ -124,12 +124,12 @@ pub fn collect(
                 },
                 rotation: sp.rotation.clone(),
             };
-            sensor.set_transform(&tf);
+            sensor.set_transform(&tf)?;
         }
 
         // Tick the simulation to capture LiDAR data
         for _ in 0..config.ticks_per_position {
-            world.tick();
+            world.tick()?;
         }
 
         if (batch_idx + 1) % 10 == 0 || batch_idx + 1 == total_batches {
@@ -144,11 +144,11 @@ pub fn collect(
 
     // Stop listeners and destroy sensors
     for sensor in &sensors {
-        sensor.stop();
+        sensor.stop()?;
     }
     // Drop sensors to release channel senders (each listen callback holds a tx clone)
     for sensor in sensors {
-        sensor.destroy();
+        sensor.destroy()?;
     }
 
     // Wait for aggregator to finish

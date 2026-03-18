@@ -115,10 +115,14 @@ async fn main() -> Result<()> {
     // Connect to CARLA server with retry loop
     info!("Connecting to CARLA at {}:{}", config.host, config.port);
     let mut client = loop {
-        match carla::client::Client::try_connect(&config.host, config.port, None) {
+        match carla::client::Client::connect(&config.host, config.port, None) {
             Ok(mut c) => {
-                c.set_timeout(std::time::Duration::from_secs(30));
-                match c.try_world() {
+                if let Err(e) = c.set_timeout(std::time::Duration::from_secs(30)) {
+                    info!("Failed to set timeout: {e}, retrying in 5 seconds...");
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    continue;
+                }
+                match c.world() {
                     Ok(_) => {
                         info!("Connected to CARLA successfully");
                         break c;

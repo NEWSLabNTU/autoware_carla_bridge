@@ -505,7 +505,9 @@ fn main() -> Result<()> {
             autoware.health_check();
             if !autoware.is_alive() {
                 tracing::warn!("Autoware connection lost! Cleaning up...");
-                let _ = carla_vehicle.lock().unwrap().cleanup();
+                if let Err(e) = carla_vehicle.lock().unwrap().cleanup() {
+                    tracing::warn!("Cleanup failed: {e}");
+                }
                 tracing::info!("Cleanup complete. Waiting for Autoware to restart...");
 
                 loop {

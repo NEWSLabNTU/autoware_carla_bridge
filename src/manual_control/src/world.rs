@@ -209,17 +209,17 @@ impl World {
     /// The vehicle should be spawned by the Autoware-CARLA bridge.
     ///
     /// Returns an error if no vehicles are found in the world.
-    pub fn new(client: &Client, config: &crate::Config) -> Result<Self> {
-        let mut world = client.world();
+    pub fn new(client: &Client, _config: &crate::Config) -> Result<Self> {
+        let world = client.world()?;
 
         // Find existing vehicle in the world instead of spawning a new one
         info!("Searching for existing vehicle in CARLA world...");
 
         // In synchronous mode, wait for a tick to get fresh world state
         info!("Waiting for world tick to get current state...");
-        let _ = world.wait_for_tick();
+        let _ = world.wait_for_tick()?;
 
-        let actors = world.actors();
+        let actors = world.actors()?;
         info!("Found {} total actors in world", actors.len());
 
         // Find vehicles matching the filter
@@ -245,7 +245,7 @@ impl World {
             player.type_id()
         );
 
-        let transform = player.transform();
+        let transform = player.transform()?;
         info!(
             "  Position: ({:.2}, {:.2}, {:.2})",
             transform.location.x, transform.location.y, transform.location.z
@@ -313,7 +313,9 @@ impl World {
         }
 
         let (weather, name) = &self.weather_presets[self.current_weather];
-        self.world.set_weather(weather);
+        if let Err(e) = self.world.set_weather(weather) {
+            tracing::warn!("Failed to set weather: {e}");
+        }
         name
     }
 
@@ -337,9 +339,13 @@ impl World {
     pub fn load_map_layer(&self, unload: bool) {
         let layer = &self.map_layers[self.current_map_layer];
         if unload {
-            self.world.unload_level_layer(layer.clone());
+            if let Err(e) = self.world.unload_level_layer(layer.clone()) {
+                tracing::warn!("Failed to unload map layer: {e}");
+            }
         } else {
-            self.world.load_level_layer(layer.clone());
+            if let Err(e) = self.world.load_level_layer(layer.clone()) {
+                tracing::warn!("Failed to load map layer: {e}");
+            }
         }
     }
 

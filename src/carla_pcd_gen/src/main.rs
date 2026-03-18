@@ -65,13 +65,14 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     info!("Connecting to CARLA at {}:{}", cli.host, cli.port);
-    let mut client = carla::client::Client::connect(&cli.host, cli.port, None);
-    client.set_timeout(Duration::from_secs(30));
+    let mut client = carla::client::Client::connect(&cli.host, cli.port, None)?;
+    client.set_timeout(Duration::from_secs(30))?;
 
-    let mut world = client.world();
+    let mut world = client.world()?;
 
     // Extract map name (e.g. "Town01" from "Carla/Maps/Town01")
-    let map_name_full = world.map().name();
+    let map = world.map()?;
+    let map_name_full = map.name();
     let map_name = map_name_full
         .split('/')
         .last()
@@ -80,15 +81,15 @@ fn main() -> Result<()> {
     info!("Map: {map_name}");
 
     // Save original settings and switch to synchronous mode
-    let original_settings = world.settings();
+    let original_settings = world.settings()?;
     let mut settings = original_settings.clone();
     settings.synchronous_mode = true;
     settings.fixed_delta_seconds = Some(0.05);
     settings.no_rendering_mode = true;
-    world.apply_settings(&settings, Duration::from_secs(2));
+    world.apply_settings(&settings, Duration::from_secs(2))?;
 
     // Get spawn points
-    let all_spawn_points = world.map().recommended_spawn_points();
+    let all_spawn_points = world.map()?.recommended_spawn_points()?;
     let all_slice = all_spawn_points.as_slice();
     let spawn_points: Vec<_> = if cli.spawn_points == 0 || cli.spawn_points >= all_slice.len() {
         all_slice.to_vec()
@@ -111,7 +112,7 @@ fn main() -> Result<()> {
     info!("Collected {} voxels", grid.len());
 
     // Restore original settings
-    world.apply_settings(&original_settings, Duration::from_secs(2));
+    world.apply_settings(&original_settings, Duration::from_secs(2))?;
 
     let map_dir = &cli.map_dir;
     std::fs::create_dir_all(map_dir)?;

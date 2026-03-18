@@ -26,6 +26,7 @@ use carla::{
 };
 use eyre::Result;
 use macroquad::prelude::*;
+use tracing::warn;
 
 /// Keyboard input controller
 ///
@@ -95,7 +96,9 @@ impl KeyboardControl {
 
             // Apply autopilot setting to vehicle
             if let Some(ref player) = world.player {
-                player.set_autopilot(self.autopilot_enabled);
+                if let Err(e) = player.set_autopilot(self.autopilot_enabled) {
+                    warn!("Failed to set autopilot: {e}");
+                }
             }
 
             // Show notification
@@ -323,10 +326,14 @@ impl KeyboardControl {
             world.recording_enabled = !world.recording_enabled;
 
             if world.recording_enabled {
-                let result = client.start_recorder("manual_recording.log", false);
-                notification.set_text(format!("Recording ON: {}", result), 2.0);
+                match client.start_recorder("manual_recording.log", false) {
+                    Ok(result) => notification.set_text(format!("Recording ON: {}", result), 2.0),
+                    Err(e) => notification.set_text(format!("Recording failed: {}", e), 2.0),
+                }
             } else {
-                client.stop_recorder();
+                if let Err(e) = client.stop_recorder() {
+                    warn!("Failed to stop recorder: {e}");
+                }
                 notification.set_text("Recording OFF", 2.0);
             }
         }
@@ -337,24 +344,25 @@ impl KeyboardControl {
             if self.autopilot_enabled {
                 self.autopilot_enabled = false;
                 if let Some(ref player) = world.player {
-                    player.set_autopilot(false);
+                    if let Err(e) = player.set_autopilot(false) {
+                        warn!("Failed to disable autopilot: {e}");
+                    }
                 }
             }
 
-            let result = client.replay_file(
+            match client.replay_file(
                 "manual_recording.log",
                 world.recording_start as f32,
                 0.0,
                 0,
                 false,
-            );
-            notification.set_text(
-                format!(
-                    "Replay started at {:.1}s: {}",
-                    world.recording_start, result
+            ) {
+                Ok(result) => notification.set_text(
+                    format!("Replay started at {:.1}s: {}", world.recording_start, result),
+                    3.0,
                 ),
-                3.0,
-            );
+                Err(e) => notification.set_text(format!("Replay failed: {}", e), 3.0),
+            }
         }
 
         // ✅ Subphase 12.10.2: Ctrl+Minus/Plus - Adjust replay start time
@@ -398,10 +406,14 @@ impl KeyboardControl {
 
                 if world.doors_are_open {
                     // Try to open all doors - handle gracefully if vehicle doesn't support doors
-                    player.open_door(VehicleDoor::All);
+                    if let Err(e) = player.open_door(VehicleDoor::All) {
+                        warn!("Failed to open doors: {e}");
+                    }
                     notification.set_text("Opening doors", 2.0);
                 } else {
-                    player.close_door(VehicleDoor::All);
+                    if let Err(e) = player.close_door(VehicleDoor::All) {
+                        warn!("Failed to close doors: {e}");
+                    }
                     notification.set_text("Closing doors", 2.0);
                 }
             }
@@ -417,10 +429,14 @@ impl KeyboardControl {
                 if world.constant_velocity_enabled {
                     // 60 km/h = 16.67 m/s ≈ 17 m/s
                     let velocity = Vector3D::new(17.0, 0.0, 0.0);
-                    player.enable_constant_velocity(&velocity);
+                    if let Err(e) = player.enable_constant_velocity(&velocity) {
+                        warn!("Failed to enable constant velocity: {e}");
+                    }
                     notification.set_text("Constant velocity mode ON (60 km/h)", 2.0);
                 } else {
-                    player.disable_constant_velocity();
+                    if let Err(e) = player.disable_constant_velocity() {
+                        warn!("Failed to disable constant velocity: {e}");
+                    }
                     notification.set_text("Constant velocity mode OFF", 2.0);
                 }
             }
@@ -430,7 +446,9 @@ impl KeyboardControl {
         if is_key_pressed(KeyCode::T) {
             if let Some(ref player) = world.player {
                 world.show_vehicle_telemetry = !world.show_vehicle_telemetry;
-                player.show_debug_telemetry(world.show_vehicle_telemetry);
+                if let Err(e) = player.show_debug_telemetry(world.show_vehicle_telemetry) {
+                    warn!("Failed to toggle telemetry: {e}");
+                }
 
                 let message = if world.show_vehicle_telemetry {
                     "Vehicle telemetry ON"
@@ -468,6 +486,7 @@ impl KeyboardControl {
     /// Parse continuous vehicle keys (WASD/arrows)
     ///
     /// ✅ Subphase 12.3.1: Throttle, brake, steer implementation
+    #[allow(dead_code)]
     pub fn parse_vehicle_keys(&mut self, _delta_time: f32) {
         // Don't process manual controls if autopilot is enabled
         if self.autopilot_enabled {
@@ -510,12 +529,13 @@ impl KeyboardControl {
     ///
     /// ✅ Subphase 12.3.1: Send control to player vehicle
     /// ✅ Subphase 12.7.2: Apply light state
+    #[allow(dead_code)]
     pub fn apply_control(&mut self, world: &mut crate::world::World) -> Result<()> {
         // Only apply manual control if autopilot is disabled
         if !self.autopilot_enabled {
             if let Some(ref player) = world.player {
                 // Apply vehicle control
-                player.apply_control(&self.control);
+                player.apply_control(&self.control)?;
 
                 // ✅ Subphase 12.7.2: Automatically set brake and reverse lights
                 let mut current_lights = self.lights;
@@ -535,7 +555,7 @@ impl KeyboardControl {
                 }
 
                 // Apply light state (now type-safe with no unsafe code!)
-                player.set_light_state(&current_lights);
+                player.set_light_state(&current_lights)?;
             }
         }
         Ok(())
