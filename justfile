@@ -38,7 +38,7 @@ format:
     cargo +nightly fmt
 
 # Run format check and clippy
-lint:
+check:
     #!/usr/bin/env bash
     set -e
     source install/setup.bash
@@ -59,6 +59,9 @@ test:
         exit 1
     fi
     cargo nextest run --no-tests pass --no-fail-fast
+
+# Run CI checks: build, check (format + clippy), and tests
+ci: build check test
 
 # Run CARLA simulator (foreground)
 run-carla:
