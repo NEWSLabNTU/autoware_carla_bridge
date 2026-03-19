@@ -342,10 +342,8 @@ impl World {
             if let Err(e) = self.world.unload_level_layer(layer.clone()) {
                 tracing::warn!("Failed to unload map layer: {e}");
             }
-        } else {
-            if let Err(e) = self.world.load_level_layer(layer.clone()) {
-                tracing::warn!("Failed to load map layer: {e}");
-            }
+        } else if let Err(e) = self.world.load_level_layer(layer.clone()) {
+            tracing::warn!("Failed to load map layer: {e}");
         }
     }
 

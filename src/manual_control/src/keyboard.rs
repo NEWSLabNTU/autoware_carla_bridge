@@ -358,7 +358,10 @@ impl KeyboardControl {
                 false,
             ) {
                 Ok(result) => notification.set_text(
-                    format!("Replay started at {:.1}s: {}", world.recording_start, result),
+                    format!(
+                        "Replay started at {:.1}s: {}",
+                        world.recording_start, result
+                    ),
                     3.0,
                 ),
                 Err(e) => notification.set_text(format!("Replay failed: {}", e), 3.0),

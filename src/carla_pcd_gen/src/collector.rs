@@ -111,7 +111,7 @@ pub fn collect(
     // Process spawn points in batches of N sensors
     let num_sensors = sensors.len();
     let total_positions = spawn_points.len();
-    let total_batches = (total_positions + num_sensors - 1) / num_sensors;
+    let total_batches = total_positions.div_ceil(num_sensors);
 
     for (batch_idx, chunk) in spawn_points.chunks(num_sensors).enumerate() {
         // Teleport each sensor to its spawn point (with Z offset for roof height)
@@ -122,7 +122,7 @@ pub fn collect(
                     y: sp.location.y,
                     z: sp.location.z + 2.5,
                 },
-                rotation: sp.rotation.clone(),
+                rotation: sp.rotation,
             };
             sensor.set_transform(&tf)?;
         }

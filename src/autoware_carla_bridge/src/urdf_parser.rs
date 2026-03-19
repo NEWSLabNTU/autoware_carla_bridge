@@ -153,7 +153,7 @@ mod tests {
 
         let configs = result.unwrap();
         // Now returns all links including base_link (1 with joint = camera_link)
-        assert!(configs.len() >= 1);
+        assert!(!configs.is_empty());
         let camera = configs.iter().find(|c| c.link_name == "camera_link");
         assert!(camera.is_some());
         let camera = camera.unwrap();

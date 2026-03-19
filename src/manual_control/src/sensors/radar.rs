@@ -52,9 +52,18 @@ impl RadarSensor {
             .ok_or_else(|| eyre!("sensor.other.radar blueprint not found"))?;
 
         // Set radar attributes
-        eyre::ensure!(radar_bp.set_attribute("horizontal_fov", "35"), "failed to set horizontal_fov");
-        eyre::ensure!(radar_bp.set_attribute("vertical_fov", "20"), "failed to set vertical_fov");
-        eyre::ensure!(radar_bp.set_attribute("points_per_second", "1500"), "failed to set points_per_second");
+        eyre::ensure!(
+            radar_bp.set_attribute("horizontal_fov", "35"),
+            "failed to set horizontal_fov"
+        );
+        eyre::ensure!(
+            radar_bp.set_attribute("vertical_fov", "20"),
+            "failed to set vertical_fov"
+        );
+        eyre::ensure!(
+            radar_bp.set_attribute("points_per_second", "1500"),
+            "failed to set points_per_second"
+        );
 
         info!("Spawning radar sensor with FOV 35°x20°");
 

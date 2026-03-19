@@ -4,7 +4,7 @@ use autoware_carla_bridge::{
         carla_to_ros_position, euler_to_quaternion, quaternion_to_euler, ros_to_carla_position,
     },
     tf_bridge::TFBuffer,
-    urdf_parser::parse_urdf_sensors,
+    urdf_parser::parse_urdf_links,
 };
 use nalgebra::Vector3;
 use rclrs::{CreateBasicExecutor, SpinOptions};
@@ -59,11 +59,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Parse URDF for sensors
         tracing::info!("Parsing URDF for sensors...");
-        match parse_urdf_sensors(&urdf) {
+        match parse_urdf_links(&urdf) {
             Ok(sensors) => {
-                tracing::info!("Found {} sensors in URDF:", sensors.len());
+                tracing::info!("Found {} links in URDF:", sensors.len());
                 for sensor in &sensors {
-                    tracing::info!("  - {} (type: {:?})", sensor.link_name, sensor.sensor_type);
+                    tracing::info!("  - {}", sensor.link_name);
                     tracing::info!(
                         "    Parent: {}, Position: [{:.3}, {:.3}, {:.3}]",
                         sensor.parent_frame,

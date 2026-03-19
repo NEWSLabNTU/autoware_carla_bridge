@@ -75,7 +75,7 @@ fn main() -> Result<()> {
     let map_name_full = map.name();
     let map_name = map_name_full
         .split('/')
-        .last()
+        .next_back()
         .unwrap_or(&map_name_full)
         .to_string();
     info!("Map: {map_name}");

@@ -363,7 +363,7 @@ fn main() -> Result<()> {
             return Ok(());
         }
 
-        if tf_start_time.elapsed().as_secs() % 2 == 0 {
+        if tf_start_time.elapsed().as_secs().is_multiple_of(2) {
             tracing::debug!(
                 "Waiting for TF... {} transforms (need {})",
                 tf_count,
