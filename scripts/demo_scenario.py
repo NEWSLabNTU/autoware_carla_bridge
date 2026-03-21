@@ -26,7 +26,14 @@ except ImportError:
 class DemoScenario:
     """Manages CARLA simulation for the Autoware-CARLA bridge demo"""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 2000, map_name: str = "Town01"):
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 2000,
+        map_name: str = "Town01",
+        vehicle_blueprint: str = "vehicle.tesla.model3",
+        spawn_index: int = 0,
+    ):
         """
         Initialize the demo scenario
 
@@ -34,12 +41,17 @@ class DemoScenario:
             host: CARLA server host
             port: CARLA server port
             map_name: Name of the CARLA map to load
+            vehicle_blueprint: CARLA blueprint ID for the hero vehicle
+            spawn_index: Index into the map's spawn point list
         """
         self.host = host
         self.port = port
         self.map_name = map_name
+        self.vehicle_blueprint = vehicle_blueprint
+        self.spawn_index = spawn_index
         self.client: Optional[carla.Client] = None
         self.world: Optional[carla.World] = None
+        self.vehicle: Optional[carla.Actor] = None
 
     def connect(self) -> bool:
         """
@@ -69,9 +81,13 @@ class DemoScenario:
         Returns:
             True if setup successful, False otherwise
         """
+        client = self.client
+        if client is None:
+            print("connect() must be called before setup()")
+            return False
         try:
             # Check current map
-            current_world = self.client.get_world()
+            current_world = client.get_world()
             current_map = current_world.get_map().name
 
             # Load the requested map if different
@@ -80,11 +96,11 @@ class DemoScenario:
                 print("  (This may take 20-30 seconds...)")
 
                 # Increase timeout for map loading (can take 20-30 seconds)
-                self.client.set_timeout(60.0)
-                self.world = self.client.load_world(self.map_name)
+                client.set_timeout(60.0)
+                self.world = client.load_world(self.map_name)
 
                 # Restore normal timeout
-                self.client.set_timeout(10.0)
+                client.set_timeout(10.0)
                 print(f"✓ Map loaded: {self.map_name}")
             else:
                 print(f"Map {self.map_name} already loaded")
@@ -106,15 +122,62 @@ class DemoScenario:
             print(f"Failed to setup simulation: {e}")
             return False
 
+    def spawn_vehicle(self) -> bool:
+        """
+        Spawn the hero vehicle in CARLA
+
+        Returns:
+            True if spawning successful, False otherwise
+        """
+        world = self.world
+        if world is None:
+            print("setup() must be called before spawn_vehicle()")
+            return False
+        try:
+            blueprint_library = world.get_blueprint_library()
+            vehicle_bp = blueprint_library.find(self.vehicle_blueprint)
+            if vehicle_bp is None:
+                print(f"Blueprint '{self.vehicle_blueprint}' not found")
+                return False
+            vehicle_bp.set_attribute('role_name', 'hero')
+            spawn_points = world.get_map().get_spawn_points()
+            if not spawn_points:
+                print("No spawn points available")
+                return False
+            idx = min(self.spawn_index, len(spawn_points) - 1)
+            spawn_transform = spawn_points[idx]
+            self.vehicle = world.spawn_actor(vehicle_bp, spawn_transform)
+            print(
+                f"Spawned hero vehicle: {self.vehicle.type_id} "
+                f"ID={self.vehicle.id} "
+                f"at {spawn_transform.location}"
+            )
+            return True
+
+        except RuntimeError as e:
+            print(f"Failed to spawn vehicle: {e}")
+            return False
+
+    def cleanup(self) -> None:
+        """Destroy spawned actors"""
+        if self.vehicle is not None:
+            print(f"Destroying hero vehicle ID={self.vehicle.id}")
+            self.vehicle.destroy()
+            self.vehicle = None
+
     def run(self) -> None:
         """Run the scenario monitoring loop"""
         print("\n=== Demo Scenario Running (Async Mode) ===")
         print("Press Ctrl+C to stop\n")
 
+        world = self.world
+        if world is None:
+            print("setup() must succeed before run()")
+            return
         try:
             while True:
                 # In async mode, just monitor the world state
-                actors = self.world.get_actors()
+                actors = world.get_actors()
                 vehicles = actors.filter('vehicle.*')
                 sensors = actors.filter('sensor.*')
                 walkers = actors.filter('walker.*')
@@ -137,6 +200,7 @@ class DemoScenario:
 
         except KeyboardInterrupt:
             print("\n\n=== Stopping Demo Scenario ===")
+            self.cleanup()
 
 
 def main():
@@ -158,11 +222,28 @@ def main():
         default="Town01",
         help="CARLA map to load (default: Town01)"
     )
+    parser.add_argument(
+        "--blueprint",
+        default="vehicle.tesla.model3",
+        help="Vehicle blueprint ID (default: vehicle.tesla.model3)"
+    )
+    parser.add_argument(
+        "--spawn-index",
+        type=int,
+        default=0,
+        help="Index into the map's spawn point list (default: 0)"
+    )
 
     args = parser.parse_args()
 
     # Create and run scenario
-    scenario = DemoScenario(host=args.host, port=args.port, map_name=args.map)
+    scenario = DemoScenario(
+        host=args.host,
+        port=args.port,
+        map_name=args.map,
+        vehicle_blueprint=args.blueprint,
+        spawn_index=args.spawn_index,
+    )
 
     # Retry connecting to CARLA until it's ready
     while True:
@@ -176,6 +257,9 @@ def main():
             sys.exit(0)
 
     if not scenario.setup():
+        sys.exit(1)
+
+    if not scenario.spawn_vehicle():
         sys.exit(1)
 
     scenario.run()
