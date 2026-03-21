@@ -8,7 +8,7 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
 
 **Status**: ✅ Phases 1-4 Complete - End-to-end autonomous driving working (CARLA + Bridge + Autoware). Remaining: vehicle calibration, map automation, formal testing.
 
-**Recent**: ✅ Modern Autoware localization API integration (2025-11-23) - Bridge now spawns vehicles automatically when localization initializes, enabling full end-to-end autonomous driving.
+**Recent**: ✅ Bridge workflow redesign (2026-03-22) - Scenario script owns vehicle lifecycle; bridge finds hero vehicle and attaches sensors only. GNSS auto-initializes Autoware localization without manual intervention.
 
 ---
 
@@ -23,8 +23,8 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
   - Autoware instance detection via `/robot_description`
   - TF2 transform buffer with multi-hop chain traversal
   - ROS ↔ CARLA coordinate conversion
-  - Modern Autoware localization API integration
-  - Config-driven vehicle and sensor spawning (`vehicle_config.yaml`)
+  - Config-driven sensor spawning (`vehicle_config.yaml`)
+  - **Hero vehicle pattern**: bridge polls CARLA for vehicle with `role_name="hero"`, attaches sensors only (vehicle lifecycle owned by scenario script)
 - ✅ Sensor data publishing (all verified via autonomous driving):
   - Camera (Image + CameraInfo)
   - LiDAR (PointCloud2 with PointXYZIRC format for NDT)
@@ -33,19 +33,23 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
 - ✅ Vehicle control:
   - Subscribes to `/control/command/actuation_cmd` (ActuationCommandStamped)
   - Publishes VelocityReport, SteeringReport, ControlModeReport, GearReport at ~20Hz
-  - GNSS NavSatFix → gnss_poser → pose_initializer (standard Autoware localization)
+  - GNSS NavSatFix → gnss_poser → `autoware_automatic_pose_initializer_node` → NDT align → localization initialized automatically (no manual intervention)
 - ✅ Connection robustness:
   - Infinite retry loops for CARLA connection with panic catching
   - Infinite wait for Autoware detection with executor spinning
   - Graceful Ctrl-C handling during retry/wait phases
-- ✅ Vehicle cleanup on Autoware loss (respawn requires bridge restart)
+- ✅ Sensor cleanup on Autoware loss (sensors destroyed; vehicle owned by scenario script, not destroyed)
 - ✅ Responsive shutdown (100ms Ctrl-C exit)
 
 **Autonomous Driving (standalone scripts)**:
-- ✅ **`scripts/auto_drive.py`** - Full autonomous driving workflow
-  - 6-step sequence: localize → wait → route → wait → engage → wait for arrival
+- ✅ **`scripts/auto_drive.py`** - Route + engage workflow (localization now auto-handled by GNSS)
+  - Sets route via `/api/routing/set_route_points`, engages autonomous mode, waits for arrival
   - Uses Autoware AD API v1 services with retry logic and state monitoring
   - Options: `--poses`, `--timeout`, `--no-wait-arrival`
+- ✅ **`scripts/demo_scenario.py`** - Spawns hero vehicle in CARLA
+  - Sets `role_name="hero"` on spawned vehicle so bridge can find it
+  - Options: `--blueprint`, `--spawn-index`
+  - Owns vehicle lifecycle: destroys vehicle on exit
 - ✅ **`scripts/capture_poses.py`** - Captures poses from RViz
   - Subscribes to `/initialpose`, `/planning/mission_planning/goal`, `/rviz/routing/rough_goal`
   - Saves to YAML with flat format `{x, y, z, qx, qy, qz, qw}` + covariance
@@ -220,9 +224,10 @@ colcon list | grep autoware_vehicle_msgs
 
 ### Architecture
 - **Single client**: One CARLA connection vs two separate clients
-- **Stateless CarlaVehicle**: No lifecycle state machine, immediate spawning
-- **Linear workflow**: Sequential steps (detect Autoware → parse URDF → wait pose → spawn)
+- **Sensor-only CarlaVehicle**: Bridge attaches sensors to an existing hero vehicle; does not spawn or destroy the vehicle
+- **Linear workflow**: Sequential steps (detect Autoware → parse URDF → wait for hero vehicle → attach sensors)
 - **Direct publishing**: `Arc<Publisher>` from CARLA callbacks (no threading/channels)
+- **GNSS auto-localization**: GNSS → gnss_poser → `autoware_automatic_pose_initializer_node` → NDT align → localization (no manual init needed)
 
 ### Dependencies
 - **rclrs**: Native ROS 2 Rust bindings
@@ -241,9 +246,10 @@ CARLA uses a left-handed system (Y = right), ROS uses right-handed (Y = left). T
 
 | Data | Coordinate System | Y-Flip? | Why |
 |------|-------------------|---------|-----|
-| LiDAR points (live scan) | CARLA native | No | Must match PCD map for NDT |
-| PCD map (carla_pcd_gen) | CARLA native | No | Must match live LiDAR scans |
-| Vehicle pose, GNSS | ROS (right-handed) | Yes | Autoware planning expects ROS coords |
+| LiDAR points (live scan) | ROS (right-handed) | Yes | Must match pre-built PCD map (confirmed ROS frame) |
+| PCD map (pre-built TUMFTM) | ROS (right-handed) | Yes | Verified: Y range -379 to +39, points at (190.8,-130.1) |
+| GNSS NavSatFix | Map frame (y=-CARLA_y) | Yes (lat negated) | CARLA maps CARLA_y→Northing without flip; negate lat to get y=-CARLA_y |
+| Vehicle pose, GNSS pose_with_cov | ROS (right-handed) | Yes | Autoware planning expects ROS coords |
 | Velocities | ROS (right-handed) | Yes | Autoware control expects ROS coords |
 | Lanelet2 map | Local coordinates | No | Generated from OpenDRIVE, consistent with poses |
 
@@ -288,8 +294,7 @@ NDT scan matching is purely geometric -- it aligns point cloud shapes. As long a
 
 **Bridge Integration**:
 - Bridge subscribes to both topics on startup for monitoring and future respawn support
-- Localization initialization is handled externally (e.g., by `carla_pilot` / `auto_drive.py`)
-- Bridge publishes GNSS NavSatFix → gnss_poser converts to PoseWithCovariance for pose_initializer
+- Localization initialization is triggered automatically: GNSS NavSatFix → gnss_poser → `autoware_automatic_pose_initializer_node` → NDT align → initialized
 - Maps use `projector_type: TransverseMercator` (matching CARLA's `+proj=tmerc +lat_0=0 +lon_0=0`)
 
 **Important**:
@@ -580,13 +585,17 @@ carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 
 ### Script Details
 
-**`scripts/auto_drive.py`** performs a 6-step sequence:
-1. Initialize localization (publishes to `/initialpose` + calls `/api/localization/initialize`)
-2. Wait for localization convergence (monitors `/api/operation_mode/state`)
-3. Set route via `/api/routing/set_route_points` (with retry)
-4. Wait for route state to become SET
-5. Engage autonomous mode via `/api/operation_mode/change_to_autonomous` (with retry)
-6. Wait for arrival (route state becomes ARRIVED)
+**`scripts/demo_scenario.py`** spawns the hero vehicle:
+- Sets `role_name="hero"` attribute so bridge can find it via poll
+- Owns vehicle lifecycle: destroys on exit (Ctrl-C or completion)
+- Options: `--blueprint <model>`, `--spawn-index <n>`
+
+**`scripts/auto_drive.py`** performs route + engage (localization happens automatically via GNSS):
+1. Wait for localization to be INITIALIZED (monitors `/api/operation_mode/state`)
+2. Set route via `/api/routing/set_route_points` (with retry)
+3. Wait for route state to become SET
+4. Engage autonomous mode via `/api/operation_mode/change_to_autonomous` (with retry)
+5. Wait for arrival (route state becomes ARRIVED)
 
 **Options**: `--poses <file>`, `--timeout <secs>`, `--no-wait-arrival`
 
@@ -675,15 +684,30 @@ Our `carla_simulator.launch.xml` sets `system_run_mode=logging_simulation` to di
 
 ---
 
-**Last Updated**: 2026-03-03 (Roadmap docs updated to reflect actual implementation status)
+**Last Updated**: 2026-03-22
 **Status**: Phases 1-4 Complete - End-to-end autonomous driving working
 **Remaining**: Vehicle calibration (Phase 4.4), map automation (Phase 5), formal testing (Phase 6)
 **Recent Changes**:
+- ✅ **Bridge workflow redesign - scenario script owns vehicle** (2026-03-22):
+  - Scenario script (`demo_scenario.py`) spawns hero vehicle with `role_name="hero"`
+  - Bridge polls `world.actors()` for hero vehicle via `wait_for_hero_vehicle()`, attaches sensors only
+  - `CarlaVehicle::new()` takes existing `Vehicle` instead of spawning
+  - `CarlaVehicle::cleanup()` destroys sensors only (vehicle not destroyed; owned by scenario script)
+  - Removed `bridge_config.rs` (spawn_pose no longer needed)
+  - Removed `carla_pilot`/`auto_drive` from `demo.launch.xml` (localization is now fully automatic)
+  - GNSS → gnss_poser → `autoware_automatic_pose_initializer_node` → NDT align → localization initialized with no manual steps
+  - Verified: EKF pose vs CARLA actual ~6.5cm error, exact orientation match
+- ✅ **Coordinate projection fixes for correct map localization** (2026-03-21):
+  - Fixed LiDAR Y-flip: points now published in ROS frame (`y: -det.point.y`) to match pre-built PCD map
+  - Fixed GNSS latitude negation: `latitude: -measure.latitude()` so gnss_poser outputs y = -CARLA_y (map frame)
+  - Fixed gnss_poser orientation: set `use_gnss_ins_orientation: false` (CARLA IMU is sensor_msgs/Imu, not GnssInsOrientationStamped)
+  - Fixed AutowareDetector health timeout: `Duration::MAX` instead of 86400s (robot_description is latched, published once; health check was destroying vehicle after 24h)
+  - Verified: gnss_poser outputs (189.3, -129.3), NDT converges to (190.76, -130.07), EKF covariance ~0.002
 - ✅ **Standard GNSS→NDT localization pipeline** (2026-03-11):
   - Removed bridge localization init bypass (no longer publishes to `/sensing/gnss/pose_with_covariance` or calls `/api/localization/initialize`)
   - Enabled gnss_poser in sensing pipeline (`sensing.launch.xml`)
   - Changed map projector from `local` to `TransverseMercator` (matches CARLA's `+proj=tmerc +lat_0=0 +lon_0=0`)
-  - Localization initialization now handled externally (e.g., `carla_pilot` / `auto_drive.py`)
+  - Localization initialization now handled automatically by GNSS → gnss_poser → `autoware_automatic_pose_initializer_node`
 - ✅ **MRM handler timeout configuration for CARLA** (2025-12-12):
   - Fixed MRM oscillation causing EMERGENCY_STOP flickering and autonomous mode unavailability
   - Root cause: Default MRM handler timeouts too aggressive for simulation (0.5s availability, 0.01s behavior calls)
