@@ -1,14 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- CARLA Demo Launch
-     Launches Autoware + bridge + scenario + pilot + monitor.
+     Launches Autoware + bridge + scenario + monitor.
      CARLA must be started separately via `just carla-start`.
 
      Components launched:
      1. Autoware planning simulator (via carla_simulator.launch.xml)
      2. CARLA-Autoware bridge (via autoware_carla_bridge.launch.xml)
-     3. Demo scenario - loads map and configures CARLA (executable)
-     4. Autonomous driving pilot (node)
-     5. Manual control monitor GUI (node)
+     3. Demo scenario - loads map, spawns hero vehicle, configures CARLA (executable)
+     4. Manual control monitor GUI (node)
 -->
 <launch>
   <!-- Required args -->
@@ -33,18 +32,12 @@
     <arg name="carla_port" value="$(var carla_port)"/>
   </include>
 
-  <!-- 3. Demo scenario - loads map and configures CARLA -->
+  <!-- 3. Demo scenario - loads map, spawns hero vehicle, and configures CARLA -->
   <executable
     cmd="$(var project_dir)/scripts/demo_scenario.py --port $(var carla_port) --map $(var map_name)"
     output="screen"
     name="demo_scenario"/>
 
-  <!-- 4. Autonomous driving pilot -->
-  <node pkg="carla_pilot" exec="auto_drive" name="auto_drive" output="screen">
-    <param name="poses_file" value="$(find-pkg-share carla_pilot)/config/example_poses.yaml"/>
-    <param name="wait_for_arrival" value="false"/>
-  </node>
-
-  <!-- 5. Manual control monitor GUI -->
+  <!-- 4. Manual control monitor GUI -->
   <node pkg="manual_control" exec="manual_control" name="manual_control" output="screen"/>
 </launch>
