@@ -1,0 +1,10 @@
+# Goal pose for Town01 (map frame, ROS coordinates)
+# Captured via RViz "2D Goal Pose" near the Town01 intersection northwest of spawn
+goal_pose:
+  x: 153.63201904296875
+  y: -36.26857376098633
+  z: 0.0
+  qx: 0.0
+  qy: 0.0
+  qz: -0.613963783246778
+  qw: 0.7893341959280007
