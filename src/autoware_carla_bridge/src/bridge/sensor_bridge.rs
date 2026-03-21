@@ -517,10 +517,10 @@ fn publish_lidar(
                 .unwrap_or(0) as u16;
 
             PointXYZIRC {
-                // Use CARLA coordinates directly (no Y-axis flip)
-                // The pointcloud map was created with CARLA's native coordinate system
+                // Apply Y-axis flip: CARLA uses left-handed (Y=right), ROS uses right-handed (Y=left)
+                // The pre-built PCD map is in ROS frame (Y-flipped), so live scan must match.
                 x: det.point.x,
-                y: det.point.y,
+                y: -det.point.y,
                 z: det.point.z,
                 // Convert float intensity [0.0-1.0] to uint8 [0-255]
                 intensity: (det.intensity.clamp(0.0, 1.0) * 255.0) as u8,
@@ -695,7 +695,10 @@ fn publish_gnss(
             status: GnssStatus::GbasFix as i8,
             service: GnssService::Gps as u16,
         },
-        latitude: measure.latitude(),
+        // Negate latitude: CARLA maps CARLA_y (right=south) to Northing without sign flip,
+        // but the TUMFTM maps use y = -CARLA_y convention (y = ROS left = map north).
+        // Negating latitude makes gnss_poser output match the map frame (y = -CARLA_y).
+        latitude: -measure.latitude(),
         longitude: measure.longitude(),
         altitude: measure.attitude(),
         position_covariance: [0.0; 9],

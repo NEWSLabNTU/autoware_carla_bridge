@@ -14,7 +14,6 @@
       <!-- Input topics -->
       <!-- Bridge publishes to /sensing/gnss/carla/gnss_link/nav_sat_fix (sensor name from URDF) -->
       <remap from="fix" to="carla/gnss_link/nav_sat_fix"/>
-      <remap from="autoware_orientation" to="/sensing/imu/carla/imu_link/imu_raw"/>
 
       <!-- Output topics -->
       <remap from="gnss_pose" to="pose"/>
@@ -23,6 +22,9 @@
 
       <!-- Load required parameters -->
       <param from="$(find-pkg-share autoware_gnss_poser)/config/gnss_poser.param.yaml"/>
+      <!-- Disable orientation from IMU: CARLA IMU publishes sensor_msgs/Imu, not GnssInsOrientationStamped.
+           Use position-derived orientation instead. -->
+      <param name="use_gnss_ins_orientation" value="false"/>
     </node>
   </group>
 </launch>
