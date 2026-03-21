@@ -235,6 +235,16 @@ impl AutowareDetector {
         Ok(found)
     }
 
+    /// Reset the heartbeat timer
+    ///
+    /// Should be called after a long wait (e.g., spawn retry loop) to prevent
+    /// false health check failures due to elapsed time during the wait.
+    pub fn reset_heartbeat(&self) {
+        if self.state() == AutowareState::Detected {
+            *self.last_heartbeat.lock().unwrap() = Some(Instant::now());
+        }
+    }
+
     /// Perform health check to detect if Autoware has disappeared
     ///
     /// Should be called periodically. Transitions to Lost state if no

@@ -173,12 +173,13 @@ impl Autoware {
         );
 
         // Create AutowareDetector (monitors /robot_description)
-        // NOTE: Long health timeout (1 hour) because /robot_description is a latched topic
-        // that's only published once at startup, not a continuous heartbeat.
+        // NOTE: /robot_description is a latched topic published once at startup.
+        // Health timeout must be effectively infinite since there's no continuous heartbeat.
+        // Using Duration::MAX disables the health check (robot_description only arrives once).
         let detector = AutowareDetector::new(
             node.clone(),
-            None,                                       // detection_timeout: use default (60s)
-            Some(std::time::Duration::from_secs(3600)), // health_timeout: 1 hour
+            None,                         // detection_timeout: use default (60s)
+            Some(std::time::Duration::MAX), // health_timeout: effectively infinite (latched topic)
         )?;
 
         // Create TFBuffer (subscribes to /tf_static)
@@ -578,6 +579,14 @@ impl Autoware {
     /// Should be called periodically in main loop.
     pub fn health_check(&self) {
         self.detector.health_check()
+    }
+
+    /// Reset the heartbeat timer
+    ///
+    /// Call this after a long wait (e.g., spawn retry loop) to prevent
+    /// false health check failures caused by the elapsed wait time.
+    pub fn reset_heartbeat(&self) {
+        self.detector.reset_heartbeat()
     }
 
     /// Get diagnostic information about Autoware connection
