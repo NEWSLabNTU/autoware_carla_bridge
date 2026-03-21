@@ -1,7 +1,6 @@
 mod autoware;
 mod autoware_detection;
 mod bridge;
-pub mod bridge_config;
 mod carla_vehicle;
 mod clock;
 mod coordinate_conversion;
@@ -99,13 +98,10 @@ fn create_sensor_bridges(
 struct BridgeParams {
     pub carla_address: String,
     pub carla_port: u16,
-    pub map_name: Option<String>,
-    pub vehicle_blueprint: String,
-    /// Kept for CLI backward compatibility but ignored (bridge uses infinite retry)
-    #[allow(dead_code)]
-    pub autoware_timeout: u64,
     pub vehicle_config: String,
-    pub bridge_config: String,
+    /// Publish pose directly to /localization/kinematic_state (bypasses Autoware localization)
+    /// Set to true for testing without Autoware localization pipeline
+    pub publish_direct_localization: bool,
 }
 
 impl BridgeParams {
@@ -126,43 +122,23 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
-        let map_name = node
-            .declare_parameter::<Arc<str>>("map_name")
-            .optional()
-            .map_err(|e| BridgeError::Rclrs(e.into()))?;
-
-        let vehicle_blueprint = node
-            .declare_parameter("vehicle_blueprint")
-            .default("vehicle.tesla.model3".into())
-            .mandatory()
-            .map_err(|e| BridgeError::Rclrs(e.into()))?;
-
-        let autoware_timeout = node
-            .declare_parameter("autoware_timeout")
-            .default(60i64)
-            .mandatory()
-            .map_err(|e| BridgeError::Rclrs(e.into()))?;
-
         let vehicle_config = node
             .declare_parameter("vehicle_config")
             .default("".into())
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
-        let bridge_config = node
-            .declare_parameter("bridge_config")
-            .default("config/bridge.yaml".into())
+        let publish_direct_localization = node
+            .declare_parameter("publish_direct_localization")
+            .default(false)
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
         // Get parameter values
         let carla_address_val: Arc<str> = carla_address.get();
         let carla_port_val: i64 = carla_port.get();
-        let map_name_val: Option<Arc<str>> = map_name.get();
-        let vehicle_blueprint_val: Arc<str> = vehicle_blueprint.get();
-        let autoware_timeout_val: i64 = autoware_timeout.get();
         let vehicle_config_val: Arc<str> = vehicle_config.get();
-        let bridge_config_val: Arc<str> = bridge_config.get();
+        let publish_direct_localization_val: bool = publish_direct_localization.get();
 
         // Validate required parameters
         if vehicle_config_val.is_empty() {
@@ -174,11 +150,8 @@ impl BridgeParams {
         Ok(Self {
             carla_address: carla_address_val.to_string(),
             carla_port: carla_port_val as u16,
-            map_name: map_name_val.map(|s| s.to_string()),
-            vehicle_blueprint: vehicle_blueprint_val.to_string(),
-            autoware_timeout: autoware_timeout_val as u64,
             vehicle_config: vehicle_config_val.to_string(),
-            bridge_config: bridge_config_val.to_string(),
+            publish_direct_localization: publish_direct_localization_val,
         })
     }
 }
@@ -238,6 +211,59 @@ fn carla_tick(
     Ok(snapshot.timestamp().elapsed_seconds)
 }
 
+/// Poll CARLA actors until a vehicle with role_name="hero" is found.
+///
+/// Returns `Some(vehicle)` when the hero vehicle is found, or `None` if Ctrl-C is received.
+/// Logs progress every 5 seconds.
+fn wait_for_hero_vehicle(
+    world: &carla::client::World,
+    running: &AtomicBool,
+) -> Option<carla::client::Vehicle> {
+    use carla::client::ActorBase;
+    tracing::info!("Waiting for hero vehicle (role_name=hero) in CARLA...");
+    let start = std::time::Instant::now();
+    let mut last_log = std::time::Instant::now();
+    loop {
+        if !running.load(Ordering::SeqCst) {
+            return None;
+        }
+        match world.actors() {
+            Ok(actors) => match actors.filter("vehicle.*") {
+                Ok(vehicles) => {
+                    for actor in vehicles.iter() {
+                        if let Ok(attrs) = actor.attributes() {
+                            let is_hero = attrs
+                                .iter()
+                                .any(|a| a.id() == "role_name" && a.value_string() == "hero");
+                            if is_hero {
+                                tracing::info!(
+                                    "Found hero vehicle: ID={} type={}",
+                                    actor.id(),
+                                    actor.type_id()
+                                );
+                                return match actor.into_kinds() {
+                                    carla::client::ActorKind::Vehicle(v) => Some(v),
+                                    _ => None,
+                                };
+                            }
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("Failed to filter actors: {e}"),
+            },
+            Err(e) => tracing::warn!("Failed to get actors: {e}"),
+        }
+        if last_log.elapsed() >= Duration::from_secs(5) {
+            tracing::info!(
+                "Still waiting for hero vehicle... ({:.0}s elapsed)",
+                start.elapsed().as_secs_f32()
+            );
+            last_log = std::time::Instant::now();
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
 fn main() -> Result<()> {
     // Install color-eyre for better error reporting
     color_eyre::install().expect("Failed to install color-eyre");
@@ -272,19 +298,18 @@ fn main() -> Result<()> {
     // === Step 2: Read parameters from ROS node ===
     let params = BridgeParams::from_node(&node)?;
     tracing::info!("=== Autoware-CARLA Bridge (Autoware-centric) ===");
-    tracing::info!("Vehicle blueprint: {}", params.vehicle_blueprint);
+    tracing::info!(
+        "publish_direct_localization: {}",
+        params.publish_direct_localization
+    );
 
     // Create clock publisher (persists across reconnections)
     let simulator_clock = SimulatorClock::new(node.clone())?;
 
-    // === Step 3: Load bridge configuration ===
-    let bridge_config = bridge_config::BridgeConfig::from_file(&params.bridge_config)?;
-    let initial_pose = bridge_config.to_isometry();
-
-    // === Step 4: Create Autoware coordinator and wait for Autoware ===
+    // === Step 3: Create Autoware coordinator and wait for Autoware ===
     tracing::info!("Creating Autoware coordinator...");
     let mut autoware =
-        autoware::Autoware::new(node.clone(), bridge_config.publish_direct_localization)?;
+        autoware::Autoware::new(node.clone(), params.publish_direct_localization)?;
 
     tracing::info!("Waiting for Autoware to start...");
     tracing::info!("(Start Autoware planning simulator with sample_sensor_kit)");
@@ -327,7 +352,7 @@ fn main() -> Result<()> {
 
     tracing::info!("Autoware detected!");
 
-    // === Step 4.5: Wait for TF transforms to be fully received ===
+    // === Step 4: Wait for TF transforms to be fully received ===
     tracing::info!("Waiting for TF transforms to be received...");
     let tf_start_time = std::time::Instant::now();
     let tf_timeout = Duration::from_secs(10);
@@ -372,7 +397,7 @@ fn main() -> Result<()> {
         }
     }
 
-    // === Step 5: Load vehicle configuration (single source of truth for sensors) ===
+    // === Step 5: Load vehicle configuration (sensor definitions) ===
     tracing::info!(
         "Loading vehicle configuration from: {}",
         params.vehicle_config
@@ -402,35 +427,32 @@ fn main() -> Result<()> {
             None => return Ok(()), // Ctrl-C during connection
         };
 
-        // Load map if specified, otherwise use current map
-        let mut world = {
-            let result = if let Some(ref map_name) = params.map_name {
-                tracing::info!("Loading CARLA map: {}", map_name);
-                utils::load_world_smart(&client, map_name)
-            } else {
-                tracing::info!("Using current CARLA map");
-                client.world()
-            };
-            match result {
-                Ok(w) => w,
-                Err(e) => {
-                    tracing::error!("Failed to get CARLA world: {e}, reconnecting...");
-                    continue;
-                }
+        // Use current CARLA world
+        let mut world = match client.world() {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::error!("Failed to get CARLA world: {e}, reconnecting...");
+                continue;
             }
         };
 
-        // === Spawn vehicle and sensors in CARLA ===
-        tracing::info!("Spawning vehicle and sensors in CARLA...");
+        // === Wait for hero vehicle then attach sensors ===
+        tracing::info!("Waiting for hero vehicle (spawned by scenario script)...");
+        let hero_vehicle = match wait_for_hero_vehicle(&world, &running) {
+            Some(v) => v,
+            None => return Ok(()), // Ctrl-C
+        };
+
+        tracing::info!("Attaching sensors to hero vehicle...");
         let carla_vehicle = match CarlaVehicle::new(
             &mut world,
-            &initial_pose,
+            hero_vehicle,
             &vehicle_config,
             autoware.get_tf_buffer(),
         ) {
             Ok(v) => v,
             Err(e) => {
-                tracing::error!("Failed to spawn vehicle: {e}, reconnecting in 5s...");
+                tracing::error!("Failed to attach sensors to vehicle: {e}, reconnecting in 5s...");
                 std::thread::sleep(Duration::from_secs(5));
                 continue;
             }
@@ -444,7 +466,7 @@ fn main() -> Result<()> {
         let vehicle_shared = Arc::new(Mutex::new(Some(vehicle.clone())));
         drop(vehicle_guard);
 
-        tracing::info!("Vehicle and sensors spawned successfully!");
+        tracing::info!("Sensors attached to hero vehicle successfully!");
 
         // === Register sensors with Autoware for topic mapping ===
         tracing::info!("Registering sensors with Autoware...");
@@ -484,6 +506,11 @@ fn main() -> Result<()> {
         tracing::info!("Vehicle control bridge created");
 
         tracing::info!("=== Bridge running ===");
+
+        // Reset heartbeat: the spawn retry loop may have taken a long time (e.g., if a
+        // previous session left a vehicle actor blocking the spawn point). Without this
+        // reset, the health check would immediately fail on the first tick.
+        autoware.reset_heartbeat();
 
         // Main loop timing: 20Hz (50ms per iteration)
         const LOOP_RATE_HZ: u64 = 20;

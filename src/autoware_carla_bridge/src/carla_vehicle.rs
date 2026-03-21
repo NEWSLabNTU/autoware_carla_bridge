@@ -20,8 +20,8 @@ use std::collections::HashMap;
 
 /// CARLA vehicle manager
 ///
-/// Manages CARLA vehicle and sensor actors. The vehicle and all sensors
-/// are spawned immediately in the constructor at the specified initial pose.
+/// Manages an existing CARLA hero vehicle and its spawned sensors.
+/// The vehicle must already exist in CARLA (spawned externally, e.g. by demo_scenario.py).
 pub struct CarlaVehicle {
     vehicle: Vehicle,
     sensors: HashMap<String, Sensor>,
@@ -30,44 +30,34 @@ pub struct CarlaVehicle {
 }
 
 impl CarlaVehicle {
-    /// Create a new CARLA vehicle and spawn it with sensors
+    /// Create a CarlaVehicle wrapper around an existing hero vehicle and spawn sensors on it
     ///
-    /// This immediately spawns the vehicle and all configured sensors in CARLA.
-    /// The `vehicle_config` is the **single source of truth** for which sensors to spawn.
+    /// The vehicle must already be present in CARLA (spawned externally). This constructor
+    /// only attaches sensors to the provided vehicle.
     ///
     /// # Arguments
     /// * `world` - Mutable CARLA world reference
-    /// * `initial_pose` - Spawn location and orientation in ROS coordinates
+    /// * `vehicle` - Existing CARLA vehicle actor (role_name="hero")
     /// * `vehicle_config` - Vehicle and sensor configuration (single source of truth)
     /// * `tf_buffer` - TF buffer for sensor position lookups
     ///
     /// # Returns
-    /// A CarlaVehicle instance with spawned vehicle and sensors
+    /// A CarlaVehicle instance managing the given vehicle and its spawned sensors
     pub fn new(
         world: &mut World,
-        initial_pose: &nalgebra::Isometry3<f32>,
+        vehicle: Vehicle,
         vehicle_config: &VehicleConfig,
         tf_buffer: &TFBuffer,
     ) -> Result<Self> {
-        tracing::info!(
-            "Initial pose from Autoware (ROS coords): x={:.2}, y={:.2}, z={:.2}",
-            initial_pose.translation.x,
-            initial_pose.translation.y,
-            initial_pose.translation.z
-        );
-
-        // Spawn vehicle using blueprint from config
-        let vehicle = Self::spawn_vehicle(world, &vehicle_config.vehicle.blueprint, initial_pose)?;
-
-        // Log actual spawned position in CARLA
+        // Log vehicle position in CARLA
         let spawned_transform = vehicle.transform()?;
         tracing::info!(
-            "Vehicle spawned in CARLA (CARLA coords): x={:.1}, y={:.1}, z={:.1}",
+            "Hero vehicle found: ID={} at CARLA({:.1}, {:.1}, {:.1})",
+            vehicle.id(),
             spawned_transform.location.x,
             spawned_transform.location.y,
             spawned_transform.location.z
         );
-        tracing::info!("Vehicle spawned successfully: ID={}", vehicle.id());
 
         // Spawn sensors from vehicle_config (single source of truth)
         tracing::info!(
@@ -92,64 +82,6 @@ impl CarlaVehicle {
             sensors,
             sensor_types,
         })
-    }
-
-    /// Spawn vehicle at the specified pose (private)
-    fn spawn_vehicle(
-        world: &mut World,
-        vehicle_blueprint: &str,
-        initial_pose: &nalgebra::Isometry3<f32>,
-    ) -> Result<Vehicle> {
-        // Get blueprint from library
-        let blueprint_library = world.blueprint_library()?;
-        let vehicle_bp = blueprint_library.find(vehicle_blueprint)?.ok_or_else(|| {
-            BridgeError::AutowareIssue(format!(
-                "Vehicle blueprint '{}' not found",
-                vehicle_blueprint
-            ))
-        })?;
-
-        // Convert ROS pose to CARLA transform using centralized helper
-        let carla_transform =
-            crate::coordinate_conversion::ros_isometry_to_carla_transform(initial_pose);
-
-        tracing::info!(
-            "Coordinate conversion: ROS({:.2}, {:.2}, {:.2}) → CARLA({:.1}, {:.1}, {:.1})",
-            initial_pose.translation.x,
-            initial_pose.translation.y,
-            initial_pose.translation.z,
-            carla_transform.location.x,
-            carla_transform.location.y,
-            carla_transform.location.z
-        );
-
-        // Log the exact transform we're about to pass to CARLA
-        tracing::info!(
-            "Calling spawn_actor with transform: loc=({:.1}, {:.1}, {:.1}), rot=(r:{:.1}, p:{:.1}, y:{:.1})",
-            carla_transform.location.x,
-            carla_transform.location.y,
-            carla_transform.location.z,
-            carla_transform.rotation.roll,
-            carla_transform.rotation.pitch,
-            carla_transform.rotation.yaw
-        );
-
-        // Spawn vehicle at the requested transform
-        let actor = world
-            .spawn_actor(&vehicle_bp, &carla_transform)
-            .map_err(|e| BridgeError::AutowareIssue(format!("Failed to spawn vehicle: {}", e)))?;
-
-        // Wait for CARLA to process the spawn before querying actor state
-        // Works for both sync mode (waits for tick) and async mode (times out after 100ms)
-        tracing::debug!("Waiting for CARLA to process spawn...");
-        let _ = world.wait_for_tick_or_timeout(std::time::Duration::from_millis(100))?;
-
-        let vehicle = match actor.into_kinds() {
-            carla::client::ActorKind::Vehicle(v) => v,
-            _ => return Err(BridgeError::CarlaIssue("Spawned actor is not a vehicle")),
-        };
-
-        Ok(vehicle)
     }
 
     /// Spawn sensors and attach to vehicle (private)
@@ -294,11 +226,11 @@ impl CarlaVehicle {
         &self.sensor_types
     }
 
-    /// Cleanup: destroy vehicle and sensors
+    /// Cleanup: destroy spawned sensors only.
     ///
-    /// This should be called when the bridge is shutting down
+    /// The vehicle is owned by the scenario script, not the bridge, so it is not
+    /// destroyed here. Only the sensors spawned by the bridge are cleaned up.
     pub fn cleanup(&mut self) -> Result<()> {
-        // Destroy all sensors first
         for (name, sensor) in self.sensors.drain() {
             tracing::info!("Destroying sensor '{}' (ID: {})", name, sensor.id());
             match sensor.destroy() {
@@ -310,17 +242,7 @@ impl CarlaVehicle {
                 Err(e) => tracing::warn!("Sensor '{}' destroy failed: {e}", name),
             }
         }
-
-        // Destroy vehicle
-        tracing::info!("Destroying vehicle: ID={}", self.vehicle.id());
-        match self.vehicle.destroy() {
-            Ok(true) => tracing::info!("Vehicle destroyed successfully"),
-            Ok(false) => {
-                tracing::warn!("Vehicle destroy returned false - may already be destroyed")
-            }
-            Err(e) => tracing::warn!("Vehicle destroy failed: {e}"),
-        }
-
+        tracing::info!("Sensors cleaned up (vehicle owned by scenario script, not destroyed)");
         Ok(())
     }
 }

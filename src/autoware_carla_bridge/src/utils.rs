@@ -1,31 +1,10 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use carla::client::{Client, World};
 
 pub fn is_bigendian() -> bool {
     cfg!(target_endian = "big")
 }
 
-/// Load a CARLA world, using efficient loading if available.
-///
-/// For CARLA 0.9.16+, uses `load_world_if_different()` which only reloads
-/// if the map is actually different, saving 5-10 seconds on redundant loads.
-/// For older versions, falls back to standard `load_world()`.
-pub fn load_world_smart(client: &Client, map_name: &str) -> carla::Result<World> {
-    tracing::info!("Loading map: {}", map_name);
-
-    #[cfg(carla_0916)]
-    {
-        tracing::debug!("Using efficient load_world_if_different (CARLA 0.9.16+)");
-        client.load_world_if_different(map_name)
-    }
-
-    #[cfg(not(carla_0916))]
-    {
-        tracing::debug!("Using standard load_world (CARLA < 0.9.16)");
-        client.load_world(map_name)
-    }
-}
 
 pub fn create_ros_header(timestamp: Option<f64>) -> std_msgs::msg::Header {
     let time = if let Some(sec) = timestamp {
