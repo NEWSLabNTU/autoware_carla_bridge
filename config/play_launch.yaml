@@ -1,0 +1,9 @@
+# play_launch runtime configuration for CARLA demo
+#
+# On first run, lidar_centerpoint compiles TensorRT engines from ONNX models,
+# which can take 2-5 minutes. The default load_node timeout is too short for this.
+
+composable_node_loading:
+  # 10 minutes — enough for TensorRT engine compilation on first run
+  load_node_timeout_millis: 600000
+  load_node_attempts: 1

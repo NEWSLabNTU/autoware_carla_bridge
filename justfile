@@ -3,7 +3,7 @@
 carla_version := env_var_or_default('CARLA_VERSION', '0.9.16')
 carla_port := env_var_or_default('CARLA_PORT', '2000')
 map_name := env_var_or_default('MAP_NAME', 'Town01')
-data_path := env_var_or_default('AUTOWARE_DATA_PATH', '/opt/autoware/1.5.0/data')
+data_path := env_var_or_default('AUTOWARE_DATA_PATH', justfile_directory() + '/data')
 project := justfile_directory()
 
 # List available recipes
@@ -123,12 +123,34 @@ run-monitor:
     exec play_launch run manual_control manual_control
 
 # Run full demo - Autoware + bridge + scenario + pilot + monitor (CARLA must be running)
+# Pre-build TensorRT engines for lidar_centerpoint (first-time only, takes 2-5 min)
+build-engines:
+    #!/usr/bin/env bash
+    set -e
+    export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+    source /opt/autoware/1.5.0/setup.bash
+    MODEL_PATH="{{project}}/data/lidar_centerpoint"
+    if [ -f "$MODEL_PATH/pts_voxel_encoder_centerpoint_tiny.engine" ] && \
+       [ -f "$MODEL_PATH/pts_backbone_neck_head_centerpoint_tiny.engine" ]; then
+        echo "TensorRT engines already exist, skipping build"
+        ls -lh "$MODEL_PATH"/*.engine
+        exit 0
+    fi
+    echo "Building TensorRT engines (this takes 2-5 minutes on first run)..."
+    ros2 launch autoware_lidar_centerpoint lidar_centerpoint.launch.xml \
+        build_only:=true \
+        data_path:="{{project}}/data" \
+        model_name:=centerpoint_tiny
+    echo "TensorRT engines built:"
+    ls -lh "$MODEL_PATH"/*.engine
+
 run-demo:
     #!/usr/bin/env bash
     set -e
     export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
     source "{{project}}/install/setup.bash"
     exec play_launch launch --web-addr 0.0.0.0:8080 \
+        -c "{{project}}/config/play_launch.yaml" \
         carla_demo_launch demo.launch.xml \
         project_dir:="{{project}}" \
         carla_port:={{carla_port}} \
