@@ -39,7 +39,7 @@ from autoware_adapi_v1_msgs.msg import (
     RouteState,
     OperationModeState,
 )
-from autoware_adapi_v1_msgs.srv import SetRoutePoints, ChangeOperationMode
+from autoware_adapi_v1_msgs.srv import SetRoutePoints, ChangeOperationMode, ClearRoute
 
 
 _LOC_STATE_NAMES = {
@@ -108,6 +108,9 @@ class AutoDriveNode(Node):
             state_qos,
         )
 
+        self.clear_route_client = self.create_client(
+            ClearRoute, "/api/routing/clear_route"
+        )
         self.set_route_client = self.create_client(
             SetRoutePoints, "/api/routing/set_route_points"
         )
@@ -151,6 +154,9 @@ class AutoDriveNode(Node):
         """Wait for Autoware AD API services to become callable."""
         self.get_logger().info("=== Step 1: Waiting for Autoware AD API services ===")
         ok = self._wait_for_service(
+            self.clear_route_client, "/api/routing/clear_route"
+        )
+        ok = ok and self._wait_for_service(
             self.set_route_client, "/api/routing/set_route_points"
         )
         ok = ok and self._wait_for_service(
@@ -173,6 +179,11 @@ class AutoDriveNode(Node):
             rclpy.spin_once(self, timeout_sec=0.5)
             if self.localization_state == LocalizationInitializationState.INITIALIZED:
                 self.get_logger().info("  Localization: INITIALIZED")
+                # Wait for diagnostics and planning pipeline to stabilize before
+                # setting a route. Without this, engage will fail with
+                # "target mode not available".
+                self.get_logger().info("  Waiting 15s for system to stabilize...")
+                self._spin_for(15.0)
                 return True
             now = time.monotonic()
             if now - last_log >= 5.0:
@@ -187,6 +198,16 @@ class AutoDriveNode(Node):
     def step3_set_route(self) -> bool:
         """Set route to the goal pose via AD API."""
         self.get_logger().info("=== Step 3: Setting route ===")
+
+        # Clear any stale route from a previous run before setting a new one
+        if self.route_state != RouteState.UNSET:
+            self.get_logger().info("  Clearing existing route...")
+            clear_resp = self._call_service(
+                self.clear_route_client, ClearRoute.Request(), "ClearRoute"
+            )
+            if clear_resp and clear_resp.status.success:
+                self.get_logger().info("  Route cleared")
+            self._spin_for(1.0)
 
         req = SetRoutePoints.Request()
         req.header.frame_id = "map"
@@ -227,6 +248,9 @@ class AutoDriveNode(Node):
             rclpy.spin_once(self, timeout_sec=0.5)
             if self.route_state == RouteState.SET:
                 self.get_logger().info("  Route state: SET")
+                # Wait for planning/control pipeline to activate before engaging
+                self.get_logger().info("  Waiting 10s for planning pipeline to activate...")
+                self._spin_for(10.0)
                 return True
             if self.route_state == RouteState.ARRIVED:
                 self.get_logger().info("  Route state: ARRIVED (already at goal)")
@@ -236,27 +260,51 @@ class AutoDriveNode(Node):
         )
         return self.route_state == RouteState.SET
 
-    def step5_engage_autonomous(self) -> bool:
-        """Engage autonomous driving mode via AD API."""
-        self.get_logger().info("=== Step 5: Engaging autonomous mode ===")
+    def step5_engage_autonomous(self, timeout: float = 300.0) -> bool:
+        """Engage autonomous driving mode via AD API.
 
+        First waits until is_autonomous_mode_available = True (trajectory
+        pipeline must be producing output), then calls change_to_autonomous.
+        """
+        self.get_logger().info(f"=== Step 5: Engaging autonomous mode (up to {timeout:.0f}s) ===")
+        end = time.monotonic() + timeout
+
+        # Wait until the system signals that autonomous mode is available
+        self.get_logger().info("  Waiting for is_autonomous_mode_available...")
+        last_log = time.monotonic()
+        while time.monotonic() < end:
+            rclpy.spin_once(self, timeout_sec=0.5)
+            if (
+                self.op_mode_state is not None
+                and self.op_mode_state.is_autonomous_mode_available
+            ):
+                self.get_logger().info("  Autonomous mode is available")
+                break
+            now = time.monotonic()
+            if now - last_log >= 10.0:
+                if self.op_mode_state is not None:
+                    s = self.op_mode_state
+                    self.get_logger().info(
+                        f"  Waiting for autonomous mode: "
+                        f"mode={s.mode}, auto_avail={s.is_autonomous_mode_available}, "
+                        f"stop_avail={s.is_stop_mode_available}, "
+                        f"control={s.is_autoware_control_enabled}"
+                    )
+                else:
+                    self.get_logger().info("  Waiting: no operation_mode/state received yet")
+                last_log = now
+        else:
+            self.get_logger().error(f"  Autonomous mode never became available after {timeout:.0f}s")
+            return False
+
+        # Now engage
         req = ChangeOperationMode.Request()
-        for attempt in range(3):
-            if attempt > 0:
-                self.get_logger().info(f"  Retry {attempt}/2 in 3s...")
-                self._spin_for(3.0)
-            resp = self._call_service(
-                self.change_to_auto_client, req, "ChangeOperationMode"
-            )
-            if resp and resp.status.success:
-                self.get_logger().info("  Autonomous mode engaged")
-                return True
-            if resp:
-                self.get_logger().warn(
-                    f"  Engage failed (attempt {attempt + 1}): {resp.status.message}"
-                )
-
-        self.get_logger().error("  Failed to engage autonomous mode")
+        resp = self._call_service(self.change_to_auto_client, req, "ChangeOperationMode")
+        if resp and resp.status.success:
+            self.get_logger().info("  Autonomous mode engaged")
+            return True
+        if resp:
+            self.get_logger().error(f"  Engage failed: {resp.status.message}")
         return False
 
     def step6_wait_for_arrival(self, timeout: float) -> bool:
