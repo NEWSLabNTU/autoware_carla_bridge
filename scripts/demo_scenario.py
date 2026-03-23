@@ -122,6 +122,16 @@ class DemoScenario:
             print(f"Failed to setup simulation: {e}")
             return False
 
+    def destroy_existing_hero(self) -> None:
+        """Destroy any existing hero vehicle left over from a previous run."""
+        world = self.world
+        if world is None:
+            return
+        for actor in world.get_actors().filter('vehicle.*'):
+            if actor.attributes.get('role_name') == 'hero':
+                print(f"Destroying leftover hero vehicle ID={actor.id}")
+                actor.destroy()
+
     def spawn_vehicle(self) -> bool:
         """
         Spawn the hero vehicle in CARLA
@@ -134,6 +144,9 @@ class DemoScenario:
             print("setup() must be called before spawn_vehicle()")
             return False
         try:
+            # Clean up any leftover hero from a previous run before spawning
+            self.destroy_existing_hero()
+
             blueprint_library = world.get_blueprint_library()
             vehicle_bp = blueprint_library.find(self.vehicle_blueprint)
             if vehicle_bp is None:
