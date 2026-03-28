@@ -7,7 +7,7 @@ files:
   - { path: $(find-pkg-share autoware_launch)/config/system/diagnostics/control.yaml }
   - { path: $(find-pkg-share autoware_launch)/config/system/diagnostics/map.yaml }
   - { path: $(find-pkg-share autoware_launch)/config/system/diagnostics/perception.yaml }
-  - { path: $(find-pkg-share autoware_launch)/config/system/diagnostics/system.yaml }
+  - { path: $(find-pkg-share carla_autoware_launch)/config/system/diagnostics/system.yaml }
   - { path: $(find-pkg-share autoware_launch)/config/system/diagnostics/vehicle.yaml }
 
 # Define operation modes and diagnostic units with CARLA-appropriate timeouts
