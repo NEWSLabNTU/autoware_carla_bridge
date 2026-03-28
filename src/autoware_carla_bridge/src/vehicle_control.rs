@@ -12,10 +12,16 @@ use carla::{
 use rclrs::IntoPrimitiveOptions;
 use std::sync::{Arc, Mutex};
 
+/// Maximum steering tire angle in radians (~70 degrees)
+const MAX_STEER_ANGLE: f32 = 1.22;
+
+/// Maximum expected acceleration magnitude for throttle/brake mapping (m/s²)
+const MAX_ACCEL: f32 = 3.0;
+
 /// Vehicle control manager
 ///
 /// Handles bidirectional control between Autoware and CARLA:
-/// - Subscribes to `/control/command/actuation_cmd` (ActuationCommandStamped)
+/// - Subscribes to `/control/command/control_cmd` (autoware_control_msgs/Control)
 /// - Publishes `/vehicle/status/velocity_status` (VelocityReport)
 /// - Publishes `/vehicle/status/steering_status` (SteeringReport)
 /// - Publishes `/vehicle/status/control_mode` (ControlModeReport)
@@ -28,7 +34,7 @@ pub struct VehicleControlBridge {
     gear_pub: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::GearReport>>,
 
     // Subscriber stored to keep it alive
-    _control_sub: Arc<rclrs::Subscription<tier4_vehicle_msgs::msg::ActuationCommandStamped>>,
+    _control_sub: Arc<rclrs::Subscription<autoware_control_msgs::msg::Control>>,
 
     // CARLA vehicle reference (shared with main loop)
     vehicle: Arc<Mutex<Option<Vehicle>>>,
@@ -53,11 +59,11 @@ impl VehicleControlBridge {
 
         let gear_pub = Arc::new(node.create_publisher("/vehicle/status/gear_status".reliable())?);
 
-        // Create control command subscriber
+        // Create control command subscriber (Autoware 1.5.0 uses Control message)
         let vehicle_for_callback = vehicle.clone();
         let control_sub = Arc::new(node.create_subscription(
-            "/control/command/actuation_cmd".reliable(),
-            move |msg: tier4_vehicle_msgs::msg::ActuationCommandStamped| {
+            "/control/command/control_cmd".reliable(),
+            move |msg: autoware_control_msgs::msg::Control| {
                 if let Err(e) = Self::apply_control_command(&vehicle_for_callback, &msg) {
                     tracing::error!("Failed to apply control command: {}", e);
                 }
@@ -65,7 +71,7 @@ impl VehicleControlBridge {
         )?);
 
         tracing::info!("Vehicle control bridge created");
-        tracing::info!("  Subscribed to: /control/command/actuation_cmd");
+        tracing::info!("  Subscribed to: /control/command/control_cmd");
         tracing::info!("  Publishing: /vehicle/status/velocity_status");
         tracing::info!("  Publishing: /vehicle/status/steering_status");
         tracing::info!("  Publishing: /vehicle/status/control_mode");
@@ -82,15 +88,16 @@ impl VehicleControlBridge {
     }
 
     /// Apply control command from Autoware to CARLA vehicle
+    ///
+    /// Converts Autoware Control (physical units) to CARLA VehicleControl (0-1 normalized):
+    /// - steering_tire_angle (rad) → steer (-1 to 1) via max_steer_angle
+    /// - acceleration (m/s²) → throttle (0-1) or brake (0-1)
     fn apply_control_command(
         vehicle: &Arc<Mutex<Option<Vehicle>>>,
-        cmd: &tier4_vehicle_msgs::msg::ActuationCommandStamped,
+        cmd: &autoware_control_msgs::msg::Control,
     ) -> Result<()> {
         let vehicle_guard = vehicle.lock().unwrap();
         if let Some(ref v) = *vehicle_guard {
-            // Convert Autoware actuation command to CARLA VehicleControl
-            // ActuationCommandStamped provides direct accel/brake/steer commands
-
             let mut control = VehicleControl {
                 throttle: 0.0,
                 steer: 0.0,
@@ -101,36 +108,33 @@ impl VehicleControlBridge {
                 gear: 0,
             };
 
-            // Steering: steer_cmd is already normalized (-1.0 to 1.0)
-            control.steer = (cmd.actuation.steer_cmd as f32).clamp(-1.0, 1.0);
+            // Steering: convert tire angle (rad) to normalized (-1 to 1)
+            control.steer =
+                (cmd.lateral.steering_tire_angle / MAX_STEER_ANGLE).clamp(-1.0, 1.0);
 
-            // Acceleration/Brake: accel_cmd and brake_cmd are normalized (0.0 to 1.0)
-            // If accel_cmd is positive, use throttle. If brake_cmd is positive, use brake.
-            let accel = cmd.actuation.accel_cmd as f32;
-            let brake = cmd.actuation.brake_cmd as f32;
-
+            // Longitudinal: acceleration (m/s²) → throttle or brake (0 to 1)
+            let accel = cmd.longitudinal.acceleration;
             if accel > 0.01 {
-                // Acceleration command
-                control.throttle = accel.clamp(0.0, 1.0);
+                control.throttle = (accel / MAX_ACCEL).clamp(0.0, 1.0);
                 control.brake = 0.0;
-            } else if brake > 0.01 {
-                // Brake command
+            } else if accel < -0.01 {
                 control.throttle = 0.0;
-                control.brake = brake.clamp(0.0, 1.0);
-            } else {
-                // No command - coast
-                control.throttle = 0.0;
-                control.brake = 0.0;
+                control.brake = (-accel / MAX_ACCEL).clamp(0.0, 1.0);
             }
 
-            // Apply control to vehicle
+            // Reverse if target velocity is negative
+            if cmd.longitudinal.velocity < -0.01 {
+                control.reverse = true;
+            }
+
             v.apply_control(&control)?;
 
             tracing::debug!(
-                "Applied control: steer={:.3}, throttle={:.3}, brake={:.3}",
+                "Applied control: steer={:.3}, throttle={:.3}, brake={:.3}, accel={:.2} m/s²",
                 control.steer,
                 control.throttle,
                 control.brake,
+                accel,
             );
         }
 
@@ -177,10 +181,9 @@ impl VehicleControlBridge {
 
             // Publish SteeringReport
             // Convert CARLA steering (-1 to 1) to tire angle (radians)
-            const STEERING_ANGLE_MAX: f32 = 1.22; // radians (~70 degrees)
             let steering_report = autoware_vehicle_msgs::msg::SteeringReport {
                 stamp: ros_timestamp.clone(),
-                steering_tire_angle: control.steer * STEERING_ANGLE_MAX,
+                steering_tire_angle: control.steer * MAX_STEER_ANGLE,
             };
 
             self.steering_pub.publish(&steering_report)?;
@@ -194,8 +197,6 @@ impl VehicleControlBridge {
             self.control_mode_pub.publish(&control_mode)?;
 
             // Publish GearReport (always DRIVE for forward motion)
-            // CARLA VehicleControl has a 'reverse' field, but for simulation
-            // we default to DRIVE gear as Autoware expects this for autonomous mode
             let gear_report = autoware_vehicle_msgs::msg::GearReport {
                 stamp: ros_timestamp,
                 report: autoware_vehicle_msgs::msg::GearReport::DRIVE,

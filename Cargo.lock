@@ -484,6 +484,7 @@ dependencies = [
  "arc-swap",
  "atomic_float",
  "autoware_adapi_v1_msgs",
+ "autoware_control_msgs",
  "autoware_vehicle_msgs",
  "builtin_interfaces",
  "bytemuck",
@@ -515,6 +516,14 @@ dependencies = [
 name = "autoware_common_msgs"
 version = "1.11.0"
 dependencies = [
+ "rosidl_runtime_rs",
+]
+
+[[package]]
+name = "autoware_control_msgs"
+version = "1.11.0"
+dependencies = [
+ "builtin_interfaces",
  "rosidl_runtime_rs",
 ]
 
