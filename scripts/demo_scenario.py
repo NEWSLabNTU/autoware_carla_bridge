@@ -258,22 +258,25 @@ def main():
         spawn_index=args.spawn_index,
     )
 
-    # Retry connecting to CARLA until it's ready
+    # Retry connecting, setting up, and spawning until CARLA is fully ready
     while True:
-        if scenario.connect():
-            break
-        print("Retrying in 5 seconds...")
         try:
-            time.sleep(5)
+            if not scenario.connect():
+                print("Retrying in 5 seconds...")
+                time.sleep(5)
+                continue
+            if not scenario.setup():
+                print("Setup failed, retrying in 5 seconds...")
+                time.sleep(5)
+                continue
+            if not scenario.spawn_vehicle():
+                print("Spawn failed, retrying in 5 seconds...")
+                time.sleep(5)
+                continue
+            break
         except KeyboardInterrupt:
             print("\nAborted.")
             sys.exit(0)
-
-    if not scenario.setup():
-        sys.exit(1)
-
-    if not scenario.spawn_vehicle():
-        sys.exit(1)
 
     scenario.run()
 
