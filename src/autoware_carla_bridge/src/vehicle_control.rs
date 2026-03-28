@@ -109,8 +109,9 @@ impl VehicleControlBridge {
             };
 
             // Steering: convert tire angle (rad) to normalized (-1 to 1)
+            // Negate: Autoware positive = left turn (ROS), CARLA positive = right turn (left-handed)
             control.steer =
-                (cmd.lateral.steering_tire_angle / MAX_STEER_ANGLE).clamp(-1.0, 1.0);
+                (-cmd.lateral.steering_tire_angle / MAX_STEER_ANGLE).clamp(-1.0, 1.0);
 
             // Longitudinal: acceleration (m/s²) → throttle or brake (0 to 1)
             let accel = cmd.longitudinal.acceleration;
@@ -161,10 +162,13 @@ impl VehicleControlBridge {
             let control = vehicle.control()?;
 
             // Calculate velocities
+            // Longitudinal = speed magnitude (always positive for forward)
             let longitudinal_velocity =
                 (velocity_vec.x.powi(2) + velocity_vec.y.powi(2) + velocity_vec.z.powi(2)).sqrt();
-            let lateral_velocity = velocity_vec.y; // Assuming Y is lateral
-            let heading_rate = angular_velocity_vec.z; // Yaw rate
+            // Negate: CARLA Y = right (left-handed), ROS lateral = left (right-handed)
+            let lateral_velocity = -velocity_vec.y;
+            // Negate: CARLA Z angular = clockwise, ROS yaw rate = counter-clockwise
+            let heading_rate = -angular_velocity_vec.z;
 
             // Publish VelocityReport
             let velocity_report = autoware_vehicle_msgs::msg::VelocityReport {
@@ -181,9 +185,10 @@ impl VehicleControlBridge {
 
             // Publish SteeringReport
             // Convert CARLA steering (-1 to 1) to tire angle (radians)
+            // Negate: CARLA positive = right turn, Autoware positive = left turn
             let steering_report = autoware_vehicle_msgs::msg::SteeringReport {
                 stamp: ros_timestamp.clone(),
-                steering_tire_angle: control.steer * MAX_STEER_ANGLE,
+                steering_tire_angle: -control.steer * MAX_STEER_ANGLE,
             };
 
             self.steering_pub.publish(&steering_report)?;
