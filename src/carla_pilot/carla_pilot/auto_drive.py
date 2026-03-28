@@ -65,7 +65,7 @@ class AutoDriveNode(Node):
         super().__init__("auto_drive")
 
         self.declare_parameter("poses_file", "")
-        self.declare_parameter("timeout", 300.0)
+        self.declare_parameter("timeout", 600.0)
 
         poses_file = self.get_parameter("poses_file").get_parameter_value().string_value
         if not poses_file:
@@ -199,15 +199,15 @@ class AutoDriveNode(Node):
         """Set route to the goal pose via AD API."""
         self.get_logger().info("=== Step 3: Setting route ===")
 
-        # Clear any stale route from a previous run before setting a new one
-        if self.route_state != RouteState.UNSET:
-            self.get_logger().info("  Clearing existing route...")
-            clear_resp = self._call_service(
-                self.clear_route_client, ClearRoute.Request(), "ClearRoute"
-            )
-            if clear_resp and clear_resp.status.success:
-                self.get_logger().info("  Route cleared")
-            self._spin_for(1.0)
+        # Always clear route first — a stale route from a previous run blocks set_route
+        self.get_logger().info("  Clearing any existing route...")
+        clear_resp = self._call_service(
+            self.clear_route_client, ClearRoute.Request(), "ClearRoute"
+        )
+        if clear_resp:
+            self.get_logger().info(f"  Clear response: success={clear_resp.status.success}")
+        # Wait for route state to leave SET/ARRIVED before setting a new one
+        self._spin_for(2.0)
 
         req = SetRoutePoints.Request()
         req.header.frame_id = "map"
