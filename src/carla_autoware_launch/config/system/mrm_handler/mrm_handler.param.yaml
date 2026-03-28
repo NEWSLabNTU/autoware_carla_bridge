@@ -5,13 +5,14 @@
 /**:
   ros__parameters:
     update_rate: 10
-    # Increased timeout for operation mode availability (default: 0.5s)
-    # CARLA simulation can have frame timing variations
-    timeout_operation_mode_availability: 2.0
-    # Increased timeouts for MRM behavior calls (default: 0.01s)
-    # Allow more time for service responses in simulation
-    timeout_call_mrm_behavior: 0.5
-    timeout_cancel_mrm_behavior: 0.5
+    # Large timeout for operation mode availability (default: 0.5s)
+    # CARLA simulation has variable frame rates and diagnostic timing.
+    # A short timeout causes MRM oscillation (NORMAL↔MRM_OPERATING),
+    # which triggers emergency_stop and zeros the vehicle speed.
+    timeout_operation_mode_availability: 30.0
+    # Large timeouts for MRM behavior calls (default: 0.01s)
+    timeout_call_mrm_behavior: 5.0
+    timeout_cancel_mrm_behavior: 5.0
     use_emergency_holding: false
     timeout_emergency_recovery: 5.0
     use_parking_after_stopped: false
