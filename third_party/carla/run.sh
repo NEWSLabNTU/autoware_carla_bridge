@@ -9,4 +9,5 @@ CARLA_DIR="$HOME/Downloads/CARLA_0.9.16"
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 
 PORT="${CARLA_PORT:-2000}"
-exec "$CARLA_DIR/CarlaUE4.sh" -quality-level=Low -carla-rpc-port="$PORT"
+cd "$CARLA_DIR"
+exec ./CarlaUE4.sh -quality-level=Low -RenderOffScreen -carla-rpc-port="$PORT"
