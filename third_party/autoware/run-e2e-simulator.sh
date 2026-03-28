@@ -11,7 +11,8 @@ source "$project_root/install/setup.bash"
 
 # Use carla_autoware_launch with CARLA-optimized NDT parameters
 # NOTE: use_sim_time:=true is critical for CARLA simulation - all nodes must use sim time
-ros2 launch \
+play_launch launch --web-addr 0.0.0.0:8080 \
+    -c "$project_root/config/play_launch.yaml" \
     carla_autoware_launch carla_simulator.launch.xml \
     map_path:="$project_root/data/carla-autoware-bridge/Town01" \
     vehicle_model:=carla_vehicle \

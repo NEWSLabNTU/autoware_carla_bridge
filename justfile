@@ -10,11 +10,12 @@ project := justfile_directory()
 default:
     @just --list
 
-# Install deps, Autoware 1.5.0 Debian, and CARLA maps
+# Install deps, Autoware 1.5.0 Debian, CARLA maps, and tools
 setup:
     ./scripts/install_deps.sh
     ./scripts/install_autoware_debian.sh
     ./scripts/download_carla_maps_for_autoware.sh
+    pip install play-launch
 
 # Build all packages
 build:
