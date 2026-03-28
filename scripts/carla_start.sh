@@ -32,6 +32,10 @@ systemd-run --user \
     --unit="$UNIT_NAME" \
     --setenv=DISPLAY="$DISPLAY" \
     --setenv=CARLA_PORT="$PORT" \
+    -p Restart=on-failure \
+    -p RestartSec=10 \
+    -p StartLimitBurst=5 \
+    -p StartLimitIntervalSec=300 \
     bash "$RUN_SCRIPT"
 
 echo "CARLA started on port $PORT"
