@@ -1,116 +1,108 @@
 # Autoware CARLA Bridge
 
-Native ROS 2 bridge between CARLA and Autoware. Written in Rust.
+Native ROS 2 bridge between [CARLA](https://carla.org/) and [Autoware](https://autowarefoundation.github.io/autoware-documentation/). Written in Rust using [rclrs](https://github.com/ros2-rust/ros2_rust).
 
-## Features
+End-to-end autonomous driving works out of the box: start CARLA, run the demo, and the vehicle drives itself to a goal.
 
-- Auto-detects Autoware and reads sensor config from URDF
-- Spawns vehicles in CARLA with matching sensors
-- Bridges sensor data (LiDAR, cameras, GNSS, IMU) to ROS 2
-- Supports CARLA 0.9.16
+## Key Features
+
+- **Single-process, native ROS 2** -- lightweight and performant; no multi-process coordination overhead
+- **Autoware integration** -- auto-detects Autoware, reads sensor config from URDF/TF, publishes to standard Autoware topics
+- **Automatic localization** -- GNSS auto-initializes Autoware's NDT localization pipeline; no manual pose estimation needed
+- **Synchronous simulation** -- deterministic 20 Hz tick loop; bridge passively syncs with CARLA
+- **Robust connections** -- infinite retry for both CARLA and Autoware with graceful Ctrl-C handling
+- **Companion tools** -- vehicle monitor GUI, lanelet2/pointcloud map generators, pose capture utility
+
+### Sensors
+
+| Sensor | CARLA Blueprint         | ROS 2 Topic                     | Format                                    |
+|--------|-------------------------|---------------------------------|-------------------------------------------|
+| LiDAR  | `sensor.lidar.ray_cast` | `/sensing/lidar/top/pointcloud` | PointCloud2 (PointXYZIRC, NDT-compatible) |
+| Camera | `sensor.camera.rgb`     | `/sensing/camera/*/image_raw`   | Image + CameraInfo                        |
+| IMU    | `sensor.other.imu`      | `/sensing/imu/*/imu_raw`        | Imu                                       |
+| GNSS   | `sensor.other.gnss`     | `/sensing/gnss/*/nav_sat_fix`   | NavSatFix                                 |
+
+### Vehicle Interface
+
+| Direction | Topic                             | Type                    |
+|-----------|-----------------------------------|-------------------------|
+| Status    | `/vehicle/status/velocity_status` | VelocityReport (~20 Hz) |
+| Status    | `/vehicle/status/steering_status` | SteeringReport (~20 Hz) |
+| Status    | `/vehicle/status/control_mode`    | ControlModeReport       |
+| Status    | `/vehicle/status/gear_status`     | GearReport              |
+| Control   | `/control/command/control_cmd`    | Control (subscribed)    |
 
 ## Quick Start
 
-Ensure `DISPLAY` is set to an available display before starting CARLA or Autoware.
+Requires: Ubuntu 22.04, ROS 2 Humble, [Autoware 1.5.0](https://autowarefoundation.github.io/autoware-documentation/), CARLA 0.9.16, Rust, [Just](https://github.com/casey/just).
 
 ```bash
-# 1. Start CARLA (runs as background service)
-just carla-start
+# Build
+just setup   # install deps, Autoware Debian, CARLA maps
+just build
 
-# 2. Start demo (Autoware + bridge + scenario)
-just run-demo
+# Run (two terminals)
+just carla-start   # start CARLA as background service
+just run-demo      # start Autoware + bridge + scenario + auto-drive + monitor
 
-# Check status
-just carla-status
+# Or without autonomous driving (manual control via RViz)
+just run-sim
 
 # Stop
 just carla-stop
 ```
 
-## Setup
-
-### Prerequisites
-
-- Ubuntu 22.04 + ROS 2 Humble
-- Built Autoware 2025.02 workspace
-- CARLA 0.9.16 (download from [carla.org](https://carla.org))
-- Rust + Just (`cargo install just`)
-
-### Install
-
-```bash
-# 1. Clone and initialize
-git clone <repo-url>
-cd autoware_carla_bridge
-git submodule update --init --recursive
-
-# 2. Link your Autoware workspace
-mkdir -p third_party/autoware
-ln -s /path/to/autoware/workspace third_party/autoware/autoware_repo
-
-# 3. Configure CARLA path
-# Edit CARLA_DIR in third_party/carla/run.sh to point to your installation
-vi third_party/carla/run.sh
-
-# 4. Install deps and build
-just setup
-just build
-```
-
-## Running
-
-### Demo Mode
-
-```bash
-just carla-start             # Start CARLA service
-just run-demo                # Start Autoware + bridge + scenario
-just carla-stop              # Stop CARLA service
-```
-
-### Manual
-
-```bash
-just carla-start      # Start CARLA
-just run-autoware     # Start Autoware (foreground)
-just run-bridge       # Start bridge (foreground)
-```
-
-### Direct
-
-```bash
-source install/setup.bash
-ros2 launch autoware_carla_bridge autoware_carla_bridge.launch.xml carla_port:=2000
-```
+The vehicle will:
+1. Spawn in Town01
+2. Auto-initialize localization via GNSS
+3. Set a route and engage autonomous mode
+4. Drive to the goal (~220 s)
 
 ## Configuration
 
-**CARLA path:** Edit `CARLA_DIR` in `third_party/carla/run.sh` (see Install step 3)
+**Sensor config**: `src/acb_bridge/config/vehicle_config.yaml`
 
-**Autoware maps:** Pre-converted maps in `data/carla-autoware-bridge/` (Town01-10)
+**Autoware maps**: `data/carla-autoware-bridge/Town{01,02,03,05,10}/`
 
-## Verify
+**CARLA settings**: edit `.env` for machine-specific vars (GPU, display)
 
-```bash
-ros2 topic list
-ros2 topic echo /clock
-just carla-status
+**Environment**: `.envrc` (auto-loaded by [direnv](https://direnv.net/))
+
+## Architecture
+
+```mermaid
+sequenceDiagram
+    participant S as Scenario Script
+    participant C as CARLA
+    participant B as Bridge
+    participant A as Autoware
+
+    S->>C: Load map, spawn hero vehicle
+    S->>C: Enable sync mode (20 Hz)
+
+    B->>A: Wait for /robot_description
+    A-->>B: URDF (sensor frames)
+    B->>C: Find hero vehicle, attach sensors
+
+    loop Every tick (50 ms)
+        S->>C: world.tick()
+        C-->>B: Sensor data (LiDAR, camera, IMU, GNSS)
+        B->>A: /sensing/*, /clock, /vehicle/status/*
+        A-->>B: /control/command/*
+        B->>C: Apply throttle, brake, steer
+    end
 ```
 
-## Troubleshooting
+- **Scenario script** owns the CARLA world: loads map, spawns hero vehicle, runs the tick loop
+- **Bridge** passively waits for ticks, reads sensor data, publishes to ROS 2, applies control commands
+- **One bridge per Autoware instance**; multi-vehicle via separate `ROS_DOMAIN_ID`
 
-| Issue               | Solution                                              |
-|---------------------|-------------------------------------------------------|
-| Can't find Autoware | Check `ls -la third_party/autoware/autoware_repo`     |
-| CARLA run script not found | Edit `CARLA_DIR` in `third_party/carla/run.sh`  |
-| CARLA timeout       | Verify CARLA running: `just carla-status`             |
-| Build fails         | Run `just clean && just build`                        |
+## Documentation
 
-## Docs
-
-- [Sensor Configuration](docs/design/sensor-configuration-strategy.md)
+- [Sensor Configuration Strategy](docs/design/sensor-configuration-strategy.md)
 - [Map Generation Guide](docs/guides/automated-map-generation.md)
 - [Development Roadmap](docs/roadmap/)
 
 ## License
 
-TBD
+Apache-2.0
