@@ -145,6 +145,7 @@ build-engines:
     echo "TensorRT engines built:"
     ls -lh "$MODEL_PATH"/*.engine
 
+# Run full demo with autonomous driving (CARLA must be running)
 run-demo:
     #!/usr/bin/env bash
     set -e
@@ -157,6 +158,20 @@ run-demo:
         carla_port:={{carla_port}} \
         map_name:={{map_name}} \
         data_path:="{{data_path}}"
+
+# Run simulation without autonomous driving - manual control via RViz (CARLA must be running)
+run-sim:
+    #!/usr/bin/env bash
+    set -e
+    source "{{project}}/install/setup.bash"
+    exec play_launch launch --web-addr 0.0.0.0:8080 \
+        -c "{{project}}/config/play_launch.yaml" \
+        acb_demo_launch demo.launch.xml \
+        project_dir:="{{project}}" \
+        carla_port:={{carla_port}} \
+        map_name:={{map_name}} \
+        data_path:="{{data_path}}" \
+        auto_drive:=false
 
 # Run autonomous driving demo (optional: just run-pilot /path/to/poses.yaml)
 run-pilot poses_file="":

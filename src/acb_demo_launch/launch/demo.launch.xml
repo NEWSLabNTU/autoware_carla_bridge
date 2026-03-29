@@ -18,6 +18,7 @@
   <arg name="carla_port" default="2000" description="CARLA RPC port"/>
   <arg name="map_name" default="Town01" description="CARLA map name"/>
   <arg name="data_path" default="/opt/autoware/1.5.0/data" description="Autoware ML models and data directory"/>
+  <arg name="auto_drive" default="true" description="Launch autonomous driving pilot"/>
 
   <!-- 1. Autoware planning simulator -->
   <include file="$(find-pkg-share acb_launch)/launch/carla_simulator.launch.xml">
@@ -42,10 +43,12 @@
   <!-- 4. Manual control monitor GUI -->
   <node pkg="carla_manual_control" exec="carla_manual_control" name="carla_manual_control" output="screen"/>
 
-  <!-- 5. Autonomous driving pilot: waits for localization, sets route, engages, exits on arrival -->
-  <node pkg="acb_pilot" exec="auto_drive" name="auto_drive" output="screen">
-    <param name="poses_file"
-      value="$(find-pkg-share acb_pilot)/config/poses/$(var map_name).yaml"/>
-    <param name="timeout" value="600.0"/>
-  </node>
+  <!-- 5. Autonomous driving pilot (optional) -->
+  <group if="$(var auto_drive)">
+    <node pkg="acb_pilot" exec="auto_drive" name="auto_drive" output="screen">
+      <param name="poses_file"
+        value="$(find-pkg-share acb_pilot)/config/poses/$(var map_name).yaml"/>
+      <param name="timeout" value="600.0"/>
+    </node>
+  </group>
 </launch>
