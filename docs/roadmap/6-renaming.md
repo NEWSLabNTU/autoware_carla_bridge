@@ -59,13 +59,21 @@ src/
 
 ## 6.3 Rename Tasks
 
-- [ ] Rename directories under `src/`
-- [ ] Update `package.xml` names in all packages
-- [ ] Update `Cargo.toml` package names for Rust crates
-- [ ] Update `setup.py` / `setup.cfg` for Python packages
-- [ ] Update all `<include>` and `find-pkg-share` references in launch files
-- [ ] Update cross-package dependencies in `package.xml` files
-- [ ] Update justfile recipes
-- [ ] Update `CLAUDE.md` and documentation references
-- [ ] Verify `just build` succeeds after rename
-- [ ] Verify `just run-demo` works end-to-end
+- [x] Rename directories under `src/`
+- [x] Update `package.xml` names in all packages
+- [x] Update `Cargo.toml` package names for Rust crates
+- [x] Update `setup.py` / `setup.cfg` for Python packages
+- [x] Update all `<include>` and `find-pkg-share` references in launch files
+- [x] Update cross-package dependencies in `package.xml` files
+- [x] Update justfile recipes
+- [x] Update `CLAUDE.md` and documentation references
+- [x] Verify `just build` succeeds after rename (12 packages built)
+- [x] Verify `just run-demo` works end-to-end (full autonomous driving cycle completed)
+
+### Additional Changes
+
+- Autoware model names updated: `carla_vehicle` → `acb_vehicle`, `carla_sensor_kit` → `acb_sensor_kit` (required because Autoware resolves `$(var vehicle_model)_description` to find packages)
+- Renamed `individual_params/config/default/carla_sensor_kit/` → `acb_sensor_kit/` to match new model name
+- Updated Rust crate references in doc comments (`autoware_carla_bridge::` → `acb_bridge::`)
+- Updated ROS node name: `autoware_carla_bridge` → `acb_bridge`
+- Updated ament resource marker file: `resource/carla_pilot` → `resource/acb_pilot`
