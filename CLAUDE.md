@@ -233,6 +233,7 @@ colcon list | grep autoware_vehicle_msgs
 
 ### Architecture
 - **Single client**: One CARLA connection vs two separate clients
+- **Synchronous mode**: CARLA runs in sync mode (20 Hz, fixed_delta_seconds=0.05). `demo_scenario.py` is the sole ticker; bridge passively waits via `wait_for_tick_or_timeout()`
 - **Sensor-only CarlaVehicle**: Bridge attaches sensors to an existing hero vehicle; does not spawn or destroy the vehicle
 - **Linear workflow**: Sequential steps (detect Autoware → parse URDF → wait for hero vehicle → attach sensors)
 - **Direct publishing**: `Arc<Publisher>` from CARLA callbacks (no threading/channels)
@@ -637,13 +638,14 @@ cat third_party/autoware/autoware_repo/play_log/2025-12-08_03-24-49/node/autowar
 The `acb_launch` package provides CARLA-optimized configurations that override Autoware defaults:
 
 **MRM Handler** (`config/system/mrm_handler/mrm_handler.param.yaml`):
-- `timeout_operation_mode_availability: 2.0` (default: 0.5s) - Relaxed for simulation timing variations
-- `timeout_call_mrm_behavior: 0.5` (default: 0.01s) - Allow more time for service responses
-- `timeout_cancel_mrm_behavior: 0.5` (default: 0.01s)
+- `timeout_operation_mode_availability: 30.0` (default: 0.5s) - Large timeout prevents NORMAL↔MRM_OPERATING oscillation that triggers emergency_stop
+- `timeout_call_mrm_behavior: 5.0` (default: 0.01s) - Allow time for service responses in simulation
+- `timeout_cancel_mrm_behavior: 5.0` (default: 0.01s)
 - `use_pull_over: false`, `use_comfortable_stop: false` - Disabled for simulation
 
 **Component State Monitor Topics** (`config/system/component_state_monitor/topics.yaml`):
 - Excludes traffic light recognition topic monitoring (not available in CARLA)
+- Topic timeouts relaxed from 1.0s to 3.0s to prevent MRM emergency_stop from transient gaps
 
 **Launch File** (`launch/carla_simulator.launch.xml`):
 - Sets `use_sim_time` globally via `<set_parameter>`
@@ -651,6 +653,31 @@ The `acb_launch` package provides CARLA-optimized configurations that override A
 - Disables traffic light recognition (`use_traffic_light_recognition=false`)
 - Uses CARLA-optimized localization config path
 - Launches system component with CARLA-specific topics and MRM handler configs
+
+### Diagnostics Status (Known Issues)
+
+During autonomous driving, 4 diagnostic graph nodes show ERROR status. **None are in the autonomous mode critical path** (`/autoware/modes/autonomous` is OK).
+
+| Node | Status | Impact | Notes |
+|------|--------|--------|-------|
+| `/autoware/debug/tools` | ERROR | None | Debug-only, depends on service_log_checker |
+| `/autoware/system/duplicated_node_checker` | ERROR | None | Traffic light node duplication expected with `use_traffic_light_recognition=false` |
+| `/autoware/system/service_log_checker` | ERROR | None | Not in `/autoware/system` critical path |
+| `/autoware/control/node_alive_monitoring/control_command_gate` | ERROR | None | Node doesn't exist in Autoware 1.5.0; parent `command_gate` is OR with `vehicle_cmd_gate` (OK) |
+
+**Unknown diagnostics with errors:**
+- `ndt_scan_matcher: ndt_align_service_status` - "Waiting for pcd loader service" after initial alignment succeeds. Non-blocking; NDT continues to work via map_update.
+- `/adapi/node/vehicle_door: state` - "The door status is unknown." Expected; CARLA has no door API.
+
+**Composable node startup timeouts:**
+- AD API adapter nodes (autoware_state, routing, motion, localization, planning, local, remote) may timeout during LoadNode (30s limit) but eventually start successfully. This is a startup timing issue, not a failure.
+
+**Monitored topic rates (all healthy during autonomous driving):**
+- Vehicle: velocity ~21 Hz, steering ~21 Hz
+- Localization: pose_twist_fusion_filter ~22 Hz, TF map→base_link ~18 Hz
+- Perception: obstacle_segmentation ~21 Hz, objects ~7 Hz
+- Planning: trajectory ~11 Hz
+- Control: control_cmd ~20 Hz, emergency_control_cmd ~18 Hz
 
 ### Pose Initializer Stop Check
 
@@ -693,10 +720,20 @@ Our `carla_simulator.launch.xml` sets `system_run_mode=logging_simulation` to di
 
 ---
 
-**Last Updated**: 2026-03-22
+**Last Updated**: 2026-03-29
 **Status**: Phases 1-4 Complete - End-to-end autonomous driving working
 **Remaining**: Vehicle calibration (Phase 4.4), map automation (Phase 5), formal testing (Phase 6)
 **Recent Changes**:
+- ✅ **CARLA synchronous mode + diagnostic timeout fixes** (2026-03-29):
+  - Switched CARLA from async to sync mode (20 Hz) to ensure deterministic simulation timing
+  - `demo_scenario.py` is the sole ticker; bridge passively waits via `wait_for_tick_or_timeout()`
+  - Cleanup restores async mode so CARLA isn't stuck waiting for ticks on exit
+  - Component state monitor topic timeouts relaxed from 1.0s to 3.0s
+  - MRM handler timeouts increased (operation_mode_availability: 30s, behavior calls: 5s)
+  - Auto-drive engage uses retry loop for availability flicker
+  - Result: Vehicle arrives at goal in ~220s with zero MRM emergency_stop interrupts
+- ✅ **Package rename to acb_* convention** (2026-03-29):
+  - All packages renamed: carla_autoware_launch→acb_launch, autoware_carla_bridge→acb_bridge, etc.
 - ✅ **Bridge workflow redesign - scenario script owns vehicle** (2026-03-22):
   - Scenario script (`demo_scenario.py`) spawns hero vehicle with `role_name="hero"`
   - Bridge polls `world.actors()` for hero vehicle via `wait_for_hero_vehicle()`, attaches sensors only
