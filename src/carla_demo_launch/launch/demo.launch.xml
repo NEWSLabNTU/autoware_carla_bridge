@@ -46,6 +46,6 @@
   <node pkg="carla_pilot" exec="auto_drive" name="auto_drive" output="screen">
     <param name="poses_file"
       value="$(find-pkg-share carla_pilot)/config/poses/$(var map_name).yaml"/>
-    <param name="timeout" value="300.0"/>
+    <param name="timeout" value="600.0"/>
   </node>
 </launch>

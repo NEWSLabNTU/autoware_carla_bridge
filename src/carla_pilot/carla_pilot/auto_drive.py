@@ -297,14 +297,18 @@ class AutoDriveNode(Node):
             self.get_logger().error(f"  Autonomous mode never became available after {timeout:.0f}s")
             return False
 
-        # Now engage
+        # Engage with retry — availability can flicker during diagnostic transitions
         req = ChangeOperationMode.Request()
-        resp = self._call_service(self.change_to_auto_client, req, "ChangeOperationMode")
-        if resp and resp.status.success:
-            self.get_logger().info("  Autonomous mode engaged")
-            return True
-        if resp:
-            self.get_logger().error(f"  Engage failed: {resp.status.message}")
+        while time.monotonic() < end:
+            resp = self._call_service(self.change_to_auto_client, req, "ChangeOperationMode")
+            if resp and resp.status.success:
+                self.get_logger().info("  Autonomous mode engaged")
+                return True
+            if resp:
+                self.get_logger().info(f"  Engage attempt failed: {resp.status.message} — retrying in 3s...")
+            self._spin_for(3.0)
+
+        self.get_logger().error(f"  Failed to engage autonomous mode after {timeout:.0f}s")
         return False
 
     def step6_wait_for_arrival(self, timeout: float) -> bool:

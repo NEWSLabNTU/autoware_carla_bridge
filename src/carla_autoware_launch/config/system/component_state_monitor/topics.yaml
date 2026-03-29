@@ -1,6 +1,7 @@
 # CARLA Simulator Topics Configuration for Component State Monitor
 # This file is a copy of autoware_launch/config/system/component_state_monitor/topics.yaml
 # with traffic_light_recognition_traffic_signals topic REMOVED for CARLA simulation
+# and timeouts relaxed from 1.0s to 3.0s to prevent MRM emergency_stop in simulation
 
 - module: map
   mode: [online, logging_simulation, planning_simulation]
@@ -52,7 +53,7 @@
     transient_local: false
     warn_rate: 5.0
     error_rate: 1.0
-    timeout: 1.0
+    timeout: 3.0
 
 - module: perception
   mode: [online, logging_simulation]
@@ -65,7 +66,7 @@
     transient_local: false
     warn_rate: 5.0
     error_rate: 1.0
-    timeout: 1.0
+    timeout: 3.0
 
 - module: perception
   mode: [online, logging_simulation, planning_simulation]
@@ -78,7 +79,7 @@
     transient_local: false
     warn_rate: 5.0
     error_rate: 1.0
-    timeout: 1.0
+    timeout: 3.0
 
 # REMOVED for CARLA - traffic light recognition not available
 # - module: perception
@@ -92,7 +93,7 @@
 #     transient_local: false
 #     warn_rate: 5.0
 #     error_rate: 1.0
-#     timeout: 1.0
+#     timeout: 3.0
 
 - module: planning
   mode: [online, logging_simulation, planning_simulation]
@@ -118,7 +119,7 @@
     transient_local: false
     warn_rate: 5.0
     error_rate: 1.0
-    timeout: 1.0
+    timeout: 3.0
 
 - module: control
   mode: [online, logging_simulation, planning_simulation]
@@ -131,7 +132,7 @@
     transient_local: false
     warn_rate: 5.0
     error_rate: 1.0
-    timeout: 1.0
+    timeout: 3.0
 
 - module: control
   mode: [online, logging_simulation, planning_simulation]
@@ -144,7 +145,7 @@
     transient_local: false
     warn_rate: 5.0
     error_rate: 1.0
-    timeout: 1.0
+    timeout: 3.0
 
 - module: vehicle
   mode: [online, logging_simulation, planning_simulation]
@@ -157,7 +158,7 @@
     transient_local: false
     warn_rate: 5.0
     error_rate: 1.0
-    timeout: 1.0
+    timeout: 3.0
 
 - module: vehicle
   mode: [online, logging_simulation, planning_simulation]
@@ -170,7 +171,7 @@
     transient_local: false
     warn_rate: 5.0
     error_rate: 1.0
-    timeout: 1.0
+    timeout: 3.0
 
 - module: system
   mode: [online, logging_simulation, planning_simulation]
@@ -183,7 +184,7 @@
     transient_local: false
     warn_rate: 5.0
     error_rate: 1.0
-    timeout: 1.0
+    timeout: 3.0
 
 - module: localization
   mode: [online, logging_simulation, planning_simulation]
@@ -197,4 +198,4 @@
     transient_local: false
     warn_rate: 5.0
     error_rate: 1.0
-    timeout: 1.0
+    timeout: 3.0

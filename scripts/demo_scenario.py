@@ -3,11 +3,12 @@
 CARLA Demo Scenario
 
 This script manages the CARLA simulation for the Autoware-CARLA bridge demo.
-It connects to CARLA, loads the Town01 map, and configures asynchronous mode
-for maximum simulation performance.
+It connects to CARLA, loads the requested map, spawns the hero vehicle, and
+runs the simulation tick loop in synchronous mode.
 
-In asynchronous mode, CARLA runs as fast as possible without waiting for
-client ticks, which provides higher frame rates for sensor data.
+In synchronous mode, the simulation only advances when world.tick() is called.
+This script is the sole ticker; the bridge and other clients passively wait
+for ticks via world.wait_for_tick().
 """
 
 import argparse
@@ -63,7 +64,7 @@ class DemoScenario:
         try:
             print(f"Connecting to CARLA at {self.host}:{self.port}...")
             self.client = carla.Client(self.host, self.port)
-            self.client.set_timeout(10.0)
+            self.client.set_timeout(60.0)
 
             # Test connection
             version = self.client.get_server_version()
@@ -95,26 +96,21 @@ class DemoScenario:
                 print(f"Loading map: {self.map_name}")
                 print("  (This may take 20-30 seconds...)")
 
-                # Increase timeout for map loading (can take 20-30 seconds)
-                client.set_timeout(60.0)
                 self.world = client.load_world(self.map_name)
-
-                # Restore normal timeout
-                client.set_timeout(10.0)
                 print(f"✓ Map loaded: {self.map_name}")
             else:
                 print(f"Map {self.map_name} already loaded")
                 self.world = current_world
 
-            # Set to asynchronous mode for maximum performance
-            # CARLA runs as fast as possible, bridge reads data as available
+            # Set to synchronous mode so simulation only advances on tick()
+            # This script is the sole ticker; bridge waits passively
             settings = self.world.get_settings()
-            settings.synchronous_mode = False
-            settings.fixed_delta_seconds = None  # Variable time step
+            settings.synchronous_mode = True
+            settings.fixed_delta_seconds = 0.05  # 20 Hz simulation
             self.world.apply_settings(settings)
 
-            print("✓ Configured CARLA in asynchronous mode")
-            print("  CARLA will run at maximum speed")
+            print("✓ Configured CARLA in synchronous mode (20 Hz)")
+            print("  Simulation advances only when this script ticks")
 
             return True
 
@@ -172,15 +168,26 @@ class DemoScenario:
             return False
 
     def cleanup(self) -> None:
-        """Destroy spawned actors"""
+        """Destroy spawned actors and restore async mode"""
         if self.vehicle is not None:
             print(f"Destroying hero vehicle ID={self.vehicle.id}")
             self.vehicle.destroy()
             self.vehicle = None
 
+        # Restore async mode so CARLA isn't stuck waiting for ticks
+        if self.world is not None:
+            try:
+                settings = self.world.get_settings()
+                settings.synchronous_mode = False
+                settings.fixed_delta_seconds = None
+                self.world.apply_settings(settings)
+                print("Restored CARLA to asynchronous mode")
+            except RuntimeError:
+                pass
+
     def run(self) -> None:
-        """Run the scenario monitoring loop"""
-        print("\n=== Demo Scenario Running (Async Mode) ===")
+        """Run the simulation tick loop (sole ticker)"""
+        print("\n=== Demo Scenario Running (Sync Mode, 20 Hz) ===")
         print("Press Ctrl+C to stop\n")
 
         world = self.world
@@ -188,28 +195,31 @@ class DemoScenario:
             print("setup() must succeed before run()")
             return
         try:
+            tick_count = 0
+            last_monitor = time.monotonic()
             while True:
-                # In async mode, just monitor the world state
-                actors = world.get_actors()
-                vehicles = actors.filter('vehicle.*')
-                sensors = actors.filter('sensor.*')
-                walkers = actors.filter('walker.*')
+                # Advance simulation by one step
+                world.tick()
+                tick_count += 1
 
-                # Get vehicle position if available
-                vehicle_pos_str = ""
-                if len(vehicles) > 0:
-                    vehicle = vehicles[0]
-                    transform = vehicle.get_transform()
-                    loc = transform.location
-                    vehicle_pos_str = f" | Pos: ({loc.x:.1f}, {loc.y:.1f}, {loc.z:.1f})"
+                # Print monitor output every ~2 seconds
+                now = time.monotonic()
+                if now - last_monitor >= 2.0:
+                    actors = world.get_actors()
+                    vehicles = actors.filter('vehicle.*')
+                    sensors = actors.filter('sensor.*')
 
-                print(f"[Monitor] Actors: {len(actors):3d} | "
-                      f"Vehicles: {len(vehicles):2d} | "
-                      f"Sensors: {len(sensors):2d} | "
-                      f"Walkers: {len(walkers):2d}{vehicle_pos_str}")
+                    vehicle_pos_str = ""
+                    if len(vehicles) > 0:
+                        vehicle = vehicles[0]
+                        loc = vehicle.get_transform().location
+                        vehicle_pos_str = f" | Pos: ({loc.x:.1f}, {loc.y:.1f}, {loc.z:.1f})"
 
-                # Status update every second
-                time.sleep(1.0)
+                    sim_time = world.get_snapshot().timestamp.elapsed_seconds
+                    print(f"[Tick {tick_count:6d} t={sim_time:7.1f}s] "
+                          f"Vehicles: {len(vehicles):2d} | "
+                          f"Sensors: {len(sensors):2d}{vehicle_pos_str}")
+                    last_monitor = now
 
         except KeyboardInterrupt:
             print("\n\n=== Stopping Demo Scenario ===")
