@@ -351,10 +351,7 @@ impl CameraManager {
     ///
     /// ✅ Subphase 12.8.1: Spawn any of the 14 sensor types
     pub fn spawn_camera(&mut self, world: &mut crate::world::World) -> Result<()> {
-        let player = world
-            .player
-            .as_ref()
-            .ok_or_else(|| eyre!("No player vehicle available"))?;
+        let player = &world.player;
 
         // Get current sensor definition
         let sensor_def = &self.sensors[self.current_sensor].clone();
@@ -401,6 +398,23 @@ impl CameraManager {
             sensor_def.display_name, self.current_position
         );
 
+        // In sync mode, wait for the vehicle to be physics-initialized.
+        // A freshly spawned vehicle returns zero position until CARLA settles it.
+        for tick in 0..100 {
+            let _ = world.world.wait_for_tick();
+            let t = player.transform()?;
+            if t.location.x != 0.0 || t.location.y != 0.0 || t.location.z != 0.0 {
+                info!(
+                    "Vehicle ready after {} tick(s) at ({:.1}, {:.1}, {:.1})",
+                    tick + 1,
+                    t.location.x,
+                    t.location.y,
+                    t.location.z
+                );
+                break;
+            }
+        }
+
         // Spawn sensor attached to vehicle
         let sensor_actor = world
             .world
@@ -411,6 +425,9 @@ impl CameraManager {
                 attachment_type.clone(),
             )
             .map_err(|e| eyre!("Failed to spawn sensor: {:?}", e))?;
+
+        // In sync mode, tick to finalize the spawned actor before accessing it
+        let _ = world.world.wait_for_tick();
 
         let sensor =
             Sensor::try_from(sensor_actor).map_err(|_| eyre!("Failed to convert to Sensor"))?;

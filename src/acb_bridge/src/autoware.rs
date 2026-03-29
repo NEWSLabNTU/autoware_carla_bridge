@@ -178,7 +178,7 @@ impl Autoware {
         // Using Duration::MAX disables the health check (robot_description only arrives once).
         let detector = AutowareDetector::new(
             node.clone(),
-            None,                         // detection_timeout: use default (60s)
+            None,                           // detection_timeout: use default (60s)
             Some(std::time::Duration::MAX), // health_timeout: effectively infinite (latched topic)
         )?;
 

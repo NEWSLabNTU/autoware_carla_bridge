@@ -39,10 +39,7 @@ impl LaneInvasionSensor {
     ///
     /// ✅ Subphase 12.5.4: Spawn lane invasion sensor and set up listener
     pub fn spawn(&mut self, world: &mut crate::world::World) -> Result<()> {
-        let player = world
-            .player
-            .as_ref()
-            .ok_or_else(|| eyre!("No player vehicle available"))?;
+        let player = &world.player;
 
         // Get blueprint for sensor.other.lane_invasion
         let blueprint_library = world.world.blueprint_library()?;

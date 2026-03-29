@@ -308,8 +308,7 @@ fn main() -> Result<()> {
 
     // === Step 3: Create Autoware coordinator and wait for Autoware ===
     tracing::info!("Creating Autoware coordinator...");
-    let mut autoware =
-        autoware::Autoware::new(node.clone(), params.publish_direct_localization)?;
+    let mut autoware = autoware::Autoware::new(node.clone(), params.publish_direct_localization)?;
 
     tracing::info!("Waiting for Autoware to start...");
     tracing::info!("(Start Autoware planning simulator with sample_sensor_kit)");

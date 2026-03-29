@@ -53,6 +53,7 @@ mod sensors;
 mod ui;
 mod world;
 
+use carla::prelude::*;
 use eyre::Result;
 use macroquad::prelude::*;
 use tracing::info;
@@ -140,18 +141,67 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Wait for a vehicle to appear (spawned by the bridge)
-    info!("Waiting for bridge to spawn a vehicle...");
-    let mut world = loop {
-        match self::world::World::new(&client, &config) {
-            Ok(w) => break w,
-            Err(_) => {
-                info!("No vehicle found yet, retrying in 5 seconds...");
-                std::thread::sleep(std::time::Duration::from_secs(5));
+    // Get the CARLA world and wait for the hero vehicle with sensors attached.
+    // demo_scenario.py destroys stale heroes before spawning a new one, so we must
+    // confirm the hero is stable (survives multiple ticks) to avoid the race where
+    // we latch onto a stale hero that's about to be destroyed.
+    let carla_world = client.world()?;
+    info!("Waiting for hero vehicle with sensors attached...");
+    let hero_vehicle = 'outer: loop {
+        let _ = carla_world.wait_for_tick()?;
+        let actors = carla_world.actors()?;
+
+        let found = actors
+            .iter()
+            .filter_map(|a| carla::client::Vehicle::try_from(a.clone()).ok())
+            .find(|v| {
+                let is_hero = v
+                    .attributes()
+                    .map(|attrs| {
+                        attrs
+                            .iter()
+                            .any(|a| a.id() == "role_name" && a.value_string() == "hero")
+                    })
+                    .unwrap_or(false);
+                if !is_hero {
+                    return false;
+                }
+                actors.iter().any(|a| a.parent_id() == v.id())
+            });
+
+        if let Some(vehicle) = found {
+            let candidate_id = vehicle.id();
+
+            // Confirm the hero survives for 3 more seconds (60 ticks at 20Hz).
+            // A stale hero from a previous run will be destroyed by demo_scenario
+            // within this window.
+            for _ in 0..60 {
+                let _ = carla_world.wait_for_tick()?;
             }
+
+            // Re-check: is the same vehicle still alive?
+            let actors = carla_world.actors()?;
+            let still_alive = actors.iter().any(|a| a.id() == candidate_id);
+
+            if still_alive {
+                info!(
+                    "✓ Found hero vehicle: ID {}, Type: {} (confirmed stable)",
+                    vehicle.id(),
+                    vehicle.type_id()
+                );
+                break 'outer vehicle;
+            }
+            info!(
+                "Hero vehicle {} was destroyed (stale), retrying...",
+                candidate_id
+            );
         }
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
     };
-    info!("✓ World initialized, attached to vehicle");
+
+    let mut world = self::world::World::new(carla_world, hero_vehicle);
+    info!("✓ World initialized");
 
     // ✅ Subphase 12.2.1: Create camera manager and spawn RGB camera
     let mut camera = self::camera::CameraManager::new(config.width, config.height, config.gamma);

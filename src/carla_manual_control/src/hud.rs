@@ -135,7 +135,8 @@ impl Hud {
         }
 
         // ✅ Subphase 12.4.2: Gather vehicle telemetry
-        if let Some(ref player) = world.player {
+        {
+            let player = &world.player;
             // Get vehicle transform and velocity
             if let (Ok(transform), Ok(velocity)) = (player.transform(), player.velocity()) {
                 // Calculate speed in km/h
@@ -169,7 +170,8 @@ impl Hud {
         }
 
         // ✅ Subphase 12.6.1: Get vehicle control state
-        if let Some(ref player) = world.player {
+        {
+            let player = &world.player;
             if let Ok(control) = player.control() {
                 self.throttle = control.throttle;
                 self.steer = control.steer;
@@ -191,10 +193,7 @@ impl Hud {
     fn update_nearby_vehicles(&mut self, world: &crate::world::World) {
         self.nearby_vehicles.clear();
 
-        let player = match world.player.as_ref() {
-            Some(p) => p,
-            None => return,
-        };
+        let player = &world.player;
 
         let player_location = match player.transform() {
             Ok(t) => t.location,

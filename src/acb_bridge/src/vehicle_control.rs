@@ -110,8 +110,7 @@ impl VehicleControlBridge {
 
             // Steering: convert tire angle (rad) to normalized (-1 to 1)
             // Negate: Autoware positive = left turn (ROS), CARLA positive = right turn (left-handed)
-            control.steer =
-                (-cmd.lateral.steering_tire_angle / MAX_STEER_ANGLE).clamp(-1.0, 1.0);
+            control.steer = (-cmd.lateral.steering_tire_angle / MAX_STEER_ANGLE).clamp(-1.0, 1.0);
 
             // Longitudinal: acceleration (m/s²) → throttle or brake (0 to 1)
             let accel = cmd.longitudinal.acceleration;

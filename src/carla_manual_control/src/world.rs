@@ -22,11 +22,9 @@
 //! - ✅ Phase 11: Advanced features (radar, doors, telemetry)
 
 use carla::{
-    client::{Client, Vehicle, World as CarlaWorld},
-    prelude::*,
+    client::{Vehicle, World as CarlaWorld},
     rpc::{MapLayer, WeatherParameters},
 };
-use eyre::{eyre, Result};
 use tracing::info;
 
 /// Weather preset definition
@@ -171,17 +169,13 @@ fn create_soft_rain_sunset() -> WeatherParameters {
 
 /// World state manager
 ///
-/// Manages the CARLA world, player vehicle, and all sensors
+/// Manages the CARLA world, player vehicle, and all sensors.
+/// The player vehicle is found by main and passed in — this struct
+/// does not search for the vehicle itself (SSoT in main).
 #[allow(dead_code)]
 pub struct World {
     pub world: CarlaWorld,
-    pub player: Option<Vehicle>,
-    // TODO Phase 5: Add sensor fields
-    // pub collision_sensor: Option<CollisionSensor>,
-    // pub lane_invasion_sensor: Option<LaneInvasionSensor>,
-    // pub gnss_sensor: Option<GnssSensor>,
-    // pub imu_sensor: Option<IMUSensor>,
-    // pub radar_sensor: Option<RadarSensor>,
+    pub player: Vehicle,
 
     // ✅ Phase 9: Weather state
     pub current_weather: usize,
@@ -203,54 +197,8 @@ pub struct World {
 }
 
 impl World {
-    /// Create a new World and attach to existing player vehicle
-    ///
-    /// This finds the first vehicle in the CARLA world and attaches to it.
-    /// The vehicle should be spawned by the Autoware-CARLA bridge.
-    ///
-    /// Returns an error if no vehicles are found in the world.
-    pub fn new(client: &Client, _config: &crate::Config) -> Result<Self> {
-        let world = client.world()?;
-
-        // Find existing vehicle in the world instead of spawning a new one
-        info!("Searching for existing vehicle in CARLA world...");
-
-        // In synchronous mode, wait for a tick to get fresh world state
-        info!("Waiting for world tick to get current state...");
-        let _ = world.wait_for_tick()?;
-
-        let actors = world.actors()?;
-        info!("Found {} total actors in world", actors.len());
-
-        // Find vehicles matching the filter
-        let vehicles: Vec<_> = actors
-            .iter()
-            .filter_map(|actor| Vehicle::try_from(actor.clone()).ok())
-            .collect();
-
-        info!("Found {} vehicles", vehicles.len());
-
-        if vehicles.is_empty() {
-            return Err(eyre!(
-                "No vehicles found in CARLA world. Please spawn a vehicle first using the bridge."
-            ));
-        }
-
-        // Use the first vehicle found (should be the one spawned by the bridge)
-        let player = vehicles[0].clone();
-
-        info!(
-            "✓ Attached to existing vehicle: ID {}, Type: {}",
-            player.id(),
-            player.type_id()
-        );
-
-        let transform = player.transform()?;
-        info!(
-            "  Position: ({:.2}, {:.2}, {:.2})",
-            transform.location.x, transform.location.y, transform.location.z
-        );
-
+    /// Create a new World with the given CARLA world and hero vehicle.
+    pub fn new(world: CarlaWorld, player: Vehicle) -> Self {
         let weather_presets = get_weather_presets();
         let map_layers = vec![
             MapLayer::None,
@@ -266,9 +214,9 @@ impl World {
             MapLayer::All,
         ];
 
-        Ok(Self {
+        Self {
             world,
-            player: Some(player),
+            player,
             current_weather: 0,
             weather_presets,
             current_map_layer: 0,
@@ -279,7 +227,7 @@ impl World {
             doors_are_open: false,
             show_vehicle_telemetry: false,
             constant_velocity_enabled: false,
-        })
+        }
     }
 
     /// Tick the world (advance simulation one step)
@@ -353,16 +301,10 @@ impl World {
     // pub fn toggle_constant_velocity(&mut self) {}
     // pub fn toggle_vehicle_telemetry(&mut self) {}
 
-    /// Cleanup - detach from vehicle (don't destroy it)
-    ///
-    /// Note: We don't destroy the vehicle because it's owned by the bridge.
-    /// We just clear our reference to it.
-    pub fn destroy(&mut self) {
-        // TODO: Destroy all sensors we spawned
-        if self.player.is_some() {
-            info!("Detaching from vehicle (not destroying - owned by bridge)");
-        }
-        self.player = None;
+    /// Cleanup - detach from vehicle (don't destroy it).
+    /// The vehicle is owned by the scenario script, not by us.
+    pub fn destroy(&self) {
+        info!("Detaching from vehicle (not destroying - owned by scenario script)");
     }
 }
 

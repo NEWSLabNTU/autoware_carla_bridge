@@ -1,10 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-
 pub fn is_bigendian() -> bool {
     cfg!(target_endian = "big")
 }
-
 
 pub fn create_ros_header(timestamp: Option<f64>) -> std_msgs::msg::Header {
     let time = if let Some(sec) = timestamp {

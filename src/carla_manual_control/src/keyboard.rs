@@ -95,7 +95,8 @@ impl KeyboardControl {
             self.autopilot_enabled = !self.autopilot_enabled;
 
             // Apply autopilot setting to vehicle
-            if let Some(ref player) = world.player {
+            {
+                let player = &world.player;
                 if let Err(e) = player.set_autopilot(self.autopilot_enabled) {
                     warn!("Failed to set autopilot: {e}");
                 }
@@ -343,7 +344,8 @@ impl KeyboardControl {
             // Disable autopilot during replay
             if self.autopilot_enabled {
                 self.autopilot_enabled = false;
-                if let Some(ref player) = world.player {
+                {
+                    let player = &world.player;
                     if let Err(e) = player.set_autopilot(false) {
                         warn!("Failed to disable autopilot: {e}");
                     }
@@ -402,7 +404,8 @@ impl KeyboardControl {
 
         // ✅ Subphase 12.11.2: O key - Toggle vehicle doors
         if is_key_pressed(KeyCode::O) {
-            if let Some(ref player) = world.player {
+            {
+                let player = &world.player;
                 use carla::rpc::VehicleDoor;
 
                 world.doors_are_open = !world.doors_are_open;
@@ -424,7 +427,8 @@ impl KeyboardControl {
 
         // ✅ Subphase 12.11.3: Ctrl+W - Toggle constant velocity mode
         if is_key_pressed(KeyCode::W) && ctrl_pressed {
-            if let Some(ref player) = world.player {
+            {
+                let player = &world.player;
                 use carla::geom::Vector3D;
 
                 world.constant_velocity_enabled = !world.constant_velocity_enabled;
@@ -447,7 +451,8 @@ impl KeyboardControl {
 
         // ✅ Subphase 12.11.4: T key - Toggle vehicle telemetry
         if is_key_pressed(KeyCode::T) {
-            if let Some(ref player) = world.player {
+            {
+                let player = &world.player;
                 world.show_vehicle_telemetry = !world.show_vehicle_telemetry;
                 if let Err(e) = player.show_debug_telemetry(world.show_vehicle_telemetry) {
                     warn!("Failed to toggle telemetry: {e}");
@@ -536,7 +541,8 @@ impl KeyboardControl {
     pub fn apply_control(&mut self, world: &mut crate::world::World) -> Result<()> {
         // Only apply manual control if autopilot is disabled
         if !self.autopilot_enabled {
-            if let Some(ref player) = world.player {
+            {
+                let player = &world.player;
                 // Apply vehicle control
                 player.apply_control(&self.control)?;
 

@@ -185,6 +185,9 @@ impl CarlaVehicle {
                     ))
                 })?;
 
+            // In sync mode, tick to finalize the spawned actor before accessing it
+            let _ = world.wait_for_tick();
+
             let sensor = match sensor_actor.into_kinds() {
                 carla::client::ActorKind::Sensor(s) => s,
                 _ => return Err(BridgeError::CarlaIssue("Spawned actor is not a sensor")),

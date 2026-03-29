@@ -51,10 +51,7 @@ impl IMUSensor {
     ///
     /// ✅ Subphase 12.5.1: Spawn IMU and set up listener
     pub fn spawn(&mut self, world: &mut crate::world::World) -> Result<()> {
-        let player = world
-            .player
-            .as_ref()
-            .ok_or_else(|| eyre!("No player vehicle available"))?;
+        let player = &world.player;
 
         // Get blueprint for sensor.other.imu
         let blueprint_library = world.world.blueprint_library()?;
