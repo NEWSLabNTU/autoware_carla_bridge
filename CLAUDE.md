@@ -192,7 +192,16 @@ colcon list | grep autoware_vehicle_msgs
 ```
 .
 ├── src/
-│   ├── autoware_carla_bridge/     # Main bridge (rclrs)
+│   ├── acb_bridge/                # Main bridge (rclrs)
+│   ├── acb_launch/                # Autoware launch + config
+│   ├── acb_demo_launch/           # Demo orchestration
+│   ├── acb_pilot/                 # Autonomous driving pilot (Python)
+│   ├── acb_individual_params/     # Sensor calibrations
+│   ├── acb_sensor_kit_launch/     # Sensor kit launch + description
+│   ├── acb_vehicle_launch/        # Vehicle launch + description
+│   ├── carla_pcd_gen/             # Standalone PCD generator
+│   ├── carla_map_gen/             # Standalone map generator
+│   ├── carla_manual_control/      # Standalone vehicle control GUI
 │   └── external/
 │       ├── autoware@              # Symlink to Autoware workspace
 │       ├── carla-rust/            # CARLA Rust bindings
@@ -356,7 +365,7 @@ ros2 param get /localization/pose_estimator/ndt_scan_matcher use_sim_time
 ros2 param get /localization/ekf_localizer use_sim_time
 ```
 
-**File**: `src/carla_autoware_launch/launch/carla_simulator.launch.xml` (fixed 2025-12-11)
+**File**: `src/acb_launch/launch/carla_simulator.launch.xml` (fixed 2025-12-11)
 
 ### Dependency Synchronization
 When using local carla-rust (`path = "..."`), match critical dependency versions (nalgebra, ndarray) to avoid type incompatibility errors.
@@ -390,8 +399,8 @@ mapping values are not allowed here
 ```
 
 **Files Affected**:
-- `src/carla_vehicle_launch/carla_vehicle_description/urdf/vehicle.xacro`
-- `src/carla_sensor_kit_launch/carla_sensor_kit_description/urdf/sensor_kit.xacro`
+- `src/acb_vehicle_launch/acb_vehicle_description/urdf/vehicle.xacro`
+- `src/acb_sensor_kit_launch/acb_sensor_kit_description/urdf/sensor_kit.xacro`
 
 **Impact**: robot_state_publisher crashes → no /robot_description published → bridge can't detect Autoware → vehicle fails to spawn → localization can't initialize → "The vehicle is not stopped" error
 
@@ -461,7 +470,7 @@ This removes all build artifacts and rebuilds cleanly with proper symlinks.
 **If install/ files are broken for a specific package** (e.g., stale launch files):
 ```bash
 # Clean specific package and rebuild
-rm -rf build/autoware_carla_bridge install/autoware_carla_bridge
+rm -rf build/acb_bridge install/acb_bridge
 just build
 ```
 
@@ -540,7 +549,7 @@ Delete:
 
 Provides latest APIs and multi-version support (0.9.14-0.9.16).
 
-**Integration**: Update `src/autoware_carla_bridge/Cargo.toml`:
+**Integration**: Update `src/acb_bridge/Cargo.toml`:
 ```toml
 carla = { version = "0.12.0", path = "../../carla-rust/carla" }
 ```
@@ -625,7 +634,7 @@ cat third_party/autoware/autoware_repo/play_log/2025-12-08_03-24-49/node/autowar
 
 ### CARLA-Specific System Configurations
 
-The `carla_autoware_launch` package provides CARLA-optimized configurations that override Autoware defaults:
+The `acb_launch` package provides CARLA-optimized configurations that override Autoware defaults:
 
 **MRM Handler** (`config/system/mrm_handler/mrm_handler.param.yaml`):
 - `timeout_operation_mode_availability: 2.0` (default: 0.5s) - Relaxed for simulation timing variations
@@ -694,7 +703,7 @@ Our `carla_simulator.launch.xml` sets `system_run_mode=logging_simulation` to di
   - `CarlaVehicle::new()` takes existing `Vehicle` instead of spawning
   - `CarlaVehicle::cleanup()` destroys sensors only (vehicle not destroyed; owned by scenario script)
   - Removed `bridge_config.rs` (spawn_pose no longer needed)
-  - Removed `carla_pilot`/`auto_drive` from `demo.launch.xml` (localization is now fully automatic)
+  - Removed `acb_pilot`/`auto_drive` from `demo.launch.xml` (localization is now fully automatic)
   - GNSS → gnss_poser → `autoware_automatic_pose_initializer_node` → NDT align → localization initialized with no manual steps
   - Verified: EKF pose vs CARLA actual ~6.5cm error, exact orientation match
 - ✅ **Coordinate projection fixes for correct map localization** (2026-03-21):
@@ -711,7 +720,7 @@ Our `carla_simulator.launch.xml` sets `system_run_mode=logging_simulation` to di
 - ✅ **MRM handler timeout configuration for CARLA** (2025-12-12):
   - Fixed MRM oscillation causing EMERGENCY_STOP flickering and autonomous mode unavailability
   - Root cause: Default MRM handler timeouts too aggressive for simulation (0.5s availability, 0.01s behavior calls)
-  - Created CARLA-specific MRM handler config: `src/carla_autoware_launch/config/system/mrm_handler/mrm_handler.param.yaml`
+  - Created CARLA-specific MRM handler config: `src/acb_launch/config/system/mrm_handler/mrm_handler.param.yaml`
   - Relaxed timeouts: `timeout_operation_mode_availability: 2.0s`, `timeout_call_mrm_behavior: 0.5s`
   - Updated `carla_simulator.launch.xml` to use CARLA-specific MRM handler config
   - Result: MRM state stable at NORMAL (1), autonomous mode can now be engaged successfully
@@ -728,11 +737,11 @@ Our `carla_simulator.launch.xml` sets `system_run_mode=logging_simulation` to di
   - Root cause: `use_sim_time=False` on localization nodes caused timestamp mismatch
 - ✅ **ROS parameters migration** (2025-12-08):
   - Replaced clap command-line args with native ROS 2 parameters
-  - Single config file: `src/autoware_carla_bridge/config/vehicle_config.yaml`
+  - Single config file: `src/acb_bridge/config/vehicle_config.yaml`
   - Parameters set via `--ros-args -p param:=value` (e.g., `carla_port`, `vehicle_config`)
   - Removed duplicate config files, consolidated to single source of truth
 - ✅ **CARLA localization configuration** (2025-12-05):
-  - Created `carla_autoware_launch` package with CARLA-optimized NDT parameters
+  - Created `acb_launch` package with CARLA-optimized NDT parameters
   - Disabled `stop_check_enabled` in pose_initializer (CARLA timing issues caused false "vehicle not stopped" errors)
   - Custom NDT params: resolution=1.0m, max_iterations=50, particles_num=500, map_radius=200m
 - ✅ **Connection robustness improvements** (2025-12-03):

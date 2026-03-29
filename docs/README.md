@@ -18,7 +18,9 @@
 - [3-integration.md](roadmap/3-integration.md) - Phase 3: Autoware Integration ✅
 - [4-autoware-feature-parity.md](roadmap/4-autoware-feature-parity.md) - Phase 4: Feature Parity ✅ (calibration pending)
 - [5-map-integration.md](roadmap/5-map-integration.md) - Phase 5: Map Integration 🟡 (pre-converted maps working)
-- [6-testing-and-release.md](roadmap/6-testing-and-release.md) - Phase 6: Testing & Release ⏳
+- [6-renaming.md](roadmap/6-renaming.md) - Phase 6: Package Renaming ✅
+- [7-testing.md](roadmap/7-testing.md) - Phase 7: Testing ⏳
+- [8-packaging-and-release.md](roadmap/8-packaging-and-release.md) - Phase 8: Packaging & Release ⏳
 
 ## Archive
 

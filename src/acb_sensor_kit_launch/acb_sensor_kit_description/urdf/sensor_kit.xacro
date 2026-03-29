@@ -1,0 +1,170 @@
+<?xml version="1.0"?>
+<robot name="carla_sensor_kit" xmlns:xacro="http://ros.org/wiki/xacro">
+  <!--
+    CARLA Sensor Kit URDF - Bridge-Compatible Sensor Definitions
+
+    This URDF defines sensor link frames that the CARLA bridge reads to spawn and configure
+    sensors in CARLA simulation. The bridge parses this URDF from the /robot_description
+    topic and uses it to (1) detect which sensors to spawn in CARLA by link name patterns,
+    (2) position sensors relative to the vehicle from TF transforms, and
+    (3) configure sensor types and parameters.
+
+    Sensor Detection (from bridge urdf_parser.rs)
+    The bridge classifies sensors by link name patterns as follows
+    - "camera", "rgb" becomes Camera RGB
+    - "lidar", "velodyne", "pointcloud", "laser" becomes LiDAR
+    - "imu", "inertial" becomes IMU
+    - "gnss", "gps" becomes GNSS
+
+    Sensor List (MINIMAL configuration for performance)
+    - 1 LiDAR (velodyne_top only)
+    - 1 Camera (camera0 front only)
+    - 1 GNSS (gnss_link)
+    - 1 IMU (tamagawa/imu_link)
+
+    NOTE - Reduced from full awsim_labs config (3 LiDARs, 8 cameras) to improve
+    CARLA tick rate. See docs/issues-auto-button-disabled.md for details.
+
+    Physical Simulation
+    Unlike real sensor kits, these definitions are metadata-only. CARLA handles
+    actual sensor spawning and attachment, sensor data generation (images, point
+    clouds, IMU, GNSS), and ray tracing and physics simulation.
+
+    Customization
+    To modify sensor positions, edit config/sensor_kit_calibration.yaml file.
+    To add or remove sensors, edit this file AND update calibration.yaml file.
+  -->
+
+  <!-- Configuration directory for calibration files -->
+  <xacro:arg name="config_dir" default="$(find acb_sensor_kit_description)/config"/>
+
+  <xacro:macro name="sensor_kit_macro" params="parent x y z roll pitch yaw">
+    <xacro:property name="calibration" value="${xacro.load_yaml('$(arg config_dir)/sensor_kit_calibration.yaml')}"/>
+
+    <!-- Sensor kit base link - attachment point to vehicle -->
+    <joint name="sensor_kit_base_link_joint" type="fixed">
+      <origin rpy="${roll} ${pitch} ${yaw}" xyz="${x} ${y} ${z}"/>
+      <parent link="${parent}"/>
+      <child link="sensor_kit_base_link"/>
+    </joint>
+    <link name="sensor_kit_base_link"/>
+
+    <!-- ========================================================================== -->
+    <!-- LiDAR Sensors -->
+    <!-- ========================================================================== -->
+    <!-- MINIMAL CONFIG - Only top LiDAR enabled for performance -->
+
+    <!-- Top LiDAR (VLS-128 equivalent) - Primary 360° coverage -->
+    <!-- Named "top" to match Autoware's expected topic namespace /sensing/lidar/top/... -->
+    <joint name="top_base_link_joint" type="fixed">
+      <origin
+        xyz="${calibration['sensor_kit_base_link']['velodyne_top_base_link']['x']}
+             ${calibration['sensor_kit_base_link']['velodyne_top_base_link']['y']}
+             ${calibration['sensor_kit_base_link']['velodyne_top_base_link']['z']}"
+        rpy="${calibration['sensor_kit_base_link']['velodyne_top_base_link']['roll']}
+             ${calibration['sensor_kit_base_link']['velodyne_top_base_link']['pitch']}
+             ${calibration['sensor_kit_base_link']['velodyne_top_base_link']['yaw']}"/>
+      <parent link="sensor_kit_base_link"/>
+      <child link="top_base_link"/>
+    </joint>
+    <link name="top_base_link"/>
+
+    <!-- Actual sensor frame (optical frame) -->
+    <joint name="top_joint" type="fixed">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <parent link="top_base_link"/>
+      <child link="top"/>
+    </joint>
+    <link name="top"/>
+
+    <!-- DISABLED - Left and Right LiDARs removed for performance
+    <joint name="velodyne_left_base_link_joint" type="fixed">
+      ...
+    </joint>
+    <joint name="velodyne_right_base_link_joint" type="fixed">
+      ...
+    </joint>
+    -->
+
+    <!-- ========================================================================== -->
+    <!-- Camera Sensors -->
+    <!-- ========================================================================== -->
+    <!-- MINIMAL CONFIG - Only camera0 (front) enabled for performance -->
+
+    <!-- DISABLED - Traffic Light Recognition Cameras removed for performance -->
+
+    <!-- Surround View Cameras - Only camera0 enabled -->
+    <xacro:macro name="surround_camera" params="name">
+      <!-- Build the calibration key name -->
+      <xacro:property name="camera_link_name" value="${name}/camera_link"/>
+      <xacro:property name="cam_calib" value="${calibration['sensor_kit_base_link'][camera_link_name]}"/>
+
+      <joint name="${name}/camera_link_joint" type="fixed">
+        <origin
+          xyz="${cam_calib['x']}
+               ${cam_calib['y']}
+               ${cam_calib['z']}"
+          rpy="${cam_calib['roll']}
+               ${cam_calib['pitch']}
+               ${cam_calib['yaw']}"/>
+        <parent link="sensor_kit_base_link"/>
+        <child link="${name}/camera_link"/>
+      </joint>
+      <link name="${name}/camera_link"/>
+
+      <joint name="${name}/camera_optical_link_joint" type="fixed">
+        <origin xyz="0 0 0" rpy="-1.5707963267948966 0 -1.5707963267948966"/>
+        <parent link="${name}/camera_link"/>
+        <child link="${name}/camera_optical_link"/>
+      </joint>
+      <link name="${name}/camera_optical_link"/>
+    </xacro:macro>
+
+    <!-- Only front camera enabled -->
+    <xacro:surround_camera name="camera0"/>
+    <!-- DISABLED - camera1-5 removed for performance
+    <xacro:surround_camera name="camera1"/>
+    <xacro:surround_camera name="camera2"/>
+    <xacro:surround_camera name="camera3"/>
+    <xacro:surround_camera name="camera4"/>
+    <xacro:surround_camera name="camera5"/>
+    -->
+
+    <!-- ========================================================================== -->
+    <!-- GNSS Sensor -->
+    <!-- ========================================================================== -->
+
+    <joint name="carla_gnss_link_joint" type="fixed">
+      <origin
+        xyz="${calibration['sensor_kit_base_link']['carla/gnss_link']['x']}
+             ${calibration['sensor_kit_base_link']['carla/gnss_link']['y']}
+             ${calibration['sensor_kit_base_link']['carla/gnss_link']['z']}"
+        rpy="${calibration['sensor_kit_base_link']['carla/gnss_link']['roll']}
+             ${calibration['sensor_kit_base_link']['carla/gnss_link']['pitch']}
+             ${calibration['sensor_kit_base_link']['carla/gnss_link']['yaw']}"/>
+      <parent link="sensor_kit_base_link"/>
+      <child link="carla/gnss_link"/>
+    </joint>
+    <link name="carla/gnss_link"/>
+
+    <!-- ========================================================================== -->
+    <!-- IMU Sensor -->
+    <!-- ========================================================================== -->
+
+    <joint name="carla_imu_link_joint" type="fixed">
+      <origin
+        xyz="${calibration['sensor_kit_base_link']['carla/imu_link']['x']}
+             ${calibration['sensor_kit_base_link']['carla/imu_link']['y']}
+             ${calibration['sensor_kit_base_link']['carla/imu_link']['z']}"
+        rpy="${calibration['sensor_kit_base_link']['carla/imu_link']['roll']}
+             ${calibration['sensor_kit_base_link']['carla/imu_link']['pitch']}
+             ${calibration['sensor_kit_base_link']['carla/imu_link']['yaw']}"/>
+      <parent link="sensor_kit_base_link"/>
+      <child link="carla/imu_link"/>
+    </joint>
+    <link name="carla/imu_link"/>
+
+  </xacro:macro>
+
+
+</robot>

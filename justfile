@@ -94,10 +94,10 @@ run-autoware:
     export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
     source "{{project}}/install/setup.bash"
     exec play_launch launch --web-addr 0.0.0.0:8080 \
-        carla_autoware_launch carla_simulator.launch.xml \
+        acb_launch carla_simulator.launch.xml \
         map_path:="{{project}}/data/carla-autoware-bridge/{{map_name}}" \
-        vehicle_model:=carla_vehicle \
-        sensor_model:=carla_sensor_kit \
+        vehicle_model:=acb_vehicle \
+        sensor_model:=acb_sensor_kit \
         use_sim_time:=true \
         data_path:="{{data_path}}"
 
@@ -107,7 +107,7 @@ run-bridge:
     set -e
     source "{{project}}/install/setup.bash"
     exec play_launch launch --web-addr 0.0.0.0:8080 \
-        autoware_carla_bridge autoware_carla_bridge.launch.xml \
+        acb_bridge autoware_carla_bridge.launch.xml \
         carla_port:={{carla_port}}
 
 # Run demo scenario - loads map and monitors CARLA actors (foreground)
@@ -121,7 +121,7 @@ run-monitor:
     #!/usr/bin/env bash
     set -e
     source "{{project}}/install/setup.bash"
-    exec play_launch run manual_control manual_control
+    exec play_launch run carla_manual_control carla_manual_control
 
 # Run full demo - Autoware + bridge + scenario + pilot + monitor (CARLA must be running)
 # Pre-build TensorRT engines for lidar_centerpoint (first-time only, takes 2-5 min)
@@ -152,7 +152,7 @@ run-demo:
     source "{{project}}/install/setup.bash"
     exec play_launch launch --web-addr 0.0.0.0:8080 \
         -c "{{project}}/config/play_launch.yaml" \
-        carla_demo_launch demo.launch.xml \
+        acb_demo_launch demo.launch.xml \
         project_dir:="{{project}}" \
         carla_port:={{carla_port}} \
         map_name:={{map_name}} \
@@ -165,16 +165,16 @@ run-pilot poses_file="":
     source "{{project}}/install/setup.bash"
     POSES_FILE="{{poses_file}}"
     if [ -z "$POSES_FILE" ]; then
-        POSES_FILE="$(ros2 pkg prefix carla_pilot)/share/carla_pilot/config/example_poses.yaml"
+        POSES_FILE="$(ros2 pkg prefix acb_pilot)/share/acb_pilot/config/example_poses.yaml"
     fi
-    exec ros2 run carla_pilot auto_drive --ros-args -p poses_file:="$POSES_FILE"
+    exec ros2 run acb_pilot auto_drive --ros-args -p poses_file:="$POSES_FILE"
 
 # Capture poses from RViz interactively
 run-capture-poses output_file:
     #!/usr/bin/env bash
     set -euo pipefail
     source "{{project}}/install/setup.bash"
-    exec ros2 run carla_pilot capture_poses --ros-args -p output_file:="{{output_file}}"
+    exec ros2 run acb_pilot capture_poses --ros-args -p output_file:="{{output_file}}"
 
 # Generate Lanelet2 map from running CARLA server
 generate-lanelet2 map_dir:

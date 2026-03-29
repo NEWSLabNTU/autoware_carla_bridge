@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+  <!-- CARLA connection parameters -->
+  <arg name="carla_address" default="127.0.0.1" description="CARLA server address"/>
+  <arg name="carla_port" default="2000" description="CARLA server port"/>
+
+  <!-- Vehicle configuration (single source of truth for sensors) -->
+  <arg name="vehicle_config" default="$(find-pkg-share acb_bridge)/config/vehicle_config.yaml"
+       description="Path to vehicle configuration YAML file"/>
+
+  <!-- Launch the bridge node with ROS parameters -->
+  <node pkg="acb_bridge" name="acb_bridge" exec="acb_bridge" output="screen">
+    <param name="carla_address" value="$(var carla_address)"/>
+    <param name="carla_port" value="$(var carla_port)"/>
+    <param name="vehicle_config" value="$(var vehicle_config)"/>
+  </node>
+</launch>

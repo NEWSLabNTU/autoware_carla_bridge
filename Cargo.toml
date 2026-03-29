@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "src/autoware_carla_bridge",
+    "src/acb_bridge",
     "src/carla_pcd_gen",
-    "src/manual_control",
+    "src/carla_manual_control",
 ]
 
 [workspace.dependencies]

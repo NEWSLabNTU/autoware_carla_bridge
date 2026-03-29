@@ -1,0 +1,73 @@
+# Vehicle configuration for acb_bridge
+# This file specifies the vehicle blueprint and sensor mappings for spawning in CARLA
+
+# Vehicle blueprint from CARLA's blueprint library
+vehicle:
+  blueprint: "vehicle.tesla.model3"
+  # Alternative blueprints:
+  # - vehicle.toyota.prius
+  # - vehicle.nissan.patrol
+  # - vehicle.audi.a2
+
+# Sensor mappings from Autoware URDF to CARLA blueprints
+# Sensor names MUST match TF frame names from the sensor_kit URDF
+sensors:
+  # LiDAR sensor (TF frame: top)
+  # CARLA LiDAR: rotation_frequency MUST match simulation FPS for full 360° per frame!
+  # See GitHub issue #5759: "lidar point cloud just a half frame points"
+  # Solution: rotation_frequency = 1/fixed_delta_seconds = simulation FPS
+  #
+  # With rotation_frequency < FPS, each frame only covers partial rotation:
+  #   - rotation_frequency=10, FPS=20 → 180° per frame (half scan!)
+  #   - rotation_frequency=20, FPS=20 → 360° per frame (full scan)
+  top:
+    blueprint: "sensor.lidar.ray_cast"
+    parameters:
+      channels: "128"
+      range: "200.0"
+      # Points per second: at 20Hz rotation, 2621440/20 = 131072 points per rotation
+      # With 128 channels: 1024 points per channel per rotation (0.35° resolution)
+      points_per_second: "2621440"
+      # CRITICAL: rotation_frequency must match simulation FPS for full 360° per frame
+      # CARLA async mode typically runs 20-30 FPS. Set to 20 for reliable full scans.
+      rotation_frequency: "20.0"
+      # sensor_tick: 0.0 publishes every frame (full 360° with matching rotation_frequency)
+      sensor_tick: "0.0"
+      upper_fov: "15.0"
+      lower_fov: "-25.0"
+      horizontal_fov: "360.0"
+      # Disable all dropoff for consistent point clouds
+      atmosphere_attenuation_rate: "0.0"
+      dropoff_general_rate: "0.0"
+      dropoff_intensity_limit: "1.0"
+      dropoff_zero_intensity: "0.0"
+      noise_stddev: "0.0"
+
+  # Camera sensor (TF frame: camera0/camera_link)
+  camera0/camera_link:
+    blueprint: "sensor.camera.rgb"
+    parameters:
+      image_size_x: "800"
+      image_size_y: "400"
+      fov: "74.5"
+      sensor_tick: "0.033"
+
+  # IMU sensor (TF frame: carla/imu_link)
+  carla/imu_link:
+    blueprint: "sensor.other.imu"
+    parameters:
+      sensor_tick: "0.01"
+
+  # GNSS sensor (TF frame: carla/gnss_link)
+  carla/gnss_link:
+    blueprint: "sensor.other.gnss"
+    parameters:
+      sensor_tick: "0.1"
+
+# Map origin offset (CARLA coordinates relative to ROS map frame)
+# Default: assume map origin = CARLA (0,0,0)
+map_origin:
+  x: 0.0
+  y: 0.0
+  z: 0.0
+  yaw: 0.0

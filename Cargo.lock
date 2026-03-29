@@ -3,6 +3,41 @@
 version = 4
 
 [[package]]
+name = "acb_bridge"
+version = "0.12.0"
+dependencies = [
+ "arc-swap",
+ "atomic_float",
+ "autoware_adapi_v1_msgs",
+ "autoware_control_msgs",
+ "autoware_vehicle_msgs",
+ "builtin_interfaces",
+ "bytemuck",
+ "carla",
+ "color-eyre",
+ "ctrlc",
+ "eyre",
+ "geometry_msgs",
+ "interp",
+ "nalgebra",
+ "nav_msgs",
+ "ndarray 0.16.1",
+ "rclrs",
+ "sensor_msgs",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "std_msgs",
+ "tf2_msgs",
+ "thiserror 2.0.18",
+ "tier4_control_msgs",
+ "tier4_vehicle_msgs",
+ "tracing",
+ "tracing-subscriber",
+ "urdf-rs",
+]
+
+[[package]]
 name = "action_msgs"
 version = "1.2.2"
 dependencies = [
@@ -478,41 +513,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "autoware_carla_bridge"
-version = "0.12.0"
-dependencies = [
- "arc-swap",
- "atomic_float",
- "autoware_adapi_v1_msgs",
- "autoware_control_msgs",
- "autoware_vehicle_msgs",
- "builtin_interfaces",
- "bytemuck",
- "carla",
- "color-eyre",
- "ctrlc",
- "eyre",
- "geometry_msgs",
- "interp",
- "nalgebra",
- "nav_msgs",
- "ndarray 0.16.1",
- "rclrs",
- "sensor_msgs",
- "serde",
- "serde_json",
- "serde_yaml",
- "std_msgs",
- "tf2_msgs",
- "thiserror 2.0.18",
- "tier4_control_msgs",
- "tier4_vehicle_msgs",
- "tracing",
- "tracing-subscriber",
- "urdf-rs",
-]
-
-[[package]]
 name = "autoware_common_msgs"
 version = "1.11.0"
 dependencies = [
@@ -786,6 +786,20 @@ dependencies = [
  "tar",
  "ureq",
  "zstd",
+]
+
+[[package]]
+name = "carla_manual_control"
+version = "0.1.0"
+dependencies = [
+ "carla",
+ "color-eyre",
+ "eyre",
+ "image 0.25.10",
+ "macroquad",
+ "nalgebra",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2287,20 +2301,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62bb907fe88d54d8d9ce32a3cceab4218ed2f6b7d35617cafe9adf84e43919cb"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "manual_control"
-version = "0.1.0"
-dependencies = [
- "carla",
- "color-eyre",
- "eyre",
- "image 0.25.10",
- "macroquad",
- "nalgebra",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

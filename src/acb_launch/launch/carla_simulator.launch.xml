@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- CARLA Simulator Launch File
+     This launch file provides Autoware integration for CARLA simulation.
+
+     Architecture:
+     - Sets use_sim_time globally via set_parameter (fixes ROS 2 parameter propagation issue)
+     - Includes autoware.launch.xml with launch_localization=false
+     - Includes tier4_localization_component separately with CARLA-optimized NDT parameters
+     - Disables traffic light recognition (use_traffic_light_recognition=false)
+     - autoware_carla_interface disabled (replaced by native Rust bridge)
+-->
+<launch>
+  <!-- Essential parameters -->
+  <arg name="use_sim_time" default="true" description="use simulation time"/>
+
+  <!-- CRITICAL - Set use_sim_time globally for ALL nodes including localization
+       This fixes the parameter propagation issue where localization nodes don't
+       inherit use_sim_time from the global_params.launch.py -->
+  <set_parameter name="use_sim_time" value="$(var use_sim_time)"/>
+  <arg name="map_path" description="point cloud and lanelet2 map directory path"/>
+  <arg name="vehicle_model" default="sample_vehicle" description="vehicle model name"/>
+  <arg name="sensor_model" default="sample_sensor_kit" description="sensor model name"/>
+  <arg name="data_path" default="/opt/autoware/1.5.0/data" description="packages data and artifacts directory path"/>
+  <arg name="simulator_type" default="carla" description="select the simulator type"/>
+
+  <!-- launch module preset -->
+  <!-- CARLA preset disables static_obstacle_avoidance module which requires
+       lanelet attributes not present in CARLA-converted maps.
+       We include the carla preset from our own package (below) to pre-set the
+       planning args, then use the upstream "default" preset name so the file
+       lookup stays inside autoware_launch (which exists in the Debian install). -->
+  <arg name="planning_module_preset" default="default" description="planning module preset"/>
+  <arg name="control_module_preset" default="default" description="control module preset"/>
+
+  <!-- Optional parameters -->
+  <!-- Modules to be launched -->
+  <arg name="vehicle" default="true" description="launch vehicle"/>
+  <arg name="system" default="true" description="launch system"/>
+  <arg name="map" default="true" description="launch map"/>
+  <arg name="sensing" default="true" description="launch sensing"/>
+  <arg name="localization" default="true" description="launch localization"/>
+  <arg name="perception" default="true" description="launch perception"/>
+  <arg name="planning" default="true" description="launch planning"/>
+  <arg name="control" default="true" description="launch control"/>
+  <!-- Map -->
+  <arg name="lanelet2_map_file" default="lanelet2_map.osm" description="lanelet2 map file name"/>
+  <arg name="pointcloud_map_file" default="pointcloud_map.pcd" description="pointcloud map file name"/>
+  <!-- Perception -->
+  <arg name="traffic_light_namespace" default="[traffic_light]" description="traffic light recognition namespace"/>
+  <!-- Vehicle -->
+  <arg name="launch_vehicle_interface" default="false"/>
+  <!-- System -->
+  <arg name="launch_system_monitor" default="false" description="launch system monitor"/>
+  <arg name="launch_dummy_diag_publisher" default="false" description="launch dummy diag publisher"/>
+  <!-- Sensing -->
+  <arg name="launch_sensing_driver" default="false"/>
+  <!-- Tools -->
+  <arg name="rviz" default="true" description="launch rviz"/>
+  <arg name="rviz_config_name" default="autoware.rviz" description="rviz config name"/>
+  <arg name="rviz_config" default="$(find-pkg-share autoware_launch)/rviz/$(var rviz_config_name)" description="rviz config path"/>
+
+  <!-- CARLA-optimized localization config path -->
+  <arg name="carla_loc_config_path" default="$(find-pkg-share acb_launch)/config/localization"/>
+  <!-- CARLA-optimized system topics config - excludes traffic light topic monitoring -->
+  <arg name="carla_system_topics_path" default="$(find-pkg-share acb_launch)/config/system/component_state_monitor/topics.yaml"/>
+  <!-- CARLA-optimized MRM handler config - relaxed timeouts for simulation -->
+  <arg name="carla_mrm_handler_path" default="$(find-pkg-share acb_launch)/config/system/mrm_handler/mrm_handler.param.yaml"/>
+
+  <!-- autoware_carla_interface is replaced by our native Rust bridge (autoware_carla_bridge) -->
+  <!-- <group scoped="false" if="$(eval &quot;'$(var simulator_type)' == 'carla'&quot;)">
+    <include file="$(find-pkg-share autoware_carla_interface)/autoware_carla_interface.launch.xml"/>
+  </group> -->
+
+  <!-- Pre-set CARLA planning args before autoware.launch.xml includes the
+       default_preset.yaml. YAML includes modify the parent context, and child
+       contexts inherit configurations, so these values propagate through the
+       include chain and take precedence over the default preset's defaults. -->
+  <include file="$(find-pkg-share acb_launch)/config/planning/preset/carla_preset.yaml"/>
+
+  <!-- Include autoware.launch.xml with localization DISABLED
+       Localization is launched separately below with CARLA-optimized config -->
+  <group scoped="false">
+    <include file="$(find-pkg-share autoware_launch)/launch/autoware.launch.xml">
+      <!-- Common -->
+      <arg name="map_path" value="$(var map_path)"/>
+      <arg name="vehicle_model" value="$(var vehicle_model)"/>
+      <arg name="sensor_model" value="$(var sensor_model)"/>
+      <arg name="data_path" value="$(var data_path)"/>
+      <!-- launch module preset -->
+      <arg name="planning_module_preset" value="$(var planning_module_preset)"/>
+      <arg name="control_module_preset" value="$(var control_module_preset)"/>
+      <!-- Modules to be launched -->
+      <arg name="launch_vehicle" value="$(var vehicle)"/>
+      <!-- CRITICAL - Disable system here, launch separately with CARLA topics config -->
+      <arg name="launch_system" value="false"/>
+      <arg name="launch_map" value="$(var map)"/>
+      <arg name="launch_sensing" value="$(var sensing)"/>
+      <!-- CRITICAL - Disable localization here, launch separately with CARLA config -->
+      <arg name="launch_localization" value="false"/>
+      <arg name="launch_perception" value="$(var perception)"/>
+      <arg name="launch_planning" value="$(var planning)"/>
+      <arg name="launch_control" value="$(var control)"/>
+      <!-- Global parameters -->
+      <arg name="use_sim_time" value="$(var use_sim_time)"/>
+      <!-- CRITICAL - Set logging_simulation mode to disable stop_check in pose_initializer -->
+      <arg name="system_run_mode" value="logging_simulation"/>
+      <!-- Vehicle -->
+      <arg name="launch_vehicle_interface" value="$(var launch_vehicle_interface)"/>
+      <!-- Map -->
+      <arg name="lanelet2_map_file" value="$(var lanelet2_map_file)"/>
+      <arg name="pointcloud_map_file" value="$(var pointcloud_map_file)"/>
+      <!-- System -->
+      <arg name="launch_system_monitor" value="$(var launch_system_monitor)"/>
+      <arg name="launch_dummy_diag_publisher" value="$(var launch_dummy_diag_publisher)"/>
+      <!-- Sensing -->
+      <arg name="launch_sensing_driver" value="$(var launch_sensing_driver)"/>
+      <!-- Perception -->
+      <!-- CARLA - Use high accuracy detection disabled for traffic lights -->
+      <arg name="traffic_light_recognition/use_high_accuracy_detection" value="false"/>
+      <!-- Tools -->
+      <arg name="rviz" value="$(var rviz)"/>
+      <arg name="rviz_config" value="$(var rviz_config)"/>
+    </include>
+  </group>
+
+  <!-- Include localization with CARLA-optimized config
+       This uses acb_launch/config/localization with lowered NDT threshold -->
+  <group if="$(var localization)">
+    <include file="$(find-pkg-share autoware_launch)/launch/components/tier4_localization_component.launch.xml">
+      <!-- Use CARLA-optimized localization config path -->
+      <arg name="loc_config_path" value="$(var carla_loc_config_path)"/>
+      <arg name="use_sim_time" value="$(var use_sim_time)"/>
+      <arg name="vehicle_model" value="$(var vehicle_model)"/>
+      <!-- Required by tier4_localization_component but not declared with a default -->
+      <arg name="system_run_mode" value="logging_simulation"/>
+    </include>
+  </group>
+
+  <!-- Include system with CARLA-optimized topics config
+       This uses acb_launch topics.yaml which excludes traffic light monitoring -->
+  <group if="$(var system)">
+    <include file="$(find-pkg-share tier4_system_launch)/launch/system.launch.xml">
+      <arg name="run_mode" value="logging_simulation"/>
+      <arg name="launch_system_monitor" value="$(var launch_system_monitor)"/>
+      <arg name="launch_dummy_diag_publisher" value="$(var launch_dummy_diag_publisher)"/>
+      <arg name="sensor_model" value="$(var sensor_model)"/>
+      <!-- CRITICAL - Use CARLA-specific topics config that excludes traffic light topic -->
+      <arg name="component_state_monitor_topic_path" value="$(var carla_system_topics_path)"/>
+      <!-- Use default paths for other configs -->
+      <arg name="duplicated_node_checker_param_path" value="$(find-pkg-share autoware_launch)/config/system/duplicated_node_checker/duplicated_node_checker.param.yaml"/>
+      <arg name="processing_time_checker_param_path" value="$(find-pkg-share autoware_launch)/config/system/processing_time_checker/processing_time_checker.param.yaml"/>
+      <arg name="pipeline_latency_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/pipeline_latency_monitor/pipeline_latency_monitor.param.yaml"/>
+      <arg name="mrm_comfortable_stop_operator_param_path" value="$(find-pkg-share autoware_launch)/config/system/mrm_comfortable_stop_operator/mrm_comfortable_stop_operator.param.yaml"/>
+      <arg name="mrm_emergency_stop_operator_param_path" value="$(find-pkg-share autoware_launch)/config/system/mrm_emergency_stop_operator/mrm_emergency_stop_operator.param.yaml"/>
+      <arg name="dummy_diag_publisher_param_path" value="$(find-pkg-share autoware_launch)/config/system/diagnostics/dummy_diag_publisher.param.yaml"/>
+      <arg name="system_monitor_cpu_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/cpu_monitor.param.yaml"/>
+      <arg name="system_monitor_gpu_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/gpu_monitor.param.yaml"/>
+      <arg name="system_monitor_hdd_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/hdd_monitor.param.yaml"/>
+      <arg name="system_monitor_mem_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/mem_monitor.param.yaml"/>
+      <arg name="system_monitor_net_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/net_monitor.param.yaml"/>
+      <arg name="system_monitor_ntp_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/ntp_monitor.param.yaml"/>
+      <arg name="system_monitor_process_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/process_monitor.param.yaml"/>
+      <arg name="system_monitor_voltage_monitor_param_path" value="$(find-pkg-share autoware_launch)/config/system/system_monitor/voltage_monitor.param.yaml"/>
+      <!-- CARLA-specific MRM handler config with relaxed timeouts -->
+      <arg name="mrm_handler_param_path" value="$(var carla_mrm_handler_path)"/>
+      <arg name="diagnostic_graph_aggregator_param_path" value="$(find-pkg-share autoware_diagnostic_graph_aggregator)/config/default.param.yaml"/>
+      <!-- Use our CARLA-specific diagnostic graph with corrected node names for Autoware 1.5.0 -->
+      <arg name="diagnostic_graph_aggregator_graph_path" value="$(find-pkg-share acb_launch)/config/system/diagnostics/autoware-carla.yaml"/>
+    </include>
+  </group>
+</launch>
