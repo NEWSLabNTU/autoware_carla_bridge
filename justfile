@@ -91,7 +91,6 @@ carla-logs *args:
 run-autoware:
     #!/usr/bin/env bash
     set -e
-    export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
     source "{{project}}/install/setup.bash"
     exec play_launch launch --web-addr 0.0.0.0:8080 \
         acb_launch carla_simulator.launch.xml \
@@ -128,7 +127,6 @@ run-monitor:
 build-engines:
     #!/usr/bin/env bash
     set -e
-    export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
     source /opt/autoware/1.5.0/setup.bash
     MODEL_PATH="{{project}}/data/lidar_centerpoint"
     if [ -f "$MODEL_PATH/pts_voxel_encoder_centerpoint_tiny.engine" ] && \
@@ -149,7 +147,6 @@ build-engines:
 run-demo:
     #!/usr/bin/env bash
     set -e
-    export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
     source "{{project}}/install/setup.bash"
     exec play_launch launch --web-addr 0.0.0.0:8080 \
         -c "{{project}}/config/play_launch.yaml" \
