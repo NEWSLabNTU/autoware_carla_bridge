@@ -29,5 +29,8 @@ log/
 # direnv
 .direnv/
 
+# Machine-specific environment
+.env
+
 # Downloaded data (maps, etc.)
 /data/

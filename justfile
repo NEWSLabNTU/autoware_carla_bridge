@@ -1,4 +1,5 @@
 # Autoware-CARLA Bridge
+set dotenv-load
 
 carla_version := env_var_or_default('CARLA_VERSION', '0.9.16')
 carla_port := env_var_or_default('CARLA_PORT', '2000')
