@@ -34,3 +34,8 @@ log/
 
 # Downloaded data (maps, etc.)
 /data/
+
+# Packaging artifacts
+staging/
+pkg_install/
+*.deb
