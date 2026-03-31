@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Single Vehicle Demo (All-in-One)
+     Launches Autoware (with bridge + monitor via vehicle interface) and a scenario.
+     CARLA must be started separately.
+-->
+<launch>
+  <!-- Required args -->
+  <arg name="map_path" description="Path to Autoware map directory (containing lanelet2_map.osm, pointcloud_map.pcd)"/>
+
+  <!-- Configurable args -->
+  <arg name="carla_port" default="2000" description="CARLA RPC port"/>
+  <arg name="map_name" default="Town01" description="CARLA map to load"/>
+  <arg name="spawn_index" default="0" description="Spawn point index"/>
+  <arg name="data_path" default="/opt/autoware/1.5.0/data" description="Autoware ML models and data directory"/>
+
+  <!-- Autoware + bridge + monitor (via vehicle interface) -->
+  <include file="$(find-pkg-share acb_launch)/launch/carla_simulator.launch.xml">
+    <arg name="map_path" value="$(var map_path)"/>
+    <arg name="data_path" value="$(var data_path)"/>
+  </include>
+
+  <!-- Scenario script -->
+  <include file="$(find-pkg-share acb_scenario)/launch/single_vehicle_scenario.launch.xml">
+    <arg name="carla_port" value="$(var carla_port)"/>
+    <arg name="map_name" value="$(var map_name)"/>
+    <arg name="spawn_index" value="$(var spawn_index)"/>
+  </include>
+</launch>

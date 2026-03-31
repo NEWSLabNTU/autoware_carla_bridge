@@ -41,22 +41,31 @@ Requires: Ubuntu 22.04, ROS 2 Humble, [Autoware 1.5.0](https://autowarefoundatio
 just setup   # install deps, Autoware Debian, CARLA maps
 just build
 
-# Run (two terminals)
-just carla-start   # start CARLA as background service
-just run-demo      # start Autoware + bridge + scenario + auto-drive + monitor
+# Run
+just carla-start                # start CARLA as background service
+just sim                        # Autoware + bridge + scenario + monitor
 
-# Or without autonomous driving (manual control via RViz)
-just run-sim
+# With autonomous driving (vehicle follows a preset route)
+just sim auto_drive=true
 
 # Stop
 just carla-stop
 ```
 
-The vehicle will:
+With `auto_drive=true`, the vehicle will:
 1. Spawn in Town01
 2. Auto-initialize localization via GNSS
 3. Set a route and engage autonomous mode
 4. Drive to the goal (~220 s)
+
+### Running Components Separately
+
+```bash
+just carla-start
+just autoware    # Autoware + bridge + monitor (terminal 1)
+just scenario    # CARLA scenario script (terminal 2)
+just pilot       # autonomous driving pilot (terminal 3, optional)
+```
 
 ## Configuration
 

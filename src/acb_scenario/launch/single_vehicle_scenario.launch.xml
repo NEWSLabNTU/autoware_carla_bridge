@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Single Vehicle Scenario
+     Loads a CARLA map, spawns a hero vehicle, and ticks the simulation.
+     CARLA must be started separately.
+-->
+<launch>
+  <arg name="carla_port" default="2000" description="CARLA RPC port"/>
+  <arg name="map_name" default="Town01" description="CARLA map to load"/>
+  <arg name="spawn_index" default="0" description="Spawn point index"/>
+
+  <node pkg="acb_scenario" exec="demo_scenario" name="demo_scenario" output="screen"
+        args="--port $(var carla_port) --map $(var map_name) --spawn-index $(var spawn_index)"/>
+</launch>

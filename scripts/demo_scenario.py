@@ -257,7 +257,14 @@ def main():
         help="Index into the map's spawn point list (default: 0)"
     )
 
-    args = parser.parse_args()
+    # Strip ROS arguments (--ros-args ...) so this script works as a <node>
+    argv = sys.argv[1:]
+    try:
+        ros_idx = argv.index('--ros-args')
+        argv = argv[:ros_idx]
+    except ValueError:
+        pass
+    args = parser.parse_args(argv)
 
     # Create and run scenario
     scenario = DemoScenario(

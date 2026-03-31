@@ -98,6 +98,7 @@ fn create_sensor_bridges(
 struct BridgeParams {
     pub carla_address: String,
     pub carla_port: u16,
+    pub vehicle_name: String,
     pub vehicle_config: String,
     /// Publish pose directly to /localization/kinematic_state (bypasses Autoware localization)
     /// Set to true for testing without Autoware localization pipeline
@@ -122,6 +123,12 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        let vehicle_name = node
+            .declare_parameter("vehicle_name")
+            .default("hero".into())
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         let vehicle_config = node
             .declare_parameter("vehicle_config")
             .default("".into())
@@ -137,6 +144,7 @@ impl BridgeParams {
         // Get parameter values
         let carla_address_val: Arc<str> = carla_address.get();
         let carla_port_val: i64 = carla_port.get();
+        let vehicle_name_val: Arc<str> = vehicle_name.get();
         let vehicle_config_val: Arc<str> = vehicle_config.get();
         let publish_direct_localization_val: bool = publish_direct_localization.get();
 
@@ -150,6 +158,7 @@ impl BridgeParams {
         Ok(Self {
             carla_address: carla_address_val.to_string(),
             carla_port: carla_port_val as u16,
+            vehicle_name: vehicle_name_val.to_string(),
             vehicle_config: vehicle_config_val.to_string(),
             publish_direct_localization: publish_direct_localization_val,
         })
@@ -211,16 +220,17 @@ fn carla_tick(
     Ok(snapshot.timestamp().elapsed_seconds)
 }
 
-/// Poll CARLA actors until a vehicle with role_name="hero" is found.
+/// Poll CARLA actors until a vehicle with the given role_name is found.
 ///
-/// Returns `Some(vehicle)` when the hero vehicle is found, or `None` if Ctrl-C is received.
+/// Returns `Some(vehicle)` when found, or `None` if Ctrl-C is received.
 /// Logs progress every 5 seconds.
-fn wait_for_hero_vehicle(
+fn wait_for_vehicle(
     world: &carla::client::World,
+    vehicle_name: &str,
     running: &AtomicBool,
 ) -> Option<carla::client::Vehicle> {
     use carla::client::ActorBase;
-    tracing::info!("Waiting for hero vehicle (role_name=hero) in CARLA...");
+    tracing::info!("Waiting for vehicle (role_name={vehicle_name}) in CARLA...");
     let start = std::time::Instant::now();
     let mut last_log = std::time::Instant::now();
     loop {
@@ -232,14 +242,15 @@ fn wait_for_hero_vehicle(
                 Ok(vehicles) => {
                     for actor in vehicles.iter() {
                         if let Ok(attrs) = actor.attributes() {
-                            let is_hero = attrs
+                            let matches = attrs
                                 .iter()
-                                .any(|a| a.id() == "role_name" && a.value_string() == "hero");
-                            if is_hero {
+                                .any(|a| a.id() == "role_name" && a.value_string() == vehicle_name);
+                            if matches {
                                 tracing::info!(
-                                    "Found hero vehicle: ID={} type={}",
+                                    "Found vehicle: ID={} type={} role_name={}",
                                     actor.id(),
-                                    actor.type_id()
+                                    actor.type_id(),
+                                    vehicle_name,
                                 );
                                 return match actor.into_kinds() {
                                     carla::client::ActorKind::Vehicle(v) => Some(v),
@@ -255,7 +266,7 @@ fn wait_for_hero_vehicle(
         }
         if last_log.elapsed() >= Duration::from_secs(5) {
             tracing::info!(
-                "Still waiting for hero vehicle... ({:.0}s elapsed)",
+                "Still waiting for vehicle (role_name={vehicle_name})... ({:.0}s elapsed)",
                 start.elapsed().as_secs_f32()
             );
             last_log = std::time::Instant::now();
@@ -435,9 +446,9 @@ fn main() -> Result<()> {
             }
         };
 
-        // === Wait for hero vehicle then attach sensors ===
-        tracing::info!("Waiting for hero vehicle (spawned by scenario script)...");
-        let hero_vehicle = match wait_for_hero_vehicle(&world, &running) {
+        // === Wait for vehicle then attach sensors ===
+        tracing::info!("Waiting for vehicle '{}' (spawned by scenario script)...", params.vehicle_name);
+        let hero_vehicle = match wait_for_vehicle(&world, &params.vehicle_name, &running) {
             Some(v) => v,
             None => return Ok(()), // Ctrl-C
         };

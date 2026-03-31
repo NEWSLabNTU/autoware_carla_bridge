@@ -16,6 +16,11 @@ import sys
 import time
 from typing import Optional
 
+# Unbuffered output when launched as a ROS node (not connected to a terminal)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+
 try:
     import carla
 except ImportError:
@@ -257,7 +262,14 @@ def main():
         help="Index into the map's spawn point list (default: 0)"
     )
 
-    args = parser.parse_args()
+    # Strip ROS arguments (--ros-args ...) so this script works as a <node>
+    argv = sys.argv[1:]
+    try:
+        ros_idx = argv.index('--ros-args')
+        argv = argv[:ros_idx]
+    except ValueError:
+        pass
+    args = parser.parse_args(argv)
 
     # Create and run scenario
     scenario = DemoScenario(

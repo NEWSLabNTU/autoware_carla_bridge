@@ -31,7 +31,60 @@ build:
 
 # Remove build artifacts
 clean:
-    rm -rf build install log .cargo/config.toml target
+    rm -rf build install log .cargo/config.toml target staging *.deb
+
+# Build release tarball (position-independent, source local_setup.bash)
+package:
+    #!/usr/bin/env bash
+    set -e
+
+    VERSION=$(grep -oP '(?<=<version>)[^<]+' src/acb_bridge/package.xml)
+    PKG_NAME="autoware-carla-bridge"
+    TARBALL="${PKG_NAME}-${VERSION}-$(uname -m).tar.gz"
+
+    echo "Building ${PKG_NAME} ${VERSION}..."
+
+    # Clean staging directory and stale build state
+    rm -rf pkg_install .cargo/config.toml build/.colcon/bindgen.lock
+
+    # Build all packages with merge-install
+    export CARLA_VERSION={{carla_version}}
+    source /opt/autoware/1.5.0/setup.bash
+    colcon build \
+        --base-paths src \
+        --merge-install \
+        --install-base pkg_install \
+        --cargo-args --release
+
+    # Remove build-time artifacts not needed at runtime
+    rm -f pkg_install/.colcon_install_layout
+    rm -f pkg_install/COLCON_IGNORE
+
+    # Replace colcon-generated setup.bash (hardcodes build-time paths)
+    # with our position-independent version
+    rm -f pkg_install/setup.bash pkg_install/setup.sh pkg_install/setup.ps1
+    rm -f pkg_install/setup.zsh
+    cp debian/setup.bash pkg_install/setup.bash
+
+    # Create empty local_setup.bash for ament_cmake packages that reference it
+    # in package.dsv but don't generate the file under --merge-install
+    for dsv in pkg_install/share/*/package.dsv; do
+        pkg_dir=$(dirname "$dsv")
+        for ext in bash sh zsh ps1; do
+            ref="$pkg_dir/local_setup.$ext"
+            [ -f "$ref" ] || touch "$ref"
+        done
+    done
+
+    # Remove .pyc caches (contain build-time source paths, regenerated on use)
+    find pkg_install -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+
+    # Create tarball with directory prefix
+    PREFIX="${PKG_NAME}-${VERSION}"
+    mv pkg_install "${PREFIX}"
+    tar -czf "${TARBALL}" "${PREFIX}"
+    rm -rf "${PREFIX}"
+    echo "Created ${TARBALL}"
 
 # Format code with rustfmt
 format:
@@ -88,42 +141,78 @@ carla-status:
 carla-logs *args:
     journalctl --user -u "carla-run-{{carla_port}}" {{args}}
 
-# Run Autoware planning simulator (foreground)
-run-autoware:
+# Run Autoware + bridge + scenario + monitor (CARLA must be running)
+# Use auto_drive=true to also run the autonomous driving pilot
+sim auto_drive="false":
+    #!/usr/bin/env bash
+    set -e
+    source "{{project}}/install/setup.bash"
+    if [ "{{auto_drive}}" = "true" ]; then
+        POSES_FILE="$(ros2 pkg prefix acb_pilot)/share/acb_pilot/config/poses/{{map_name}}.yaml"
+        ros2 run acb_pilot auto_drive --ros-args -p poses_file:="$POSES_FILE" &
+    fi
+    exec play_launch launch --web-addr 0.0.0.0:8080 \
+        -c "{{project}}/config/play_launch.yaml" \
+        acb_demo_launch single_vehicle_autoware.launch.xml \
+        map_path:="{{project}}/data/carla-autoware-bridge/{{map_name}}" \
+        carla_port:={{carla_port}} \
+        map_name:={{map_name}} \
+        data_path:="{{data_path}}"
+
+# Run Autoware + bridge + monitor (CARLA must be running, scenario started separately)
+autoware:
     #!/usr/bin/env bash
     set -e
     source "{{project}}/install/setup.bash"
     exec play_launch launch --web-addr 0.0.0.0:8080 \
         acb_launch carla_simulator.launch.xml \
         map_path:="{{project}}/data/carla-autoware-bridge/{{map_name}}" \
-        vehicle_model:=acb_vehicle \
-        sensor_model:=acb_sensor_kit \
-        use_sim_time:=true \
         data_path:="{{data_path}}"
 
-# Run CARLA-Autoware bridge (foreground)
-run-bridge:
+# Run CARLA-Autoware bridge only
+bridge:
     #!/usr/bin/env bash
     set -e
     source "{{project}}/install/setup.bash"
     exec play_launch launch --web-addr 0.0.0.0:8080 \
-        acb_bridge autoware_carla_bridge.launch.xml \
+        acb_bridge acb_bridge.launch.xml \
         carla_port:={{carla_port}}
 
-# Run demo scenario - loads map and monitors CARLA actors (foreground)
-run-scenario:
+# Run scenario script only (loads map, spawns hero vehicle, ticks CARLA)
+scenario:
     #!/usr/bin/env bash
     set -e
-    exec "{{project}}/scripts/demo_scenario.py" --port {{carla_port}}
+    source "{{project}}/install/setup.bash"
+    exec play_launch launch --web-addr 0.0.0.0:8080 \
+        acb_scenario single_vehicle_scenario.launch.xml \
+        carla_port:={{carla_port}} \
+        map_name:={{map_name}}
 
-# Run vehicle monitor GUI (foreground)
-run-monitor:
+# Run vehicle monitor GUI
+monitor:
     #!/usr/bin/env bash
     set -e
     source "{{project}}/install/setup.bash"
     exec play_launch run carla_manual_control carla_manual_control
 
-# Run full demo - Autoware + bridge + scenario + pilot + monitor (CARLA must be running)
+# Run autonomous driving pilot (optional: just pilot /path/to/poses.yaml)
+pilot poses_file="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "{{project}}/install/setup.bash"
+    POSES_FILE="{{poses_file}}"
+    if [ -z "$POSES_FILE" ]; then
+        POSES_FILE="$(ros2 pkg prefix acb_pilot)/share/acb_pilot/config/example_poses.yaml"
+    fi
+    exec ros2 run acb_pilot auto_drive --ros-args -p poses_file:="$POSES_FILE"
+
+# Capture poses from RViz interactively
+capture-poses output_file:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "{{project}}/install/setup.bash"
+    exec ros2 run acb_pilot capture_poses --ros-args -p output_file:="{{output_file}}"
+
 # Pre-build TensorRT engines for lidar_centerpoint (first-time only, takes 2-5 min)
 build-engines:
     #!/usr/bin/env bash
@@ -143,51 +232,6 @@ build-engines:
         model_name:=centerpoint_tiny
     echo "TensorRT engines built:"
     ls -lh "$MODEL_PATH"/*.engine
-
-# Run full demo with autonomous driving (CARLA must be running)
-run-demo:
-    #!/usr/bin/env bash
-    set -e
-    source "{{project}}/install/setup.bash"
-    exec play_launch launch --web-addr 0.0.0.0:8080 \
-        -c "{{project}}/config/play_launch.yaml" \
-        acb_demo_launch demo.launch.xml \
-        project_dir:="{{project}}" \
-        carla_port:={{carla_port}} \
-        map_name:={{map_name}} \
-        data_path:="{{data_path}}"
-
-# Run simulation without autonomous driving - manual control via RViz (CARLA must be running)
-run-sim:
-    #!/usr/bin/env bash
-    set -e
-    source "{{project}}/install/setup.bash"
-    exec play_launch launch --web-addr 0.0.0.0:8080 \
-        -c "{{project}}/config/play_launch.yaml" \
-        acb_demo_launch demo.launch.xml \
-        project_dir:="{{project}}" \
-        carla_port:={{carla_port}} \
-        map_name:={{map_name}} \
-        data_path:="{{data_path}}" \
-        auto_drive:=false
-
-# Run autonomous driving demo (optional: just run-pilot /path/to/poses.yaml)
-run-pilot poses_file="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source "{{project}}/install/setup.bash"
-    POSES_FILE="{{poses_file}}"
-    if [ -z "$POSES_FILE" ]; then
-        POSES_FILE="$(ros2 pkg prefix acb_pilot)/share/acb_pilot/config/example_poses.yaml"
-    fi
-    exec ros2 run acb_pilot auto_drive --ros-args -p poses_file:="$POSES_FILE"
-
-# Capture poses from RViz interactively
-run-capture-poses output_file:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    source "{{project}}/install/setup.bash"
-    exec ros2 run acb_pilot capture_poses --ros-args -p output_file:="{{output_file}}"
 
 # Generate Lanelet2 map from running CARLA server
 generate-lanelet2 map_dir:

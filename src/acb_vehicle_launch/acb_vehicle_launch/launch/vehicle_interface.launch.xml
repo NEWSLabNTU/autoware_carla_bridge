@@ -1,37 +1,34 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CARLA Vehicle Interface
+
+  Launches the CARLA-Autoware bridge and an optional monitor GUI.
+  This file is included automatically by Autoware when vehicle_model:=acb_vehicle.
+
+  The bridge subscribes directly to /control/command/control_cmd and converts
+  ControlCommand to CARLA VehicleControl internally (no raw_vehicle_cmd_converter
+  needed since CARLA has ideal actuators).
+-->
 <launch>
-  <!--
-    CARLA Vehicle Interface Launch File
+  <!-- CARLA connection -->
+  <arg name="carla_address" default="127.0.0.1" description="CARLA server address"/>
+  <arg name="carla_port" default="2000" description="CARLA server port"/>
 
-    This is a minimal vehicle interface launch file for CARLA simulation.
+  <!-- Vehicle identification -->
+  <arg name="vehicle_name" default="hero" description="CARLA vehicle role_name to attach to"/>
 
-    Design Decision:
-    ================
-    For CARLA simulation, the bridge subscribes directly to /control/command/control_cmd
-    and converts ControlCommand to CARLA VehicleControl internally. This eliminates the
-    need for the raw_vehicle_cmd_converter node since:
+  <!-- Optional monitor GUI -->
+  <arg name="monitor" default="true" description="Launch carla_manual_control monitor"/>
 
-    1. CARLA has ideal actuators - no pedal mapping or calibration needed
-    2. Simple linear conversion: acceleration -> throttle/brake, steering_angle -> steer
-    3. Reduces pipeline complexity for simulation use case
-    4. Bridge implements CARLA-specific vehicle control mapping
+  <!-- CARLA-Autoware bridge -->
+  <include file="$(find-pkg-share acb_bridge)/launch/acb_bridge.launch.xml">
+    <arg name="carla_address" value="$(var carla_address)"/>
+    <arg name="carla_port" value="$(var carla_port)"/>
+    <arg name="vehicle_name" value="$(var vehicle_name)"/>
+  </include>
 
-    Data Flow:
-    ==========
-    Autoware Control → /control/command/control_cmd → Bridge → CARLA VehicleControl
-
-    If actuation-level control is needed in the future (for hardware-in-the-loop testing
-    or comparison with real vehicles), the raw_vehicle_cmd_converter node can be added
-    back here to convert ControlCommand to ActuationCommand.
-
-    Alternative Configuration (not currently used):
-    ===============================================
-    <arg name="config_file" default="$(find-pkg-share acb_vehicle_launch)/config/raw_vehicle_cmd_converter/raw_vehicle_cmd_converter.param.yaml"/>
-
-    <node pkg="autoware_raw_vehicle_cmd_converter" exec="autoware_raw_vehicle_cmd_converter_node" name="raw_vehicle_cmd_converter">
-      <param from="$(var config_file)" allow_substs="true"/>
-      <remap from="~/input/control_cmd" to="/control/command/control_cmd"/>
-      <remap from="~/output/actuation_cmd" to="/control/command/actuation_cmd"/>
-    </node>
-  -->
+  <!-- Monitor GUI -->
+  <group if="$(var monitor)">
+    <node pkg="carla_manual_control" exec="carla_manual_control" name="carla_manual_control" output="screen"/>
+  </group>
 </launch>
