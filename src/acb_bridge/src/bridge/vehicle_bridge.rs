@@ -456,14 +456,17 @@ impl ActorBridge for VehicleBridge {
 
 impl Drop for VehicleBridge {
     fn drop(&mut self) {
-        tracing::info!("Cleaning up vehicle bridge: {}", self.vehicle_name());
-        match self.actor.destroy() {
-            Ok(true) => tracing::info!("Destroyed vehicle actor: {}", self.vehicle_name()),
-            Ok(false) => tracing::warn!(
-                "Vehicle actor destroy returned false: {} (may have already been destroyed)",
-                self.vehicle_name()
-            ),
-            Err(e) => tracing::warn!("Vehicle actor destroy failed: {e}"),
-        }
+        // Deliberately does NOT destroy the vehicle.
+        //
+        // Only carla_scenario_bridge may create or destroy vehicles (invariant 2 in
+        // docs/design/multi-instance-architecture.md); this bridge owns sensors and nothing
+        // else. This impl used to call `self.actor.destroy()`, which from a `Drop` would
+        // have fired implicitly on any scope exit -- destroying a vehicle the scenario still
+        // believes it owns, mid-run. The module is dead today, so it never happened; the
+        // call is removed so that activating it cannot resurrect the bug.
+        tracing::info!(
+            "Dropping vehicle bridge: {} (vehicle left alone; the scenario owns it)",
+            self.vehicle_name()
+        );
     }
 }

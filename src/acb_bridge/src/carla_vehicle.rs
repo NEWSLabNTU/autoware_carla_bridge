@@ -185,8 +185,16 @@ impl CarlaVehicle {
                     ))
                 })?;
 
-            // In sync mode, tick to finalize the spawned actor before accessing it
-            let _ = world.wait_for_tick();
+            // In sync mode a spawned actor is not queryable until the next tick lands.
+            //
+            // SAFETY: deliberately ignored. Whoever owns the tick may be paused -- SSv2
+            // pauses between frames for the whole of Autoware startup -- so a failure here
+            // means "no frame yet", not "spawn failed". The sensor is used through
+            // callbacks that CARLA only fires once it is live, so waiting is an
+            // optimisation rather than a correctness requirement.
+            if let Err(e) = world.wait_for_tick() {
+                tracing::debug!("No tick while finalising sensor '{link_name}': {e}");
+            }
 
             let sensor = match sensor_actor.into_kinds() {
                 carla::client::ActorKind::Sensor(s) => s,

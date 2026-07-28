@@ -223,9 +223,50 @@ fn connect_to_carla(params: &BridgeParams, running: &AtomicBool) -> Option<Clien
     }
 }
 
+/// What a failed tick wait means.
+///
+/// A timeout is **not** evidence that CARLA is gone. Whoever owns the tick -- SSv2 through
+/// `carla_scenario_bridge` -- pauses between frames routinely: Autoware initialisation alone
+/// runs to `initialize_duration`, 120 s by default, during which no frame is sent at all.
+/// Treating those quiet periods as disconnection tears down a perfectly healthy bridge.
+///
+/// Only a genuine transport failure counts. See `docs/roadmap/011-robustness.md` (gap 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TickOutcome {
+    /// No tick arrived in time. Normal while the simulation is paused.
+    Idle,
+    /// The connection to CARLA looks gone.
+    ConnectionLost,
+}
+
+/// Why the main loop stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionExit {
+    /// Ctrl-C. Tear down and exit.
+    Shutdown,
+    /// CARLA is gone. Reconnect, then rebuild everything.
+    CarlaLost,
+    /// Autoware restarted. CARLA is fine; rebuild sensors and bridges against the vehicle
+    /// that exists now, without dropping the CARLA connection.
+    AutowareRestarted,
+}
+
+/// Classify a CARLA error from a tick wait.
+fn classify_tick_error(error: &carla::CarlaError) -> TickOutcome {
+    use carla::{CarlaError, ConnectionError};
+
+    match error {
+        // The wait expired with no tick. Says nothing about the connection.
+        CarlaError::Connection(ConnectionError::Timeout { .. }) => TickOutcome::Idle,
+        // Anything else on this path -- an explicit disconnect, an FFI failure, a
+        // resource error -- means the world handle is no longer usable.
+        _ => TickOutcome::ConnectionLost,
+    }
+}
+
 /// Run one CARLA tick iteration, returning the elapsed simulation seconds.
 ///
-/// Returns `Err` if CARLA is disconnected. The caller should reconnect.
+/// `Err` does not necessarily mean CARLA is gone; classify it with [`classify_tick_error`].
 fn carla_tick(
     world: &carla::client::World,
     timeout: Duration,
@@ -324,10 +365,19 @@ fn main() -> Result<()> {
     // === Step 2: Read parameters from ROS node ===
     let params = BridgeParams::from_node(&node)?;
     tracing::info!("=== Autoware-CARLA Bridge (Autoware-centric) ===");
-    tracing::info!(
-        "publish_direct_localization: {}",
-        params.publish_direct_localization
-    );
+    if params.publish_direct_localization {
+        // Publishing ground truth to /localization/kinematic_state and /tf puts this bridge
+        // in direct competition with Autoware's EKF, which owns both. Useful for bringing a
+        // stack up without localization; wrong for anything measuring localization.
+        tracing::warn!(
+            "publish_direct_localization is ENABLED: this bridge will publish \
+             /localization/kinematic_state and /tf from CARLA ground truth, competing with \
+             Autoware's own localization. Use it only when Autoware's localization is \
+             disabled, and never when measuring localization accuracy."
+        );
+    } else {
+        tracing::info!("publish_direct_localization: false (Autoware owns localization)");
+    }
     if params.publish_clock {
         tracing::info!("publish_clock: true (this bridge owns /clock in its ROS domain)");
     } else {
@@ -454,27 +504,39 @@ fn main() -> Result<()> {
     // ========================================================================
     // CARLA connection loop: connect → spawn → run → reconnect on disconnect
     // ========================================================================
+    // False when only Autoware restarted: CARLA is still healthy, so its connection and
+    // simulation clock must be preserved.
+    let mut reconnect_carla = true;
+    let mut client: Option<Client> = None;
+
     loop {
         // === Connect to CARLA ===
-        let client = match connect_to_carla(&params, &running) {
-            Some(c) => c,
-            None => return Ok(()), // Ctrl-C during connection
-        };
+        if reconnect_carla || client.is_none() {
+            client = match connect_to_carla(&params, &running) {
+                Some(c) => Some(c),
+                None => return Ok(()), // Ctrl-C during connection
+            };
 
-        // A reconnected (possibly restarted) server may have rewound its uptime.
-        clock_epoch.reset();
+            // A reconnected (possibly restarted) server may have rewound its uptime.
+            clock_epoch.reset();
+        }
+        let client = client.as_ref().expect("client connected above");
 
         // Use current CARLA world
         let mut world = match client.world() {
             Ok(w) => w,
             Err(e) => {
                 tracing::error!("Failed to get CARLA world: {e}, reconnecting...");
+                reconnect_carla = true;
                 continue;
             }
         };
 
         // === Wait for vehicle then attach sensors ===
-        tracing::info!("Waiting for vehicle '{}' (spawned by scenario script)...", params.vehicle_name);
+        tracing::info!(
+            "Waiting for vehicle '{}' (spawned by scenario script)...",
+            params.vehicle_name
+        );
         let hero_vehicle = match wait_for_vehicle(&world, &params.vehicle_name, &running) {
             Some(v) => v,
             None => return Ok(()), // Ctrl-C
@@ -553,14 +615,23 @@ fn main() -> Result<()> {
         const LOOP_RATE_HZ: u64 = 20;
         let loop_duration = Duration::from_millis(1000 / LOOP_RATE_HZ);
 
-        // Track consecutive CARLA failures to distinguish transient from persistent issues
+        // Consecutive *transport* failures. A tick timeout is not one of these -- see
+        // TickOutcome.
         let mut consecutive_failures: u32 = 0;
         const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
+        // Consecutive ticks with no frame. Only used to rate-limit the log; a paused
+        // simulation is a normal state that can last minutes.
+        let mut idle_ticks: u64 = 0;
+        /// Roughly one loop period each, so this is ~2s of silence before the first note.
+        const IDLE_TICKS_BEFORE_FIRST_LOG: u64 = 40;
+        /// After that, roughly every 30s at a 50ms loop.
+        const IDLE_TICK_LOG_INTERVAL: u64 = 600;
+
         // === Main Loop ===
-        let carla_disconnected = loop {
+        let exit_reason = loop {
             if !running.load(Ordering::SeqCst) {
-                break false;
+                break SessionExit::Shutdown;
             }
 
             let loop_start = std::time::Instant::now();
@@ -588,34 +659,55 @@ fn main() -> Result<()> {
                     }
                 }
 
-                // TODO: Re-spawn vehicle and sensors
-                tracing::warn!("Autoware reconnected, but vehicle respawn not yet implemented");
-                tracing::warn!("Please restart the bridge");
-                return Ok(());
+                // Rebuild against whatever vehicle exists now. Sensors were destroyed by the
+                // cleanup above, and the scenario owns the vehicle, so it may be the same
+                // actor or a fresh one -- either way the bridges must be built again from
+                // the current world rather than reused.
+                tracing::info!("Rebuilding sensors and bridges for the reconnected Autoware");
+                break SessionExit::AutowareRestarted;
             }
 
             // Wait for next CARLA tick and get simulation time.
             let sec = match carla_tick(&world, loop_duration) {
                 Ok(sec) => {
                     consecutive_failures = 0;
+                    idle_ticks = 0;
                     sec
                 }
-                Err(e) => {
-                    consecutive_failures += 1;
-                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-                        tracing::error!(
-                            "CARLA disconnected ({consecutive_failures} consecutive failures, \
-                             last error: {e}), will reconnect..."
-                        );
-                        break true;
+                Err(e) => match classify_tick_error(&e) {
+                    TickOutcome::Idle => {
+                        // The simulation is paused, not broken. Log at a decreasing rate so
+                        // a 120s Autoware startup does not bury everything else.
+                        idle_ticks += 1;
+                        if idle_ticks == IDLE_TICKS_BEFORE_FIRST_LOG
+                            || (idle_ticks > IDLE_TICKS_BEFORE_FIRST_LOG
+                                && idle_ticks % IDLE_TICK_LOG_INTERVAL == 0)
+                        {
+                            tracing::info!(
+                                "No CARLA tick for {:.0}s; the simulation is paused (waiting \
+                                 for the scenario to advance frames)",
+                                idle_ticks as f64 * loop_duration.as_secs_f64()
+                            );
+                        }
+                        continue;
                     }
-                    tracing::warn!(
-                        "CARLA tick failed ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}): \
-                         {e}, retrying..."
-                    );
-                    std::thread::sleep(Duration::from_secs(1));
-                    continue;
-                }
+                    TickOutcome::ConnectionLost => {
+                        consecutive_failures += 1;
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                            tracing::error!(
+                                "CARLA disconnected ({consecutive_failures} consecutive \
+                                 transport failures, last error: {e}), will reconnect..."
+                            );
+                            break SessionExit::CarlaLost;
+                        }
+                        tracing::warn!(
+                            "CARLA transport error \
+                             ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}): {e}, retrying..."
+                        );
+                        std::thread::sleep(Duration::from_secs(1));
+                        continue;
+                    }
+                },
             };
 
             // Publish clock, but only if we own it in this domain. `sec` is CARLA server
@@ -664,13 +756,70 @@ fn main() -> Result<()> {
         // Clear vehicle reference so stale pointers aren't used
         vehicle_shared.lock().unwrap().take();
 
-        if !carla_disconnected {
-            // Normal shutdown (Ctrl-C)
-            tracing::info!("Bridge shutdown complete");
-            return Ok(());
+        match exit_reason {
+            SessionExit::Shutdown => {
+                tracing::info!("Bridge shutdown complete");
+                return Ok(());
+            }
+            SessionExit::CarlaLost => {
+                tracing::info!("Attempting to reconnect to CARLA...");
+                reconnect_carla = true;
+            }
+            SessionExit::AutowareRestarted => {
+                // CARLA is healthy, so the connection and the simulation clock are kept.
+                // Resetting the clock epoch here would rewind /clock under a simulation
+                // that never paused.
+                tracing::info!("Rebuilding for the restarted Autoware; CARLA connection kept");
+                reconnect_carla = false;
+            }
         }
+    }
+}
 
-        // CARLA disconnected — loop back to reconnect
-        tracing::info!("Attempting to reconnect to CARLA...");
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use carla::{CarlaError, ConnectionError};
+
+    fn timeout_error() -> CarlaError {
+        CarlaError::Connection(ConnectionError::Timeout {
+            operation: "wait_for_tick".to_string(),
+            duration: Duration::from_millis(50),
+            source: None,
+        })
+    }
+
+    fn disconnected_error() -> CarlaError {
+        CarlaError::Connection(ConnectionError::Disconnected {
+            reason: "socket closed".to_string(),
+            source: None,
+        })
+    }
+
+    /// Regression guard for gap 8. Whoever owns the tick pauses between frames routinely --
+    /// Autoware startup alone can run to 120s with no frame sent. Treating that as
+    /// disconnection tore down a healthy bridge.
+    #[test]
+    fn a_tick_timeout_is_not_a_disconnect() {
+        assert_eq!(classify_tick_error(&timeout_error()), TickOutcome::Idle);
+    }
+
+    #[test]
+    fn a_lost_connection_is_a_disconnect() {
+        assert_eq!(
+            classify_tick_error(&disconnected_error()),
+            TickOutcome::ConnectionLost
+        );
+    }
+
+    /// Anything that is not an explicit timeout leaves the world handle unusable, so it must
+    /// count toward reconnection rather than being mistaken for an idle simulation.
+    #[test]
+    fn other_errors_count_as_connection_loss() {
+        let internal = CarlaError::Internal(carla::InternalError::FfiError {
+            message: "snapshot failed".to_string(),
+            source: None,
+        });
+        assert_eq!(classify_tick_error(&internal), TickOutcome::ConnectionLost);
     }
 }

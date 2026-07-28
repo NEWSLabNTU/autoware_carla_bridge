@@ -57,22 +57,14 @@ pub struct Autoware {
     /// Publisher for TF transforms (bypasses Autoware TF when enabled)
     pub_tf: Option<Arc<rclrs::Publisher<tf2_msgs::msg::TFMessage>>>,
 
-    // === Vehicle Status Publishers ===
-    // NOTE: These publishers are created but not yet used. They will be used in future phases
-    // to publish vehicle status from CARLA to Autoware.
-    #[allow(dead_code)]
-    pub_actuation_status: Arc<rclrs::Publisher<tier4_vehicle_msgs::msg::ActuationStatusStamped>>,
-    #[allow(dead_code)]
-    pub_steering_status: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::SteeringReport>>,
-    #[allow(dead_code)]
-    pub_gear_status: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::GearReport>>,
-    #[allow(dead_code)]
-    pub_control_mode: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::ControlModeReport>>,
-    #[allow(dead_code)]
-    pub_turn_indicators_status:
-        Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::TurnIndicatorsReport>>,
-    #[allow(dead_code)]
-    pub_hazard_lights_status: Arc<rclrs::Publisher<autoware_vehicle_msgs::msg::HazardLightsReport>>,
+    // Vehicle status is published by `vehicle_control.rs`, not here.
+    //
+    // This struct used to create publishers for vehicle/status/{actuation,steering,gear,
+    // control_mode,turn_indicators,hazard_lights} and never publish to any of them. They
+    // still advertised those topics on the ROS graph, and they targeted exactly the topics
+    // vehicle_control owns -- so wiring them up would have put two publishers on one topic
+    // inside a single process, the same class of bug as the /clock regression (invariant 4).
+    // Removed rather than left as a trap. See docs/roadmap/011-robustness.md.
 
     // === Vehicle Command Subscriptions ===
     _sub_actuation_cmd: Arc<rclrs::Subscription<tier4_vehicle_msgs::msg::ActuationCommandStamped>>,
@@ -217,43 +209,6 @@ impl Autoware {
             tracing::info!("Autoware localization will compute pose from sensor data");
             (None, None)
         };
-
-        // Create vehicle status publishers
-        let pub_actuation_status = Arc::new(
-            node.create_publisher::<tier4_vehicle_msgs::msg::ActuationStatusStamped>(
-                "vehicle/status/actuation_status".reliable(),
-            )?,
-        );
-
-        let pub_steering_status = Arc::new(
-            node.create_publisher::<autoware_vehicle_msgs::msg::SteeringReport>(
-                "vehicle/status/steering_status".reliable(),
-            )?,
-        );
-
-        let pub_gear_status = Arc::new(
-            node.create_publisher::<autoware_vehicle_msgs::msg::GearReport>(
-                "vehicle/status/gear_status".reliable(),
-            )?,
-        );
-
-        let pub_control_mode = Arc::new(
-            node.create_publisher::<autoware_vehicle_msgs::msg::ControlModeReport>(
-                "vehicle/status/control_mode".reliable(),
-            )?,
-        );
-
-        let pub_turn_indicators_status = Arc::new(
-            node.create_publisher::<autoware_vehicle_msgs::msg::TurnIndicatorsReport>(
-                "vehicle/status/turn_indicators_status".reliable(),
-            )?,
-        );
-
-        let pub_hazard_lights_status = Arc::new(
-            node.create_publisher::<autoware_vehicle_msgs::msg::HazardLightsReport>(
-                "vehicle/status/hazard_lights_status".reliable(),
-            )?,
-        );
 
         // Create shared state for vehicle commands
         let current_actuation_cmd = Arc::new(ArcSwap::new(Arc::new(
@@ -400,12 +355,6 @@ impl Autoware {
             pub_tf,
 
             // === Vehicle Status Publishers ===
-            pub_actuation_status,
-            pub_steering_status,
-            pub_gear_status,
-            pub_control_mode,
-            pub_turn_indicators_status,
-            pub_hazard_lights_status,
 
             // === Vehicle Command Subscriptions ===
             _sub_actuation_cmd: sub_actuation_cmd,
