@@ -3,12 +3,11 @@ use std::{convert::Infallible, mem, str::FromStr, sync::Arc};
 use bytemuck::{Pod, Zeroable};
 use carla::{
     client::{ActorBase, Sensor},
-    sensor::{
-        data::{
-            Color, GnssMeasurement, Image as CarlaImage, ImuMeasurement, LidarMeasurement,
-            SemanticLidarMeasurement,
-        },
-        SensorDataBase,
+    // `SensorDataBase` used to be imported here for `SensorData::timestamp()`. Stamps now
+    // come from the node's ROS clock instead -- see utils::ros_time_now.
+    sensor::data::{
+        Color, GnssMeasurement, Image as CarlaImage, ImuMeasurement, LidarMeasurement,
+        SemanticLidarMeasurement,
     },
 };
 use nalgebra::{coordinates::XYZ, UnitQuaternion};
@@ -265,10 +264,11 @@ fn register_camera_rgb(
 
     // Clone frame_id for closure
     let frame_id = frame_id.to_string();
+    let clock_node = node.clone();
 
     // Setup CARLA listener
     actor.listen(move |data| {
-        let mut header = utils::create_ros_header(Some(data.timestamp()));
+        let mut header = utils::create_ros_header_from_node(&clock_node);
         header.frame_id = frame_id.clone();
 
         if let Ok(carla_image) = data.try_into() {
@@ -304,9 +304,10 @@ fn register_lidar_raycast(
 
     // Clone frame_id for closure
     let frame_id = frame_id.to_string();
+    let clock_node = node.clone();
 
     actor.listen(move |data| {
-        let mut header = utils::create_ros_header(Some(data.timestamp()));
+        let mut header = utils::create_ros_header_from_node(&clock_node);
         header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
@@ -336,9 +337,10 @@ fn register_lidar_raycast_semantic(
 
     // Clone frame_id for closure
     let frame_id = frame_id.to_string();
+    let clock_node = node.clone();
 
     actor.listen(move |data| {
-        let mut header = utils::create_ros_header(Some(data.timestamp()));
+        let mut header = utils::create_ros_header_from_node(&clock_node);
         header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
@@ -366,9 +368,10 @@ fn register_imu(
 
     // Clone frame_id for closure
     let frame_id = frame_id.to_string();
+    let clock_node = node.clone();
 
     actor.listen(move |data| {
-        let mut header = utils::create_ros_header(Some(data.timestamp()));
+        let mut header = utils::create_ros_header_from_node(&clock_node);
         header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
@@ -396,9 +399,10 @@ fn register_gnss(
 
     // Clone frame_id for closure
     let frame_id = frame_id.to_string();
+    let clock_node = node.clone();
 
     actor.listen(move |data| {
-        let mut header = utils::create_ros_header(Some(data.timestamp()));
+        let mut header = utils::create_ros_header_from_node(&clock_node);
         header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {

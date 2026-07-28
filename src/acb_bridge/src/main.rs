@@ -103,6 +103,13 @@ struct BridgeParams {
     /// Publish pose directly to /localization/kinematic_state (bypasses Autoware localization)
     /// Set to true for testing without Autoware localization pipeline
     pub publish_direct_localization: bool,
+    /// Publish `/clock` from CARLA simulation time.
+    ///
+    /// Must be `false` in the scenario ego's ROS domain, where SSv2's `traffic_simulator`
+    /// already owns `/clock` — two publishers make every localization node log
+    /// "Detected jump back in time. Clearing TF buffer". Stays `true` in background-AV
+    /// domains, which have no SSv2 and would otherwise have no simulation clock at all.
+    pub publish_clock: bool,
 }
 
 impl BridgeParams {
@@ -141,12 +148,19 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        let publish_clock = node
+            .declare_parameter("publish_clock")
+            .default(true)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         // Get parameter values
         let carla_address_val: Arc<str> = carla_address.get();
         let carla_port_val: i64 = carla_port.get();
         let vehicle_name_val: Arc<str> = vehicle_name.get();
         let vehicle_config_val: Arc<str> = vehicle_config.get();
         let publish_direct_localization_val: bool = publish_direct_localization.get();
+        let publish_clock_val: bool = publish_clock.get();
 
         // Validate required parameters
         if vehicle_config_val.is_empty() {
@@ -161,6 +175,7 @@ impl BridgeParams {
             vehicle_name: vehicle_name_val.to_string(),
             vehicle_config: vehicle_config_val.to_string(),
             publish_direct_localization: publish_direct_localization_val,
+            publish_clock: publish_clock_val,
         })
     }
 }
@@ -313,9 +328,18 @@ fn main() -> Result<()> {
         "publish_direct_localization: {}",
         params.publish_direct_localization
     );
+    if params.publish_clock {
+        tracing::info!("publish_clock: true (this bridge owns /clock in its ROS domain)");
+    } else {
+        tracing::info!("publish_clock: false (something else owns /clock, e.g. SSv2)");
+    }
 
     // Create clock publisher (persists across reconnections)
     let simulator_clock = SimulatorClock::new(node.clone())?;
+
+    // CARLA reports server uptime, not scenario time. Reset per CARLA connection: a
+    // restarted server rewinds elapsed_seconds.
+    let mut clock_epoch = utils::ClockEpoch::new();
 
     // === Step 3: Create Autoware coordinator and wait for Autoware ===
     tracing::info!("Creating Autoware coordinator...");
@@ -436,6 +460,9 @@ fn main() -> Result<()> {
             Some(c) => c,
             None => return Ok(()), // Ctrl-C during connection
         };
+
+        // A reconnected (possibly restarted) server may have rewound its uptime.
+        clock_epoch.reset();
 
         // Use current CARLA world
         let mut world = match client.world() {
@@ -591,21 +618,31 @@ fn main() -> Result<()> {
                 }
             };
 
-            // Publish clock
-            if let Err(e) = simulator_clock.publish_clock(Some(sec)) {
-                tracing::warn!("Failed to publish clock: {e}");
+            // Publish clock, but only if we own it in this domain. `sec` is CARLA server
+            // uptime, so it is rebased onto scenario time before publishing.
+            if params.publish_clock {
+                let sim_sec = clock_epoch.to_sim_time(sec);
+                if let Err(e) = simulator_clock.publish_clock(Some(sim_sec)) {
+                    tracing::warn!("Failed to publish clock: {e}");
+                }
             }
 
-            // Spin executor to process ROS callbacks (subscriptions)
+            // Spin executor to process ROS callbacks (subscriptions). This is also what
+            // feeds /clock into the node's ROS clock, so it must happen before anything
+            // reads a timestamp below.
             executor.spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(10)));
 
+            // Every published stamp comes from the node's ROS clock, never from CARLA's
+            // own timestamps -- see utils::ros_time_now.
+            let stamp_sec = utils::ros_time_now_secs(&node);
+
             // Main tick: ground truth publishing
-            if let Err(e) = autoware.tick(sec) {
+            if let Err(e) = autoware.tick(stamp_sec) {
                 tracing::warn!("Autoware tick failed: {}", e);
             }
 
             // Publish vehicle status (velocity, steering, control mode)
-            if let Err(e) = vehicle_control.publish_status(sec) {
+            if let Err(e) = vehicle_control.publish_status(stamp_sec) {
                 tracing::warn!("Failed to publish vehicle status: {e}");
             }
 

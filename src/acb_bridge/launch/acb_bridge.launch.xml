@@ -11,11 +11,17 @@
   <arg name="vehicle_config" default="$(find-pkg-share acb_bridge)/config/vehicle_config.yaml"
        description="Path to vehicle configuration YAML file"/>
 
+  <!-- Clock ownership. Set false in the scenario ego's domain, where SSv2 publishes
+       /clock; two publishers make localization log "Detected jump back in time". -->
+  <arg name="publish_clock" default="true"
+       description="Publish /clock from CARLA simulation time"/>
+
   <!-- Launch the bridge node with ROS parameters -->
   <node pkg="acb_bridge" name="acb_bridge" exec="acb_bridge" output="screen">
     <param name="carla_address" value="$(var carla_address)"/>
     <param name="carla_port" value="$(var carla_port)"/>
     <param name="vehicle_name" value="$(var vehicle_name)"/>
     <param name="vehicle_config" value="$(var vehicle_config)"/>
+    <param name="publish_clock" value="$(var publish_clock)"/>
   </node>
 </launch>

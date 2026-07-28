@@ -215,7 +215,10 @@ impl VehicleBridge {
 
     fn pub_current_actuation(&mut self, timestamp: f64) -> Result<()> {
         let control = self.actor.control()?;
-        let mut header = utils::create_ros_header(Some(timestamp));
+        // TODO(gap 3): when this module is activated, stamp from the node's ROS clock
+        // via `utils::create_ros_header_from_node`. `timestamp` reaches here from
+        // `ActorBridge::step`, whose caller must guarantee the `/clock` epoch.
+        let mut header = utils::create_ros_header_from_epoch_seconds(Some(timestamp));
         header.frame_id = String::from("base_link");
 
         let actuation_msg = tier4_vehicle_msgs::msg::ActuationStatusStamped {
@@ -240,7 +243,8 @@ impl VehicleBridge {
 
     fn pub_current_velocity(&mut self, timestamp: f64) -> Result<()> {
         let velocity = self.actor.velocity()?;
-        let mut header = utils::create_ros_header(Some(timestamp));
+        // TODO(gap 3): see pub_current_actuation.
+        let mut header = utils::create_ros_header_from_epoch_seconds(Some(timestamp));
         header.frame_id = String::from("base_link");
 
         let velocity_msg = autoware_vehicle_msgs::msg::VelocityReport {
