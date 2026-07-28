@@ -17,9 +17,48 @@ setup:
     ./scripts/install_autoware_debian.sh
     ./scripts/download_carla_maps_for_autoware.sh
     pip install play-launch
+    @just _warn-if-setuptools-shadowed
+
+# Warn (do not fail) if the pip installs above pulled a setuptools that shadows the
+# system one. `just build` turns this into a hard error.
+_warn-if-setuptools-shadowed:
+    #!/usr/bin/env bash
+    path=$(python3 -c 'import setuptools; print(setuptools.__file__)')
+    case "$path" in
+        /usr/lib/python3/dist-packages/*) ;;
+        *)
+            echo ""
+            echo "WARNING: setuptools now resolves to $path"
+            echo "  A pip-installed setuptools shadows the system one and makes every"
+            echo "  Python package fail with 'option --editable not recognized'."
+            echo "  Run: pip uninstall -y setuptools"
+            ;;
+    esac
+
+# Fail fast if a pip setuptools shadows the system one.
+#
+# colcon's --symlink-install runs `setup.py develop --editable`, which setuptools removed
+# in v80. When a pip-installed setuptools in ~/.local takes precedence over the apt one,
+# acb_scenario, acb_pilot, carla_map_gen and carla_manual_control all die with "option
+# --editable not recognized" -- and colcon then aborts acb_bridge before it compiles, so a
+# Rust change looks broken when it never ran. Check up front instead.
+_check-setuptools:
+    #!/usr/bin/env bash
+    set -e
+    path=$(python3 -c 'import setuptools; print(setuptools.__file__)')
+    case "$path" in
+        /usr/lib/python3/dist-packages/*) ;;
+        *)
+            echo "ERROR: setuptools resolves to $path" >&2
+            echo "  Expected the system package (/usr/lib/python3/dist-packages/setuptools)." >&2
+            echo "  colcon --symlink-install will fail with 'option --editable not recognized'." >&2
+            echo "  Fix: pip uninstall -y setuptools" >&2
+            exit 1
+            ;;
+    esac
 
 # Build all packages
-build:
+build: _check-setuptools
     #!/usr/bin/env bash
     set -e
     export CARLA_VERSION={{carla_version}}
