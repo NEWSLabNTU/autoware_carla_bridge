@@ -12,17 +12,18 @@ use carla::client::ActorKind;
 use super::{
     other_bridge::OtherActorBridge,
     sensor_bridge::{SensorBridge, SensorType},
-    trafficlight_bridge::TrafficLightBridge,
     trafficsign_bridge::TrafficSignBridge,
     vehicle_bridge::VehicleBridge,
 };
-use crate::{autoware::Autoware, error::Result};
+use crate::{
+    autoware::Autoware,
+    error::{BridgeError, Result},
+};
 
 #[derive(Debug)]
 pub enum BridgeType {
     Vehicle,
     Sensor(SensorType, String),
-    TrafficLight,
     TrafficSign,
     Other,
 }
@@ -35,7 +36,14 @@ pub fn get_bridge_type(actor_kind: ActorKind) -> Result<BridgeType> {
     Ok(match actor_kind {
         ActorKind::Vehicle(vehicle) => VehicleBridge::get_bridge_type(vehicle)?,
         ActorKind::Sensor(sensor) => SensorBridge::get_bridge_type(sensor)?,
-        ActorKind::TrafficLight(_) => BridgeType::TrafficLight,
+        // Traffic lights are deliberately not bridged: carla-scenario-bridge is the sole
+        // traffic-light writer, and a bridge here would be a second authority on signal
+        // state.
+        ActorKind::TrafficLight(_) => {
+            return Err(BridgeError::CarlaIssue(
+                "traffic lights are not bridged; carla-scenario-bridge owns signal state",
+            ))
+        }
         ActorKind::TrafficSign(_) => BridgeType::TrafficSign,
         ActorKind::Other(_) => BridgeType::Other,
     })
@@ -54,8 +62,10 @@ pub fn create_bridge(
         ActorKind::Sensor(sensor) => {
             Box::new(SensorBridge::new(node, sensor, bridge_type, autoware)?)
         }
-        ActorKind::TrafficLight(traffic_light) => {
-            Box::new(TrafficLightBridge::new(node, traffic_light)?)
+        ActorKind::TrafficLight(_) => {
+            return Err(BridgeError::CarlaIssue(
+                "traffic lights are not bridged; carla-scenario-bridge owns signal state",
+            ))
         }
         ActorKind::TrafficSign(traffic_sign) => {
             Box::new(TrafficSignBridge::new(node, traffic_sign)?)
