@@ -44,13 +44,16 @@ sensors:
       noise_stddev: "0.0"
 
   # Camera sensor (TF frame: camera0/camera_link)
+  # Kept tiny while perception_mode=lidar: nothing consumes the image for
+  # detection, and the traffic-light pipeline needs a GPU this shared host
+  # cannot spare. Restore ~800x400 when traffic light recognition matters.
   camera0/camera_link:
     blueprint: "sensor.camera.rgb"
     parameters:
-      image_size_x: "800"
-      image_size_y: "400"
+      image_size_x: "160"
+      image_size_y: "80"
       fov: "74.5"
-      sensor_tick: "0.033"
+      sensor_tick: "0.1"
 
   # IMU sensor (TF frame: carla/imu_link)
   carla/imu_link:
