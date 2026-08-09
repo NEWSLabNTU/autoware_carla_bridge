@@ -22,7 +22,7 @@ use std::{
     time::Duration,
 };
 
-use carla::client::Client;
+use carla::client::{ActorBase, Client};
 use carla_vehicle::CarlaVehicle;
 use clock::SimulatorClock;
 use error::Result;
@@ -249,6 +249,9 @@ enum SessionExit {
     /// Autoware restarted. CARLA is fine; rebuild sensors and bridges against the vehicle
     /// that exists now, without dropping the CARLA connection.
     AutowareRestarted,
+    /// The vehicle was destroyed (a scenario runner despawned it between runs). CARLA and
+    /// Autoware are fine; destroy the orphaned sensors and wait for the next spawn.
+    VehicleLost,
 }
 
 /// Classify a CARLA error from a tick wait.
@@ -280,19 +283,53 @@ fn carla_tick(
 ///
 /// Returns `Some(vehicle)` when found, or `None` if Ctrl-C is received.
 /// Logs progress every 5 seconds.
-fn wait_for_vehicle(
-    world: &carla::client::World,
-    vehicle_name: &str,
-    running: &AtomicBool,
-) -> Option<carla::client::Vehicle> {
+/// How a wait for the scenario's vehicle ended.
+enum WaitOutcome {
+    /// Vehicle found, with the world (episode) it lives in.
+    Found(carla::client::World, carla::client::Vehicle),
+    /// Ctrl-C.
+    Shutdown,
+    /// Nothing found for a whole reconnect interval. The server may have been
+    /// restarted underneath this client (0.9.16 crashes on its sensor-stream
+    /// teardown race routinely); a stale client can keep answering from the dead
+    /// session without erroring, so the caller should reconnect and retry.
+    Stale,
+}
+
+/// Reconnect after this much fruitless waiting. Between scenarios a long empty wait
+/// is normal, so this fires repeatedly there — reconnecting with nothing attached
+/// is free, and it is the only way to notice a silently replaced server.
+const WAIT_RECONNECT_INTERVAL: Duration = Duration::from_secs(60);
+
+fn wait_for_vehicle(client: &Client, vehicle_name: &str, running: &AtomicBool) -> WaitOutcome {
     use carla::client::ActorBase;
     tracing::info!("Waiting for vehicle (role_name={vehicle_name}) in CARLA...");
     let start = std::time::Instant::now();
     let mut last_log = std::time::Instant::now();
     loop {
         if !running.load(Ordering::SeqCst) {
-            return None;
+            return WaitOutcome::Shutdown;
         }
+        if start.elapsed() > WAIT_RECONNECT_INTERVAL {
+            tracing::info!(
+                "No vehicle after {}s; refreshing the CARLA connection in case the \
+                 server was replaced",
+                WAIT_RECONNECT_INTERVAL.as_secs()
+            );
+            return WaitOutcome::Stale;
+        }
+        // Re-fetch the world every poll: a scenario runner may load a different map
+        // between spawns, which starts a NEW episode. A world handle from before the
+        // reload keeps answering from the dead episode, so the new vehicle is never
+        // seen and the bridge waits forever with the stack starving behind it.
+        let world = match client.world() {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::warn!("Failed to get world while waiting for vehicle: {e}");
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+        };
         match world.actors() {
             Ok(actors) => match actors.filter("vehicle.*") {
                 Ok(vehicles) => {
@@ -308,10 +345,12 @@ fn wait_for_vehicle(
                                     actor.type_id(),
                                     vehicle_name,
                                 );
-                                return match actor.into_kinds() {
-                                    carla::client::ActorKind::Vehicle(v) => Some(v),
-                                    _ => None,
-                                };
+                                match actor.into_kinds() {
+                                    carla::client::ActorKind::Vehicle(v) => {
+                                        return WaitOutcome::Found(world, v);
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
                     }
@@ -522,25 +561,23 @@ fn main() -> Result<()> {
         }
         let client = client.as_ref().expect("client connected above");
 
-        // Use current CARLA world
-        let mut world = match client.world() {
-            Ok(w) => w,
-            Err(e) => {
-                tracing::error!("Failed to get CARLA world: {e}, reconnecting...");
-                reconnect_carla = true;
-                continue;
-            }
-        };
-
         // === Wait for vehicle then attach sensors ===
         tracing::info!(
             "Waiting for vehicle '{}' (spawned by scenario script)...",
             params.vehicle_name
         );
-        let hero_vehicle = match wait_for_vehicle(&world, &params.vehicle_name, &running) {
-            Some(v) => v,
-            None => return Ok(()), // Ctrl-C
-        };
+        // The world handle comes back WITH the vehicle: wait_for_vehicle re-fetches it
+        // every poll, so a map reload between spawns (new episode) is picked up and the
+        // sensors attach into the episode the vehicle actually lives in.
+        let (mut world, hero_vehicle) =
+            match wait_for_vehicle(client, &params.vehicle_name, &running) {
+                WaitOutcome::Found(w, v) => (w, v),
+                WaitOutcome::Shutdown => return Ok(()),
+                WaitOutcome::Stale => {
+                    reconnect_carla = true;
+                    continue;
+                }
+            };
 
         tracing::info!("Attaching sensors to hero vehicle...");
         let carla_vehicle = match CarlaVehicle::new(
@@ -561,7 +598,7 @@ fn main() -> Result<()> {
         autoware.set_vehicle(carla_vehicle.clone());
 
         let vehicle_guard = carla_vehicle.lock().unwrap();
-        let vehicle = vehicle_guard.get_vehicle();
+        let vehicle = vehicle_guard.get_vehicle().clone();
         let vehicle_shared = Arc::new(Mutex::new(Some(vehicle.clone())));
         drop(vehicle_guard);
 
@@ -710,6 +747,26 @@ fn main() -> Result<()> {
                 },
             };
 
+            // The scenario runner owns the vehicle and despawns it when a scenario ends.
+            // Sensors die with the actor, so continuing to run against a destroyed
+            // vehicle publishes nothing and permanently wedges the stack (every scenario
+            // rerun used to require a full ego-stack restart because of this). Checked
+            // only after a successful tick: during a pause the client's episode view is
+            // stale, and a transport error already has its own exit path above.
+            match vehicle.is_alive() {
+                Ok(false) => {
+                    tracing::info!(
+                        "Vehicle '{}' was despawned; releasing sensors and waiting for the \
+                         next spawn",
+                        params.vehicle_name
+                    );
+                    break SessionExit::VehicleLost;
+                }
+                Ok(true) => {}
+                // Transport trouble is the tick path's problem, not a despawn.
+                Err(e) => tracing::debug!("Vehicle liveness check failed: {e}"),
+            }
+
             // Publish clock, but only if we own it in this domain. `sec` is CARLA server
             // uptime, so it is rebased onto scenario time before publishing.
             if params.publish_clock {
@@ -770,6 +827,13 @@ fn main() -> Result<()> {
                 // Resetting the clock epoch here would rewind /clock under a simulation
                 // that never paused.
                 tracing::info!("Rebuilding for the restarted Autoware; CARLA connection kept");
+                reconnect_carla = false;
+            }
+            SessionExit::VehicleLost => {
+                // Same as AutowareRestarted: connection and clock epoch are kept. The
+                // orphaned sensors were destroyed by the cleanup above; the outer loop
+                // re-enters wait_for_vehicle for the next spawn.
+                tracing::info!("Waiting for the next vehicle spawn; CARLA connection kept");
                 reconnect_carla = false;
             }
         }
