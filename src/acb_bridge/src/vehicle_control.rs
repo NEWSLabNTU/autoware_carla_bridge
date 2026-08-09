@@ -127,6 +127,15 @@ impl VehicleControlBridge {
                 control.reverse = true;
             }
 
+            // Commanded standstill: hold with the handbrake. CARLA's automatic
+            // transmission idle-creeps at zero throttle/brake, so a stopped vehicle
+            // otherwise crawls to ~1 m/s under near-zero hold commands, and the next
+            // firm brake command then reads as a -10 m/s² spike -- which scenario
+            // tooling validating against vehicle performance bounds treats as fatal.
+            if cmd.longitudinal.velocity.abs() <= 0.01 && accel <= 0.01 {
+                control.hand_brake = true;
+            }
+
             v.apply_control(&control)?;
 
             tracing::debug!(
