@@ -106,14 +106,19 @@ units:
 
   - path: /autoware/localization/accuracy
     type: diag
-    node: autoware_localization_error_monitor_node
+    # Live diag publishes as "localization_error_monitor: ellipse_error_status";
+    # the previous node name never matched, leaving this unit permanently stale
+    # ERROR and autonomous mode permanently unavailable.
+    node: localization_error_monitor
     name: ellipse_error_status
     timeout: 3.0
 
   - path: /autoware/localization/sensor_fusion_status
     type: diag
+    # Live diag publishes as "localization: ekf_localizer" (same as upstream
+    # localization.yaml); the previous name never matched - permanently stale.
     node: localization
-    name: autoware_ekf_localizer_node
+    name: ekf_localizer
     timeout: 3.0
 
   # MRM request delegate with extended timeout
