@@ -10,7 +10,11 @@ through gnss_poser to autoware_automatic_pose_initializer_node automatically.
 
 ROS Parameters:
     poses_file (str, required): Path to YAML file with a 'goal_pose' key
-    timeout (float, default 300.0): Overall timeout in seconds
+    timeout (float, default 600.0): Overall timeout in seconds
+    stabilize_seconds (float, default 15.0): Settling time after localization comes
+        up, before routing. Pure latency — on a stack driven by a scenario's clock it
+        is spent out of that scenario's budget.
+    route_timeout (float, default 120.0): How long to keep retrying the route.
 
 Usage:
     ros2 run acb_pilot auto_drive --ros-args -p poses_file:=/path/to/Town01.yaml
@@ -34,12 +38,19 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
+from nav_msgs.msg import Odometry
+
 from autoware_adapi_v1_msgs.msg import (
     LocalizationInitializationState,
     RouteState,
     OperationModeState,
 )
-from autoware_adapi_v1_msgs.srv import SetRoutePoints, ChangeOperationMode, ClearRoute
+from autoware_adapi_v1_msgs.srv import (
+    SetRoutePoints,
+    ChangeOperationMode,
+    ClearRoute,
+    InitializeLocalization,
+)
 
 
 _LOC_STATE_NAMES = {
@@ -66,6 +77,14 @@ class AutoDriveNode(Node):
 
         self.declare_parameter("poses_file", "")
         self.declare_parameter("timeout", 600.0)
+        # Time to let diagnostics and the planning pipeline settle once localization
+        # is up. A parameter because it is pure latency: on a stack driven by a
+        # scenario's clock it is spent out of the scenario's own budget.
+        self.declare_parameter("stabilize_seconds", 15.0)
+        # How long to keep retrying the route before giving up. Routing can fail for
+        # a while after a respawn -- the map, the pose and the planner all have to
+        # agree first -- so this is a deadline, not a retry count.
+        self.declare_parameter("route_timeout", 120.0)
 
         poses_file = self.get_parameter("poses_file").get_parameter_value().string_value
         if not poses_file:
@@ -76,11 +95,22 @@ class AutoDriveNode(Node):
         self.get_logger().info(f"Loaded goal pose from {poses_file}")
 
         self.timeout = self.get_parameter("timeout").get_parameter_value().double_value
+        self.stabilize_seconds = (
+            self.get_parameter("stabilize_seconds").get_parameter_value().double_value
+        )
+        self.route_timeout = (
+            self.get_parameter("route_timeout").get_parameter_value().double_value
+        )
 
         # State
         self.localization_state = LocalizationInitializationState.UNKNOWN
         self.route_state = RouteState.UNKNOWN
         self.op_mode_state = None
+        # Last pose from the EKF, and when it arrived. The initialization_state topic
+        # is latched, so on a stack that has already run once it reports INITIALIZED
+        # before this node even subscribes -- see step2 for why that is a lie.
+        self.kinematic_pose = None
+        self.kinematic_stamp = None
 
         # QoS for AD API state topics (transient local = get last value on subscribe)
         state_qos = QoSProfile(
@@ -117,6 +147,17 @@ class AutoDriveNode(Node):
         self.change_to_auto_client = self.create_client(
             ChangeOperationMode, "/api/operation_mode/change_to_autonomous"
         )
+        self.initialize_localization_client = self.create_client(
+            InitializeLocalization, "/api/localization/initialize"
+        )
+
+        # The EKF output, used to tell a live localization from a latched claim of one.
+        self.kinematic_sub = self.create_subscription(
+            Odometry,
+            "/localization/kinematic_state",
+            self._on_kinematic_state,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
+        )
 
     def _on_localization_state(self, msg: LocalizationInitializationState):
         self.localization_state = msg.state
@@ -126,6 +167,38 @@ class AutoDriveNode(Node):
 
     def _on_op_mode_state(self, msg: OperationModeState):
         self.op_mode_state = msg
+
+    def _on_kinematic_state(self, msg: Odometry):
+        self.kinematic_pose = msg.pose.pose
+        self.kinematic_stamp = time.monotonic()
+
+    def _request_localization_reinit(self) -> bool:
+        """Ask Autoware to localize again from GNSS.
+
+        An empty pose array means "use the GNSS estimate", which is the same path
+        the automatic initializer takes on a cold start. Sending it is how the pilot
+        forces a pose that belongs to the vehicle in front of it right now.
+        """
+        if not self.initialize_localization_client.wait_for_service(timeout_sec=10.0):
+            self.get_logger().warn(
+                "  /api/localization/initialize not available; "
+                "cannot re-localize on this stack"
+            )
+            return False
+        resp = self._call_service(
+            self.initialize_localization_client,
+            InitializeLocalization.Request(),
+            "InitializeLocalization",
+        )
+        if resp is None:
+            return False
+        if not resp.status.success:
+            self.get_logger().warn(
+                f"  Re-initialization refused: {resp.status.message}"
+            )
+            return False
+        self.get_logger().info("  Re-initialization requested (GNSS)")
+        return True
 
     def _spin_for(self, seconds: float):
         end = time.monotonic() + seconds
@@ -165,33 +238,79 @@ class AutoDriveNode(Node):
         return ok
 
     def step2_wait_for_localization(self, timeout: float) -> bool:
-        """Wait for /api/localization/initialization_state = INITIALIZED.
+        """Get a localization that belongs to the vehicle this pilot is driving.
 
-        Localization is triggered automatically by GNSS data flowing through
-        gnss_poser -> autoware_automatic_pose_initializer_node -> NDT align.
+        Localization is normally triggered by GNSS data flowing through gnss_poser ->
+        autoware_automatic_pose_initializer_node -> NDT align, and on a cold stack
+        waiting for `/api/localization/initialization_state` to read INITIALIZED is
+        enough.
+
+        It is not enough on a stack that has already driven once. That topic is
+        latched, so it still reads INITIALIZED from the *previous* vehicle -- which
+        was destroyed at the end of the last scenario and respawned somewhere else.
+        The pilot then skips this step entirely and routes from a pose that belongs
+        to nothing, and every attempt comes back "The planned route is empty" with no
+        hint of why. Nothing re-triggers the automatic initializer either: it fires on
+        the UNINITIALIZED -> INITIALIZED edge, and the state never left INITIALIZED.
+
+        So: if localization already claims to be up when this node starts, ask for it
+        again explicitly, and wait for the answer to arrive as a *fresh* EKF pose
+        rather than a retained flag.
         """
         self.get_logger().info(
             f"=== Step 2: Waiting for localization (up to {timeout:.0f}s) ==="
         )
         end = time.monotonic() + timeout
+
+        # Let the latched states land before deciding what we are looking at.
+        self._spin_for(2.0)
+        if self.localization_state == LocalizationInitializationState.INITIALIZED:
+            self.get_logger().info(
+                "  Localization already reports INITIALIZED — this stack has run "
+                "before, so the pose may belong to a vehicle that no longer exists. "
+                "Re-initializing."
+            )
+            self.kinematic_pose = None
+            self.kinematic_stamp = None
+            self._request_localization_reinit()
+
         last_log = time.monotonic()
         while time.monotonic() < end:
             rclpy.spin_once(self, timeout_sec=0.5)
-            if self.localization_state == LocalizationInitializationState.INITIALIZED:
-                self.get_logger().info("  Localization: INITIALIZED")
-                # Wait for diagnostics and planning pipeline to stabilize before
-                # setting a route. Without this, engage will fail with
-                # "target mode not available".
-                self.get_logger().info("  Waiting 15s for system to stabilize...")
-                self._spin_for(15.0)
+            initialized = (
+                self.localization_state == LocalizationInitializationState.INITIALIZED
+            )
+            # A fresh EKF pose is the evidence that the estimate is live and belongs
+            # to the vehicle in front of us; the state flag alone is not.
+            fresh = self.kinematic_stamp is not None and (
+                time.monotonic() - self.kinematic_stamp < 2.0
+            )
+            if initialized and fresh:
+                p = self.kinematic_pose.position
+                self.get_logger().info(
+                    f"  Localization: INITIALIZED at ({p.x:.2f}, {p.y:.2f})"
+                )
+                # Let diagnostics and the planning pipeline settle before routing.
+                # Without this, engage fails with "target mode not available".
+                if self.stabilize_seconds > 0.0:
+                    self.get_logger().info(
+                        f"  Waiting {self.stabilize_seconds:.0f}s for system to stabilize..."
+                    )
+                    self._spin_for(self.stabilize_seconds)
                 return True
             now = time.monotonic()
             if now - last_log >= 5.0:
-                name = _LOC_STATE_NAMES.get(self.localization_state, str(self.localization_state))
-                self.get_logger().info(f"  Localization state: {name}")
+                name = _LOC_STATE_NAMES.get(
+                    self.localization_state, str(self.localization_state)
+                )
+                self.get_logger().info(
+                    f"  Localization state: {name}"
+                    + ("" if fresh else " (no fresh pose yet)")
+                )
                 last_log = now
         self.get_logger().error(
-            f"  Localization did not reach INITIALIZED within {timeout:.0f}s"
+            f"  Localization did not reach INITIALIZED with a live pose within "
+            f"{timeout:.0f}s"
         )
         return False
 
@@ -222,20 +341,42 @@ class AutoDriveNode(Node):
         req.goal.orientation.w = self.goal_pose["qw"]
         req.waypoints = []
 
-        for attempt in range(3):
-            if attempt > 0:
-                self.get_logger().info(f"  Retry {attempt}/2 in 5s...")
-                self._spin_for(5.0)
+        # Retry to a deadline rather than a fixed count: after a respawn the pose, the
+        # map and the planner take a variable amount of time to agree, and three
+        # attempts five seconds apart used to expire while the stack was still
+        # settling -- indistinguishable, from the log, from a goal that is genuinely
+        # off the routing graph. Halfway through, ask for localization again: a stale
+        # pose is the one cause of "The planned route is empty" the pilot can fix.
+        deadline = time.monotonic() + self.route_timeout
+        reinit_at = time.monotonic() + self.route_timeout / 2.0
+        reinitialized = False
+        attempt = 0
+        while time.monotonic() < deadline:
+            attempt += 1
             resp = self._call_service(self.set_route_client, req, "SetRoutePoints")
             if resp and resp.status.success:
-                self.get_logger().info("  Route set successfully")
+                self.get_logger().info(f"  Route set successfully (attempt {attempt})")
                 return True
             if resp:
                 self.get_logger().warn(
-                    f"  Route failed (attempt {attempt + 1}): {resp.status.message}"
+                    f"  Route failed (attempt {attempt}): {resp.status.message}"
                 )
+            if not reinitialized and time.monotonic() >= reinit_at:
+                reinitialized = True
+                self.get_logger().info(
+                    "  Still no route — asking Autoware to re-localize, in case the "
+                    "pose is stale"
+                )
+                self._request_localization_reinit()
+                self._spin_for(10.0)
+            self._spin_for(5.0)
 
-        self.get_logger().error("  Failed to set route after 3 attempts")
+        self.get_logger().error(
+            f"  Failed to set route within {self.route_timeout:.0f}s ({attempt} attempts). "
+            f"If the message was \"The planned route is empty\", check the goal against "
+            f"the lanelet2 map: it must be on a subtype=road lanelet, ahead of the "
+            f"vehicle along that lanelet's own direction."
+        )
         return False
 
     def step4_wait_for_route(self, timeout: float = 15.0) -> bool:
