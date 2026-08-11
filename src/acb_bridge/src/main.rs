@@ -600,6 +600,7 @@ fn main() -> Result<()> {
         let vehicle_guard = carla_vehicle.lock().unwrap();
         let vehicle = vehicle_guard.get_vehicle().clone();
         let vehicle_shared = Arc::new(Mutex::new(Some(vehicle.clone())));
+        let vehicle_id = vehicle.id();
         drop(vehicle_guard);
 
         tracing::info!("Sensors attached to hero vehicle successfully!");
@@ -753,18 +754,32 @@ fn main() -> Result<()> {
             // rerun used to require a full ego-stack restart because of this). Checked
             // only after a successful tick: during a pause the client's episode view is
             // stale, and a transport error already has its own exit path above.
-            match vehicle.is_alive() {
-                Ok(false) => {
+            // Ask the *server* whether the actor still exists, rather than the handle.
+            // libcarla's Actor::IsAlive() is a client-side flag that only flips when this
+            // client destroys the actor -- and this bridge never destroys the vehicle, the
+            // scenario runner does, from its own client. So `is_alive()` answered true
+            // forever: the session never ended, the sensor publishers stayed up with no
+            // CARLA data behind them, and the ego's Autoware ran on nothing. Its
+            // diagnostics showed the shape of it -- localization scan-matching, perception
+            // pointcloud rate and planning trajectory rate all ERROR, so
+            // /system/operation_mode/availability said autonomous=False and the state
+            // machine sat in PLANNING until the scenario timed out.
+            // The world snapshot is the server's actor list for the frame just ticked.
+            // `World::GetActor` is not a substitute: like `Actor::IsAlive`, it can answer
+            // from the client's own registry and keep reporting an actor this client
+            // remembers but the server destroyed.
+            match world.snapshot() {
+                Ok(snapshot) if !snapshot.contains(vehicle_id) => {
                     tracing::info!(
-                        "Vehicle '{}' was despawned; releasing sensors and waiting for the \
-                         next spawn",
+                        "Vehicle '{}' (actor {vehicle_id}) is gone from the world; releasing \
+                         sensors and waiting for the next spawn",
                         params.vehicle_name
                     );
                     break SessionExit::VehicleLost;
                 }
-                Ok(true) => {}
+                Ok(_) => {}
                 // Transport trouble is the tick path's problem, not a despawn.
-                Err(e) => tracing::debug!("Vehicle liveness check failed: {e}"),
+                Err(e) => tracing::debug!("Vehicle existence check failed: {e}"),
             }
 
             // Publish clock, but only if we own it in this domain. `sec` is CARLA server
