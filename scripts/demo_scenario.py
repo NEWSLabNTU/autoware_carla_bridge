@@ -118,6 +118,27 @@ class DemoScenario:
             print(f"Failed to setup simulation: {e}")
             return False
 
+    def destroy_attached_sensors(self, vehicle_id: int) -> None:
+        """Destroy the sensors attached to a vehicle, before the vehicle itself.
+
+        CARLA does not take a vehicle's sensors down with it: they stay alive and
+        parentless, and the server segfaults on the next tick of an orphaned IMU
+        (AInertialMeasurementUnit::ComputeGyroscope dereferences a null owner -- its
+        check() is compiled out of Shipping builds). The bridge attaches those sensors
+        and normally removes them itself, but only once it notices the vehicle is gone,
+        so whoever destroys the vehicle has to close that window.
+        """
+        world = self.world
+        if world is None:
+            return
+        for sensor in world.get_actors().filter('sensor.*'):
+            parent = sensor.parent
+            if parent is not None and parent.id == vehicle_id:
+                try:
+                    sensor.destroy()
+                except RuntimeError as e:
+                    print(f"Could not destroy sensor {sensor.id}: {e}")
+
     def destroy_existing_hero(self) -> None:
         """Destroy any existing hero vehicle left over from a previous run."""
         world = self.world
@@ -126,6 +147,7 @@ class DemoScenario:
         for actor in world.get_actors().filter('vehicle.*'):
             if actor.attributes.get('role_name') == 'hero':
                 print(f"Destroying leftover hero vehicle ID={actor.id}")
+                self.destroy_attached_sensors(actor.id)
                 actor.destroy()
 
     def spawn_vehicle(self) -> bool:
@@ -171,6 +193,8 @@ class DemoScenario:
         """Destroy spawned actors and restore async mode"""
         if self.vehicle is not None:
             print(f"Destroying hero vehicle ID={self.vehicle.id}")
+            # Sensors first, or the server ticks them against a dead owner.
+            self.destroy_attached_sensors(self.vehicle.id)
             self.vehicle.destroy()
             self.vehicle = None
 
