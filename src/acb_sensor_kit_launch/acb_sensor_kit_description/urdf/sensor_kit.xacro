@@ -122,6 +122,10 @@
 
     <!-- Only front camera enabled -->
     <xacro:surround_camera name="camera0"/>
+    <!-- Forward-facing, for traffic light recognition. camera0's mount is yawed 59 deg
+         off the centreline, so it never has a signal in frame; see the calibration yaml
+         for why this one is named camera6 rather than something descriptive. -->
+    <xacro:surround_camera name="camera6"/>
     <!-- DISABLED - camera1-5 removed for performance
     <xacro:surround_camera name="camera1"/>
     <xacro:surround_camera name="camera2"/>

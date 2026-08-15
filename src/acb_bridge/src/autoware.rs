@@ -412,8 +412,18 @@ impl Autoware {
         // Standard Autoware sensor topic patterns (no prefix for namespace flexibility)
         match sensor_type {
             SensorType::CameraRgb => {
-                let raw_key = format!("sensing/camera/{sensor_name}/image_raw");
-                let info_key = format!("sensing/camera/{sensor_name}/camera_info");
+                // A camera's sensor name is its TF frame, `<namespace>/camera_link`, but
+                // Autoware's camera topics live under the namespace alone:
+                // /sensing/camera/<namespace>/image_raw with frame_id
+                // <namespace>/camera_link. Publishing the frame verbatim gives
+                // /sensing/camera/camera6/camera_link/image_raw, which nothing subscribes
+                // to -- and nothing complains, because a perception pipeline with no
+                // images simply publishes empty results for as long as it runs.
+                let namespace = sensor_name
+                    .strip_suffix("/camera_link")
+                    .unwrap_or(&sensor_name);
+                let raw_key = format!("sensing/camera/{namespace}/image_raw");
+                let info_key = format!("sensing/camera/{namespace}/camera_info");
                 self.list_image_raw.insert(sensor_name.clone(), raw_key);
                 self.list_camera_info.insert(sensor_name, info_key);
             }

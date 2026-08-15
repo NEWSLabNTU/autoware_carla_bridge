@@ -43,15 +43,28 @@ sensors:
       dropoff_zero_intensity: "0.0"
       noise_stddev: "0.0"
 
-  # Camera sensor (TF frame: camera0/camera_link)
-  # Kept tiny while perception_mode=lidar: nothing consumes the image for
-  # detection, and the traffic-light pipeline needs a GPU this shared host
-  # cannot spare. Restore ~800x400 when traffic light recognition matters.
-  camera0/camera_link:
+  # Camera sensor (TF frame: camera6/camera_link)
+  #
+  # This feeds Autoware's traffic-light recognition, which is why it is no longer the
+  # 160x80 placeholder it was while perception_mode=lidar consumed no image at all.
+  # The pipeline projects each mapped signal into the image and then classifies the
+  # crop, so the bulbs have to survive as pixels: a CARLA signal head is roughly 1 m,
+  # which at 30 m and this FOV lands around 30 px tall at 1280x720 and around 4 px at
+  # 160x80. The first is classifiable, the second is nothing.
+  #
+  # camera6, not camera0: camera0's mount in the sensor kit is a surround-view pose
+  # yawed 59 deg off the centreline, and Autoware derives the map-based detector's
+  # parameter file from the camera namespace, shipping only camera6 and camera7. Both
+  # reasons are spelled out in acb_sensor_kit_description's sensor_kit_calibration.yaml.
+  #
+  # Cost is real but affordable here -- the GPU sits near idle beside CARLA at Low
+  # quality. Drop the resolution again if you are running several stacks and do not
+  # need signals.
+  camera6/camera_link:
     blueprint: "sensor.camera.rgb"
     parameters:
-      image_size_x: "160"
-      image_size_y: "80"
+      image_size_x: "1280"
+      image_size_y: "720"
       fov: "74.5"
       sensor_tick: "0.1"
 

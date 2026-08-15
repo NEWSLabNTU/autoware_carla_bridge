@@ -20,6 +20,27 @@
 #
 
 sensor_kit_base_link:
+  # Forward-facing camera dedicated to traffic light recognition.
+  #
+  # It exists because camera0 cannot do the job: its mount is yaw 1.035 (59 deg off the
+  # centreline) and pitch 0.315, a surround-view pose that never has a signal ahead in
+  # frame. This one sits at the kit origin looking straight down the vehicle's axis, so a
+  # signal 4 m up at 30 m falls about 8 deg above centre, well inside the vertical FOV.
+  #
+  # The name is camera6 rather than anything more descriptive because Autoware derives its
+  # per-camera parameter file from the namespace --
+  # config/perception/.../<namespace>_traffic_light_map_based_detector.param.yaml -- and
+  # upstream ships camera6 and camera7 and nothing else. A namespace with no matching file
+  # makes traffic_light_map_based_detector exit at startup, which is silent: the pipeline
+  # comes up, publishes empty signal arrays forever, and planning stops at every stop line
+  # because it has no information rather than because it saw a red.
+  camera6/camera_link:
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
   camera0/camera_link:
     x: 0.10731
     y: 0.56343
