@@ -31,17 +31,24 @@ when evaluating expression 'xacro.load_yaml('$(arg config_dir)/sensors_calibrati
 when instantiating macro: sensor_kit_macro
 ```
 
-## Why it did not show up
+## What it resolves to instead
 
-It only bites on a host whose Autoware installation does not already carry
-`acb_sensor_kit` under its own `individual_params`. On the development machine it does,
-so the workspace looked self-contained while it was actually leaning on the Autoware
-install underneath it. The failure surfaced the first time the stack was brought up on a
-fresh host.
+Checked on the host where this surfaced:
+
+- The Autoware 1.5.0 Debian at `/opt/autoware/1.5.0` ships **no** `individual_params`
+  package at all. This workspace is the only intended provider.
+- That host also had `autoware-full 2025.2` installed into `/opt/ros/humble`, which
+  *does* ship an `individual_params` — carrying `sample_sensor_kit`,
+  `awsim_sensor_kit`, `awsim_labs_sensor_kit` and `single_lidar_sensor_kit`, but of
+  course not `acb_sensor_kit`.
+
+So the lookup did not fail loudly. It found a real package that simply did not have our
+kit in it, and reported a missing YAML file three layers down inside a xacro macro. With
+only Autoware 1.5.0 installed it would instead fail outright with `PackageNotFoundError`.
 
 The blast radius is total, not partial: no `robot_description` means no `/tf_static`, so
 acb_bridge never detects Autoware, never attaches sensors, and the whole stack waits
-forever.
+forever with nothing to say about why.
 
 ## Fix
 

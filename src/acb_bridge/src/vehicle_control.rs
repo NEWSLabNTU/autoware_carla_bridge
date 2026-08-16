@@ -45,6 +45,12 @@ struct AppliedState {
     /// from the sign of the commanded velocity, so a stack with no `vehicle_cmd_gate`
     /// still reverses.
     gear_commanded: bool,
+    /// The light state last pushed to CARLA, so an unchanged one costs no RPC.
+    ///
+    /// Control commands arrive at 20 Hz and the lights almost never change between them;
+    /// `set_light_state` on every one would add 20 round trips a second per vehicle to a
+    /// server that several stacks already share.
+    last_lights: Option<VehicleLightState>,
 }
 
 impl Default for AppliedState {
@@ -56,6 +62,7 @@ impl Default for AppliedState {
             hazard_lights: autoware_vehicle_msgs::msg::HazardLightsReport::DISABLE,
             braking: false,
             gear_commanded: false,
+            last_lights: None,
         }
     }
 }
@@ -336,12 +343,31 @@ impl VehicleControlBridge {
     /// Best effort: a light that fails to set is cosmetic, and the caller is a ROS
     /// callback with nowhere to return an error to.
     fn apply_lights(vehicle: &Arc<Mutex<Option<Vehicle>>>, state: &Arc<Mutex<AppliedState>>) {
-        let lights = state.lock().unwrap().light_state();
-        let guard = vehicle.lock().unwrap();
-        if let Some(vehicle) = guard.as_ref() {
-            if let Err(e) = vehicle.set_light_state(&lights) {
-                tracing::debug!("Failed to set vehicle light state: {e}");
+        // Nothing to send if the state has not moved. Callbacks run at command rate.
+        let lights = {
+            let mut state = state.lock().unwrap();
+            let desired = state.light_state();
+            if state.last_lights == Some(desired) {
+                return;
             }
+            state.last_lights = Some(desired);
+            desired
+        };
+
+        // Locks are taken state-then-vehicle everywhere; never hold the vehicle lock
+        // while reaching back for the state one.
+        let failed = {
+            let guard = vehicle.lock().unwrap();
+            match guard.as_ref() {
+                Some(vehicle) => vehicle.set_light_state(&lights).err(),
+                None => None,
+            }
+        };
+
+        if let Some(e) = failed {
+            tracing::debug!("Failed to set vehicle light state: {e}");
+            // Let the next change retry rather than believing a failed write.
+            state.lock().unwrap().last_lights = None;
         }
     }
 
@@ -423,12 +449,6 @@ impl VehicleControlBridge {
 
             v.apply_control(&control)?;
 
-            // Brake and reverse lights follow the control that was just applied.
-            let lights = applied.light_state();
-            if let Err(e) = v.set_light_state(&lights) {
-                tracing::debug!("Failed to set vehicle light state: {e}");
-            }
-
             tracing::debug!(
                 "Applied control: steer={:.3}, throttle={:.3}, brake={:.3}, accel={:.2} m/s², \
                  gear={}",
@@ -439,6 +459,11 @@ impl VehicleControlBridge {
                 applied.gear,
             );
         }
+        drop(vehicle_guard);
+
+        // Brake and reverse lights follow the control that was just applied. Done after
+        // the vehicle lock is released, and only when the state actually changed.
+        Self::apply_lights(vehicle, state);
 
         Ok(())
     }
