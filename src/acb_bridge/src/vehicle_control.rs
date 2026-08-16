@@ -419,14 +419,14 @@ impl VehicleControlBridge {
             // Negate: Autoware positive = left turn (ROS), CARLA positive = right turn (left-handed)
             control.steer = (-cmd.lateral.steering_tire_angle / max_steer_angle).clamp(-1.0, 1.0);
 
-            // Longitudinal: acceleration (m/s²) → throttle or brake (0 to 1). Neutral
-            // coasts: no drive torque, and braking is the driver's business, not the
-            // gearbox's.
-            if applied.is_neutral() {
-                control.throttle = 0.0;
-                control.brake = 0.0;
-            } else if accel > 0.01 {
-                control.throttle = (accel / MAX_ACCEL).clamp(0.0, 1.0);
+            // Longitudinal: acceleration (m/s²) → throttle or brake (0 to 1).
+            if accel > 0.01 {
+                // Neutral has no drive torque, as in a real gearbox. Braking is never
+                // suppressed: a deceleration command must reach the brakes whatever gear
+                // is selected.
+                if !applied.is_neutral() {
+                    control.throttle = (accel / MAX_ACCEL).clamp(0.0, 1.0);
+                }
                 control.brake = 0.0;
             } else if accel < -0.01 {
                 control.throttle = 0.0;

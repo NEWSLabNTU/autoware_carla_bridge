@@ -34,7 +34,9 @@ The gear command subscription moves from `autoware.rs` (where it was dead) into
 
 - `GearCommand::REVERSE` / `REVERSE_2` set `VehicleControl.reverse`.
 - `GearCommand::PARK` engages the handbrake and holds the vehicle.
-- `GearCommand::NEUTRAL` releases throttle and brake without engaging reverse.
+- `GearCommand::NEUTRAL` cuts drive torque, as a real gearbox does. Braking is *not*
+  suppressed: a deceleration command reaches the brakes whatever gear is selected, so a
+  stray NEUTRAL cannot turn a stop request into a coast.
 - `GearReport.report` echoes the applied gear, defaulting to DRIVE before the first
   command arrives — Autoware's own convention for a vehicle that boots in drive.
 
