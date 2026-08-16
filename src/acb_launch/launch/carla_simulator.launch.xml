@@ -6,8 +6,8 @@
      - Sets use_sim_time globally via set_parameter (fixes ROS 2 parameter propagation issue)
      - Includes autoware.launch.xml with launch_localization=false
      - Includes tier4_localization_component separately with CARLA-optimized NDT parameters
-     - Points traffic light recognition at acb's single camera (camera0), not the
-       [camera6, camera7] namespaces upstream assumes
+     - Points traffic light recognition at acb's single camera, published as camera6
+       because that is a namespace upstream ships a detector parameter file for
      - autoware_carla_interface disabled (replaced by native Rust bridge)
 -->
 <launch>
@@ -146,6 +146,19 @@
       <arg name="launch_sensing_driver" value="$(var launch_sensing_driver)"/>
       <!-- Perception -->
       <!-- CARLA - Use high accuracy detection disabled for traffic lights -->
+      <!-- Off, and it was worth trying on. With it off, detection/rois is the map
+           projection padded by traffic_light_map_based_detector's vibration margins:
+           +-0.25 m plus a depth-scaled yaw term, sized for a real vehicle's mount
+           against a ~1 m signal head. CARLA's head is 0.451 m wide, so the region comes
+           out 3.3x the head at 30 m and 6x at 100 m, and the classifier, which resizes
+           exactly that region to 224x224, spends most of its input on whatever is
+           behind the signal. The fine detector exists to find the real box inside that
+           padding, so turning it on is the obvious fix.
+
+           It is worse. With it on, detection/rois becomes the fine detector's refined
+           output and that node does not stay up, so the topic went from 529 non-empty
+           messages in a run to zero and the chain produced nothing at all. Leave this
+           off until the fine detector's own lifetime is understood. -->
       <arg name="traffic_light_recognition/use_high_accuracy_detection" value="false"/>
       <!-- Tools -->
       <arg name="rviz" value="$(var rviz)"/>
@@ -168,6 +181,19 @@
       <!-- The component reads $(var perception_mode) without declaring it; when
            autoware.launch.xml includes it the parent's declaration leaks in. -->
       <arg name="perception_mode" value="lidar"/>
+      <!-- Off, and it was worth trying on. With it off, detection/rois is the map
+           projection padded by traffic_light_map_based_detector's vibration margins:
+           +-0.25 m plus a depth-scaled yaw term, sized for a real vehicle's mount
+           against a ~1 m signal head. CARLA's head is 0.451 m wide, so the region comes
+           out 3.3x the head at 30 m and 6x at 100 m, and the classifier, which resizes
+           exactly that region to 224x224, spends most of its input on whatever is
+           behind the signal. The fine detector exists to find the real box inside that
+           padding, so turning it on is the obvious fix.
+
+           It is worse. With it on, detection/rois becomes the fine detector's refined
+           output and that node does not stay up, so the topic went from 529 non-empty
+           messages in a run to zero and the chain produced nothing at all. Leave this
+           off until the fine detector's own lifetime is understood. -->
       <arg name="traffic_light_recognition/use_high_accuracy_detection" value="false"/>
       <!-- Upstream defaults to both of its sensor kit's traffic light cameras. acb
            spawns one, so the second half of the pipeline ran on topics nothing was
