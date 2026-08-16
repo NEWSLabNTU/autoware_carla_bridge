@@ -28,7 +28,14 @@
   <!-- Vehicle and sensor model are fixed - bridge, URDF, and sensing pipeline are a matched set -->
   <arg name="vehicle_model" default="acb_vehicle" description="vehicle model name"/>
   <arg name="sensor_model" default="acb_sensor_kit" description="sensor model name"/>
-  <arg name="data_path" default="/opt/autoware/1.5.0/data" description="packages data and artifacts directory path"/>
+  <!-- Upstream's default, and it has to be writable: TensorRT nodes build their engine
+       from the ONNX and then write it next to that file. Pointed at the packaged
+       /opt/autoware/1.5.0/data, which is root-owned, the build succeeds and the write
+       fails, the component constructor throws, and the composable node never loads.
+       Silently, too: the rest of the pipeline comes up and just publishes empty
+       results. That is what kept traffic light classification off. Run
+       scripts/link_autoware_data.sh once to populate it. -->
+  <arg name="data_path" default="$(env HOME)/autoware_data" description="packages data and artifacts directory path; must be writable, see scripts/link_autoware_data.sh"/>
   <arg name="simulator_type" default="carla" description="select the simulator type"/>
 
   <!-- launch module preset -->
