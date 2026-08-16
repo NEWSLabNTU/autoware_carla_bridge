@@ -28,6 +28,39 @@ use clock::SimulatorClock;
 use error::Result;
 use rclrs::CreateBasicExecutor;
 
+/// Map a configured sensor type to the publisher that handles it.
+///
+/// `None` means "nothing publishes this", with the reason logged once per sensor. Both
+/// the registration pass and the bridge-creation pass go through here so they cannot
+/// disagree about what is supported.
+fn bridge_sensor_type(
+    link_name: &str,
+    sensor_type: sensor_config::SensorType,
+) -> Option<bridge::sensor_bridge::SensorType> {
+    use sensor_config::SensorType as ConfigType;
+
+    match sensor_type {
+        ConfigType::Camera => Some(bridge::sensor_bridge::SensorType::CameraRgb),
+        ConfigType::Lidar => Some(bridge::sensor_bridge::SensorType::LidarRayCast),
+        ConfigType::SemanticLidar => Some(bridge::sensor_bridge::SensorType::LidarRayCastSemantic),
+        ConfigType::Imu => Some(bridge::sensor_bridge::SensorType::Imu),
+        ConfigType::Gnss => Some(bridge::sensor_bridge::SensorType::Gnss),
+        ConfigType::Radar => {
+            tracing::warn!(
+                "Radar sensor '{link_name}' is not supported yet; it will publish nothing"
+            );
+            None
+        }
+        ConfigType::Unsupported => {
+            tracing::warn!(
+                "Sensor '{link_name}' has a blueprint this bridge does not recognise; it will \
+                 publish nothing. Check its `blueprint` in vehicle_config.yaml"
+            );
+            None
+        }
+    }
+}
+
 /// Create sensor bridges for all sensors spawned by CarlaVehicle
 ///
 /// This iterates over the sensor types (derived from VehicleConfig blueprints)
@@ -56,19 +89,12 @@ fn create_sensor_bridges(
         };
 
         // Map sensor_config::SensorType to bridge::sensor_bridge::SensorType
-        let bridge_sensor_type = match sensor_type {
-            sensor_config::SensorType::Camera => bridge::sensor_bridge::SensorType::CameraRgb,
-            sensor_config::SensorType::Lidar => bridge::sensor_bridge::SensorType::LidarRayCast,
-            sensor_config::SensorType::Imu => bridge::sensor_bridge::SensorType::Imu,
-            sensor_config::SensorType::Gnss => bridge::sensor_bridge::SensorType::Gnss,
-            sensor_config::SensorType::Radar => {
-                tracing::warn!("Radar sensor '{}' not yet supported, skipping", link_name);
-                continue;
-            }
+        let Some(mapped_type) = bridge_sensor_type(link_name, *sensor_type) else {
+            continue;
         };
 
         // Create bridge type from sensor type
-        let bridge_type = BridgeType::Sensor(bridge_sensor_type, link_name.clone());
+        let bridge_type = BridgeType::Sensor(mapped_type, link_name.clone());
 
         // Create sensor bridge
         match SensorBridge::new(node.clone(), sensor, bridge_type, autoware) {
@@ -345,11 +371,8 @@ fn wait_for_vehicle(client: &Client, vehicle_name: &str, running: &AtomicBool) -
                                     actor.type_id(),
                                     vehicle_name,
                                 );
-                                match actor.into_kinds() {
-                                    carla::client::ActorKind::Vehicle(v) => {
-                                        return WaitOutcome::Found(world, v);
-                                    }
-                                    _ => {}
+                                if let carla::client::ActorKind::Vehicle(v) = actor.into_kinds() {
+                                    return WaitOutcome::Found(world, v);
                                 }
                             }
                         }
@@ -608,21 +631,11 @@ fn main() -> Result<()> {
         // === Register sensors with Autoware for topic mapping ===
         tracing::info!("Registering sensors with Autoware...");
         for (link_name, sensor_type) in carla_vehicle.lock().unwrap().get_sensor_types() {
-            let bridge_sensor_type = match sensor_type {
-                sensor_config::SensorType::Camera => bridge::sensor_bridge::SensorType::CameraRgb,
-                sensor_config::SensorType::Lidar => bridge::sensor_bridge::SensorType::LidarRayCast,
-                sensor_config::SensorType::Imu => bridge::sensor_bridge::SensorType::Imu,
-                sensor_config::SensorType::Gnss => bridge::sensor_bridge::SensorType::Gnss,
-                sensor_config::SensorType::Radar => {
-                    tracing::debug!(
-                        "Radar sensor '{}' not yet supported for topic mapping",
-                        link_name
-                    );
-                    continue;
-                }
+            let Some(mapped_type) = bridge_sensor_type(link_name, *sensor_type) else {
+                continue;
             };
 
-            autoware.add_sensors(bridge_sensor_type, link_name.clone());
+            autoware.add_sensors(mapped_type, link_name.clone());
             tracing::info!(
                 "  Registered sensor '{}' (type: {:?})",
                 link_name,
@@ -719,7 +732,7 @@ fn main() -> Result<()> {
                         idle_ticks += 1;
                         if idle_ticks == IDLE_TICKS_BEFORE_FIRST_LOG
                             || (idle_ticks > IDLE_TICKS_BEFORE_FIRST_LOG
-                                && idle_ticks % IDLE_TICK_LOG_INTERVAL == 0)
+                                && idle_ticks.is_multiple_of(IDLE_TICK_LOG_INTERVAL))
                         {
                             tracing::info!(
                                 "No CARLA tick for {:.0}s; the simulation is paused (waiting \

@@ -1,6 +1,5 @@
 use std::{collections::HashMap, sync::Arc};
 
-use arc_swap::ArcSwap;
 use carla::client::ActorBase;
 use rclrs::IntoPrimitiveOptions;
 
@@ -66,27 +65,13 @@ pub struct Autoware {
     // inside a single process, the same class of bug as the /clock regression (invariant 4).
     // Removed rather than left as a trap. See docs/roadmap/011-robustness.md.
 
-    // === Vehicle Command Subscriptions ===
-    _sub_actuation_cmd: Arc<rclrs::Subscription<tier4_vehicle_msgs::msg::ActuationCommandStamped>>,
-    _sub_gear_cmd: Arc<rclrs::Subscription<autoware_vehicle_msgs::msg::GearCommand>>,
-    _sub_gate_mode: Arc<rclrs::Subscription<tier4_control_msgs::msg::GateMode>>,
-    _sub_turn_indicators_cmd:
-        Arc<rclrs::Subscription<autoware_vehicle_msgs::msg::TurnIndicatorsCommand>>,
-    _sub_hazard_lights_cmd:
-        Arc<rclrs::Subscription<autoware_vehicle_msgs::msg::HazardLightsCommand>>,
-
-    // === Shared State for Commands ===
-    /// NOTE: Command state fields kept for future vehicle control integration
-    #[allow(dead_code)]
-    current_actuation_cmd: Arc<ArcSwap<tier4_vehicle_msgs::msg::ActuationCommandStamped>>,
-    #[allow(dead_code)]
-    current_gear_cmd: Arc<ArcSwap<autoware_vehicle_msgs::msg::GearCommand>>,
-    #[allow(dead_code)]
-    current_gate_mode: Arc<ArcSwap<tier4_control_msgs::msg::GateMode>>,
-    #[allow(dead_code)]
-    current_turn_indicators_cmd: Arc<ArcSwap<autoware_vehicle_msgs::msg::TurnIndicatorsCommand>>,
-    #[allow(dead_code)]
-    current_hazard_lights_cmd: Arc<ArcSwap<autoware_vehicle_msgs::msg::HazardLightsCommand>>,
+    // Vehicle commands are subscribed by `vehicle_control.rs`, not here.
+    //
+    // This struct used to subscribe to control/command/{actuation_cmd, gear_cmd,
+    // turn_indicators_cmd, hazard_lights_cmd} and control/current_gate_mode, store each
+    // in an `ArcSwap`, and never read any of them -- so the gear command and the light
+    // commands looked wired while the vehicle never shifted and never blinked. They are
+    // handled for real in `vehicle_control.rs` now; see docs/issues/004 and 005.
 
     // === Initial Pose (Modern Autoware API) ===
     /// Initial pose for vehicle spawning (from modern Autoware localization API)
@@ -210,74 +195,6 @@ impl Autoware {
             (None, None)
         };
 
-        // Create shared state for vehicle commands
-        let current_actuation_cmd = Arc::new(ArcSwap::new(Arc::new(
-            tier4_vehicle_msgs::msg::ActuationCommandStamped::default(),
-        )));
-        let current_gear_cmd = Arc::new(ArcSwap::new(Arc::new(
-            autoware_vehicle_msgs::msg::GearCommand::default(),
-        )));
-        let current_gate_mode = Arc::new(ArcSwap::new(Arc::new(
-            tier4_control_msgs::msg::GateMode::default(),
-        )));
-        let current_turn_indicators_cmd = Arc::new(ArcSwap::new(Arc::new(
-            autoware_vehicle_msgs::msg::TurnIndicatorsCommand::default(),
-        )));
-        let current_hazard_lights_cmd = Arc::new(ArcSwap::new(Arc::new(
-            autoware_vehicle_msgs::msg::HazardLightsCommand::default(),
-        )));
-
-        // Create vehicle command subscriptions
-        let actuation_cmd_cb = current_actuation_cmd.clone();
-        let sub_actuation_cmd = Arc::new(
-            node.create_subscription::<tier4_vehicle_msgs::msg::ActuationCommandStamped, _>(
-                "control/command/actuation_cmd".reliable(),
-                move |msg: tier4_vehicle_msgs::msg::ActuationCommandStamped| {
-                    actuation_cmd_cb.store(Arc::new(msg));
-                },
-            )?,
-        );
-
-        let gear_cmd_cb = current_gear_cmd.clone();
-        let sub_gear_cmd = Arc::new(
-            node.create_subscription::<autoware_vehicle_msgs::msg::GearCommand, _>(
-                "control/command/gear_cmd".reliable(),
-                move |msg: autoware_vehicle_msgs::msg::GearCommand| {
-                    gear_cmd_cb.store(Arc::new(msg));
-                },
-            )?,
-        );
-
-        let gate_mode_cb = current_gate_mode.clone();
-        let sub_gate_mode = Arc::new(
-            node.create_subscription::<tier4_control_msgs::msg::GateMode, _>(
-                "control/current_gate_mode".reliable(),
-                move |msg: tier4_control_msgs::msg::GateMode| {
-                    gate_mode_cb.store(Arc::new(msg));
-                },
-            )?,
-        );
-
-        let turn_indicators_cmd_cb = current_turn_indicators_cmd.clone();
-        let sub_turn_indicators_cmd = Arc::new(
-            node.create_subscription::<autoware_vehicle_msgs::msg::TurnIndicatorsCommand, _>(
-                "control/command/turn_indicators_cmd".reliable(),
-                move |msg: autoware_vehicle_msgs::msg::TurnIndicatorsCommand| {
-                    turn_indicators_cmd_cb.store(Arc::new(msg));
-                },
-            )?,
-        );
-
-        let hazard_lights_cmd_cb = current_hazard_lights_cmd.clone();
-        let sub_hazard_lights_cmd = Arc::new(
-            node.create_subscription::<autoware_vehicle_msgs::msg::HazardLightsCommand, _>(
-                "control/command/hazard_lights_cmd".reliable(),
-                move |msg: autoware_vehicle_msgs::msg::HazardLightsCommand| {
-                    hazard_lights_cmd_cb.store(Arc::new(msg));
-                },
-            )?,
-        );
-
         // Create initial pose state (set via modern Autoware localization API)
         let initial_pose = Arc::new(Mutex::new(None));
 
@@ -353,22 +270,6 @@ impl Autoware {
             // === Direct Localization Publishers (Optional) ===
             pub_localization,
             pub_tf,
-
-            // === Vehicle Status Publishers ===
-
-            // === Vehicle Command Subscriptions ===
-            _sub_actuation_cmd: sub_actuation_cmd,
-            _sub_gear_cmd: sub_gear_cmd,
-            _sub_gate_mode: sub_gate_mode,
-            _sub_turn_indicators_cmd: sub_turn_indicators_cmd,
-            _sub_hazard_lights_cmd: sub_hazard_lights_cmd,
-
-            // === Shared State for Commands ===
-            current_actuation_cmd,
-            current_gear_cmd,
-            current_gate_mode,
-            current_turn_indicators_cmd,
-            current_hazard_lights_cmd,
 
             // === Initial Pose ===
             initial_pose,
@@ -608,10 +509,24 @@ impl Autoware {
         let velocity = vehicle.velocity()?;
         let angular_velocity = vehicle.angular_velocity()?;
 
+        // `nav_msgs/Odometry` puts the pose in `header.frame_id` (map) and the twist in
+        // `child_frame_id` (base_link) -- that is what the two frames are for. CARLA
+        // reports both velocities in world coordinates, so rotate them into the vehicle
+        // frame before the handedness flip. See docs/issues/007.
+        let body_velocity = transform.rotation.inverse_rotate_vector(&velocity);
+        let body_angular_velocity = transform.rotation.inverse_rotate_vector(&angular_velocity);
+        // CARLA reports angular velocity in DEGREES per second (measured, see
+        // docs/issues/008); `nav_msgs/Odometry` wants rad/s.
+        let body_angular_velocity = carla::geom::Vector3D::new(
+            body_angular_velocity.x.to_radians(),
+            body_angular_velocity.y.to_radians(),
+            body_angular_velocity.z.to_radians(),
+        );
+
         // Convert to nalgebra for coordinate conversion
         let na_transform = transform.to_na();
-        let na_velocity = velocity.to_na();
-        let na_angular_velocity = angular_velocity.to_na();
+        let na_velocity = body_velocity.to_na();
+        let na_angular_velocity = body_angular_velocity.to_na();
 
         // Convert CARLA coordinates to ROS coordinates
         let position = coordinate_conversion::carla_to_ros_position(&nalgebra::Vector3::new(
@@ -723,66 +638,6 @@ impl Autoware {
     #[allow(dead_code)]
     pub fn node(&self) -> rclrs::Node {
         self.node.clone()
-    }
-
-    // === Vehicle Command Accessors ===
-    // NOTE: Command accessors kept for future vehicle control integration
-
-    /// Get current actuation command
-    ///
-    /// Returns the latest actuation command received from Autoware.
-    ///
-    /// # Returns
-    /// Arc containing the latest ActuationCommandStamped
-    #[allow(dead_code)]
-    pub fn get_actuation_cmd(&self) -> Arc<tier4_vehicle_msgs::msg::ActuationCommandStamped> {
-        self.current_actuation_cmd.load_full()
-    }
-
-    /// Get current gear command
-    ///
-    /// Returns the latest gear command received from Autoware.
-    ///
-    /// # Returns
-    /// Arc containing the latest GearCommand
-    #[allow(dead_code)]
-    pub fn get_gear_cmd(&self) -> Arc<autoware_vehicle_msgs::msg::GearCommand> {
-        self.current_gear_cmd.load_full()
-    }
-
-    /// Get current gate mode
-    ///
-    /// Returns the latest gate mode received from Autoware.
-    ///
-    /// # Returns
-    /// Arc containing the latest GateMode
-    #[allow(dead_code)]
-    pub fn get_gate_mode(&self) -> Arc<tier4_control_msgs::msg::GateMode> {
-        self.current_gate_mode.load_full()
-    }
-
-    /// Get current turn indicators command
-    ///
-    /// Returns the latest turn indicators command received from Autoware.
-    ///
-    /// # Returns
-    /// Arc containing the latest TurnIndicatorsCommand
-    #[allow(dead_code)]
-    pub fn get_turn_indicators_cmd(
-        &self,
-    ) -> Arc<autoware_vehicle_msgs::msg::TurnIndicatorsCommand> {
-        self.current_turn_indicators_cmd.load_full()
-    }
-
-    /// Get current hazard lights command
-    ///
-    /// Returns the latest hazard lights command received from Autoware.
-    ///
-    /// # Returns
-    /// Arc containing the latest HazardLightsCommand
-    #[allow(dead_code)]
-    pub fn get_hazard_lights_cmd(&self) -> Arc<autoware_vehicle_msgs::msg::HazardLightsCommand> {
-        self.current_hazard_lights_cmd.load_full()
     }
 
     // === Vehicle Status Publishing ===

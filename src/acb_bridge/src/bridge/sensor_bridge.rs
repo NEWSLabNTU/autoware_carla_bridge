@@ -519,15 +519,28 @@ fn publish_lidar(
     }
 
     // Convert CARLA points to Autoware PointXYZIRC format using declarative struct
+    //
+    // The boundary table is sorted and CARLA emits points in channel order, so the
+    // channel for each point is found by advancing a cursor -- one comparison for all
+    // but `channel_count` points per scan. The old code linear-scanned the whole table
+    // per point: ~8.4 M comparisons per scan at 128 channels. See issue 011.
+    let mut cursor = 0usize;
     let points: Vec<PointXYZIRC> = lidar_data
         .iter()
         .enumerate()
         .map(|(idx, det)| {
-            // Determine channel index by finding which boundary range contains this point
-            let channel = channel_boundaries
-                .windows(2)
-                .position(|w| idx >= w[0] && idx < w[1])
-                .unwrap_or(0) as u16;
+            while cursor + 1 < channel_boundaries.len() && idx >= channel_boundaries[cursor + 1] {
+                cursor += 1;
+            }
+            // CARLA does not promise the ordering; fall back to a binary search if the
+            // cursor ran past this point's channel.
+            let channel = if idx >= channel_boundaries[cursor] {
+                cursor
+            } else {
+                channel_boundaries
+                    .partition_point(|&b| b <= idx)
+                    .saturating_sub(1)
+            } as u16;
 
             PointXYZIRC {
                 // Apply Y-axis flip: CARLA uses left-handed (Y=right), ROS uses right-handed (Y=left)
@@ -651,6 +664,22 @@ fn publish_semantic_lidar(
     Ok(())
 }
 
+/// Convert CARLA's compass heading to a ROS yaw in the map frame.
+///
+/// CARLA's IMU reports `compass` in radians measured **clockwise from north**. The map
+/// frame this bridge publishes into has `x` = CARLA `x` (east) and `y` = `-CARLA_y`
+/// (north), so ROS yaw is measured counter-clockwise from east:
+///
+/// ```text
+/// ros_yaw = pi/2 - compass
+/// ```
+///
+/// It used to be `compass.atan2(-compass)`, which is `3pi/4` for every positive reading
+/// and `-pi/4` for every negative one -- a constant. See issue 001.
+fn compass_to_ros_yaw(compass: f32) -> f32 {
+    std::f32::consts::FRAC_PI_2 - compass
+}
+
 fn publish_imu(
     publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::Imu>>,
     header: std_msgs::msg::Header,
@@ -660,9 +689,7 @@ fn publish_imu(
     let gyro = measure.gyroscope();
     let compass = measure.compass();
 
-    // Convert compass (north vector) to quaternion orientation
-    let yaw = compass.atan2(-compass);
-    let quat = UnitQuaternion::from_euler_angles(0.0, 0.0, yaw);
+    let quat = UnitQuaternion::from_euler_angles(0.0, 0.0, compass_to_ros_yaw(compass));
     let XYZ {
         x: qx,
         y: qy,
@@ -679,9 +706,11 @@ fn publish_imu(
             w: qw as f64,
         },
         orientation_covariance: [0.0; 9],
+        // Angular velocity is a pseudovector, so the CARLA -> ROS Y-flip does NOT act on
+        // it the way it acts on the accelerometer below. See issue 002.
         angular_velocity: geometry_msgs::msg::Vector3 {
-            x: gyro.x as f64,
-            y: -gyro.y as f64,
+            x: -gyro.x as f64,
+            y: gyro.y as f64,
             z: -gyro.z as f64,
         },
         angular_velocity_covariance: [0.0; 9],
@@ -726,4 +755,74 @@ fn generate_sensor_name(actor: &Sensor) -> String {
     let id = actor.id();
     let type_id = actor.type_id();
     format!("{type_id}_{id}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    /// Regression guard for issue 001. The old `compass.atan2(-compass)` returned
+    /// `3*pi/4` for every positive reading, so all three of these collapsed to one value.
+    #[test]
+    fn compass_maps_each_heading_to_a_distinct_ros_yaw() {
+        // Facing east: CARLA yaw 0, compass pi/2, ROS yaw 0 (+x is east).
+        assert!((compass_to_ros_yaw(FRAC_PI_2) - 0.0).abs() < 1e-6);
+        // Facing north: CARLA yaw -90 deg, compass 0, ROS yaw +pi/2 (+y is north).
+        assert!((compass_to_ros_yaw(0.0) - FRAC_PI_2).abs() < 1e-6);
+        // Facing west: compass 3*pi/2, ROS yaw -pi (equivalently +pi).
+        assert!((compass_to_ros_yaw(3.0 * FRAC_PI_2) + PI).abs() < 1e-6);
+    }
+
+    /// The ROS yaw must turn the opposite way to the compass: a compass reading that
+    /// increases (turning clockwise/east) is a ROS yaw that decreases.
+    #[test]
+    fn compass_and_ros_yaw_turn_in_opposite_directions() {
+        let a = compass_to_ros_yaw(0.1);
+        let b = compass_to_ros_yaw(0.2);
+        assert!(b < a);
+    }
+
+    /// Regression guard for issue 002. Angular velocity is a pseudovector: under the
+    /// CARLA -> ROS reflection `diag(1,-1,1)` it maps as `(-x, y, -z)`, unlike the
+    /// accelerometer's `(x, -y, z)`.
+    #[test]
+    fn gyro_and_accel_use_different_sign_rules() {
+        let gyro = (1.0_f64, 2.0_f64, 3.0_f64);
+        let accel = (1.0_f64, 2.0_f64, 3.0_f64);
+
+        let gyro_ros = (-gyro.0, gyro.1, -gyro.2);
+        let accel_ros = (accel.0, -accel.1, accel.2);
+
+        assert_eq!(gyro_ros, (-1.0, 2.0, -3.0));
+        assert_eq!(accel_ros, (1.0, -2.0, 3.0));
+        assert_ne!(gyro_ros.0.signum(), accel_ros.0.signum());
+        assert_ne!(gyro_ros.1.signum(), accel_ros.1.signum());
+    }
+
+    /// The cursor walk in `publish_lidar` must land on the same channel a linear scan
+    /// would, including the fall back for out-of-order points. See issue 011.
+    #[test]
+    fn channel_lookup_matches_a_linear_scan() {
+        let boundaries = [0usize, 3, 3, 7, 10]; // note the empty channel 1
+        let linear = |idx: usize| -> usize {
+            boundaries
+                .windows(2)
+                .position(|w| idx >= w[0] && idx < w[1])
+                .unwrap_or(0)
+        };
+
+        let mut cursor = 0usize;
+        for idx in 0..10 {
+            while cursor + 1 < boundaries.len() && idx >= boundaries[cursor + 1] {
+                cursor += 1;
+            }
+            let walked = if idx >= boundaries[cursor] {
+                cursor
+            } else {
+                boundaries.partition_point(|&b| b <= idx).saturating_sub(1)
+            };
+            assert_eq!(walked, linear(idx), "point {idx}");
+        }
+    }
 }

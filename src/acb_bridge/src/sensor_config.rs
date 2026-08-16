@@ -91,9 +91,19 @@ pub struct SensorDefinition {
 
 impl SensorDefinition {
     /// Classify sensor type from blueprint ID
+    ///
+    /// Anything unrecognised is `Unsupported`, not a camera. Guessing "camera" for a
+    /// blueprint nobody recognised meant a typo in `vehicle_config.yaml` surfaced as
+    /// `no image_size_x` from deep inside the camera publisher.
     pub fn sensor_type(&self) -> SensorType {
+        // Semantic first: its blueprint id also contains "lidar", and the two decode
+        // different measurement structs.
         if self.blueprint.contains("lidar") {
-            SensorType::Lidar
+            if self.blueprint.contains("semantic") {
+                SensorType::SemanticLidar
+            } else {
+                SensorType::Lidar
+            }
         } else if self.blueprint.contains("camera") {
             SensorType::Camera
         } else if self.blueprint.contains("imu") {
@@ -103,7 +113,7 @@ impl SensorDefinition {
         } else if self.blueprint.contains("radar") {
             SensorType::Radar
         } else {
-            SensorType::Camera // Default fallback
+            SensorType::Unsupported
         }
     }
 
@@ -292,10 +302,11 @@ impl SensorTypeDefaults {
     pub fn get_defaults(&self, sensor_type: SensorType) -> SensorParams {
         match sensor_type {
             SensorType::Camera => self.camera.clone().unwrap_or_default(),
-            SensorType::Lidar => self.lidar.clone().unwrap_or_default(),
+            SensorType::Lidar | SensorType::SemanticLidar => self.lidar.clone().unwrap_or_default(),
             SensorType::Gnss => self.gnss.clone().unwrap_or_default(),
             SensorType::Imu => self.imu.clone().unwrap_or_default(),
             SensorType::Radar => self.radar.clone().unwrap_or_default(),
+            SensorType::Unsupported => SensorParams::default(),
         }
     }
 }
@@ -305,11 +316,20 @@ impl SensorTypeDefaults {
 pub enum SensorType {
     Camera,
     Lidar,
+    /// `sensor.lidar.ray_cast_semantic`. A different measurement struct from
+    /// `Lidar` -- decoding one as the other fails on every frame.
+    SemanticLidar,
     Gnss,
     Imu,
     /// Radar sensor support - planned for future phases
     #[allow(dead_code)]
     Radar,
+    /// A blueprint this bridge does not know how to publish.
+    ///
+    /// This used to fall back to `Camera`, so a typo'd or unsupported blueprint was
+    /// spawned and then handed to the camera publisher, which failed on the missing
+    /// `image_size_x` attribute -- a message that says nothing about the real mistake.
+    Unsupported,
 }
 
 /// CARLA sensor parameters (DEPRECATED)

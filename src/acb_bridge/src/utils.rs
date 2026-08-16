@@ -104,6 +104,9 @@ impl ClockEpoch {
     /// Map raw CARLA elapsed seconds to scenario-relative seconds.
     ///
     /// The first call establishes the epoch and returns 0.0.
+    // Not a `to_*` conversion of `self` -- it converts its argument and mutates the
+    // epoch, so clippy's `to_*`-takes-`&self` convention does not apply.
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_sim_time(&mut self, carla_elapsed_seconds: f64) -> f64 {
         let epoch = *self.epoch.get_or_insert(carla_elapsed_seconds);
         carla_elapsed_seconds - epoch

@@ -6,6 +6,10 @@ carla_port := env_var_or_default('CARLA_PORT', '2000')
 map_name := env_var_or_default('MAP_NAME', 'Town01')
 data_path := env_var_or_default('AUTOWARE_DATA_PATH', justfile_directory() + '/data')
 project := justfile_directory()
+# Where Autoware's own setup.bash lives. The NEWSLabNTU 1.5.0 Debian installs under
+# /opt/autoware/1.5.0; other hosts install the same packages straight into the ROS
+# prefix (/opt/ros/humble). Override with AUTOWARE_SETUP when yours is elsewhere.
+autoware_setup := env_var_or_default('AUTOWARE_SETUP', '/opt/autoware/1.5.0/setup.bash')
 
 # List available recipes
 default:
@@ -62,7 +66,7 @@ build: _check-setuptools
     #!/usr/bin/env bash
     set -e
     export CARLA_VERSION={{carla_version}}
-    source /opt/autoware/1.5.0/setup.bash
+    source "{{autoware_setup}}"
     colcon build \
         --base-paths src \
         --symlink-install \
@@ -88,7 +92,7 @@ package:
 
     # Build all packages with merge-install
     export CARLA_VERSION={{carla_version}}
-    source /opt/autoware/1.5.0/setup.bash
+    source "{{autoware_setup}}"
     colcon build \
         --base-paths src \
         --merge-install \
@@ -256,7 +260,7 @@ capture-poses output_file:
 build-engines:
     #!/usr/bin/env bash
     set -e
-    source /opt/autoware/1.5.0/setup.bash
+    source "{{autoware_setup}}"
     MODEL_PATH="{{project}}/data/lidar_centerpoint"
     if [ -f "$MODEL_PATH/pts_voxel_encoder_centerpoint_tiny.engine" ] && \
        [ -f "$MODEL_PATH/pts_backbone_neck_head_centerpoint_tiny.engine" ]; then

@@ -1,5 +1,11 @@
 # Documentation
 
+## Issues
+
+Specific, verifiable defects and gaps in `acb_bridge`, one file each.
+
+- [issues/README.md](issues/README.md) - index and severities
+
 ## Design
 
 - [architecture.md](design/architecture.md) - 1-to-1 Autoware-centric design philosophy and ADRs
