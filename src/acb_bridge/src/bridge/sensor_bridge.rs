@@ -262,8 +262,17 @@ fn register_camera_rgb(
         .try_into_f32()
         .or(Err(BridgeError::CarlaIssue("Unable to transform into f32")))? as f64;
 
-    // Clone frame_id for closure
-    let frame_id = frame_id.to_string();
+    // Images and camera_info are stamped with the *optical* frame, not the mounting
+    // frame. Everything that projects a 3D point into this image -- Autoware's traffic
+    // light map-based detector among them -- assumes the REP-103 optical convention of
+    // z forward, x right, y down, and reads that frame off the header. Stamped with
+    // `<ns>/camera_link` (x forward, z up) instead, the detector's forward ray comes out
+    // pointing at the sky, every projected point lands behind the image plane, and it
+    // silently emits no regions of interest at all.
+    let frame_id = match frame_id.strip_suffix("/camera_link") {
+        Some(namespace) => format!("{namespace}/camera_optical_link"),
+        None => frame_id.to_string(),
+    };
     let clock_node = node.clone();
 
     // Setup CARLA listener
