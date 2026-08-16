@@ -196,7 +196,7 @@ colcon list | grep autoware_vehicle_msgs
 │   ├── acb_launch/                # Autoware launch + config
 │   ├── acb_demo_launch/           # Demo orchestration
 │   ├── acb_pilot/                 # Autonomous driving pilot (Python)
-│   ├── acb_individual_params/     # Sensor calibrations
+│   ├── individual_params/         # Sensor calibrations (name fixed by Autoware, see docs/issues/013)
 │   ├── acb_sensor_kit_launch/     # Sensor kit launch + description
 │   ├── acb_vehicle_launch/        # Vehicle launch + description
 │   ├── carla_pcd_gen/             # Standalone PCD generator

@@ -23,6 +23,7 @@ conventions.
 | [010](010-actuation-status-not-published.md) | `/vehicle/status/actuation_status` is never published | Low | Fixed |
 | [011](011-lidar-channel-assignment-cost.md) | LiDAR channel assignment is O(points x channels) per scan | Low | Fixed |
 | [012](012-unknown-blueprint-becomes-a-camera.md) | An unrecognised sensor blueprint is silently classified as a camera | Low | Fixed |
+| [013](013-individual-params-is-unreachable.md) | The sensor calibration package is unreachable from Autoware's launch | High | Fixed |
 
 ## Severity
 
