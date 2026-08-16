@@ -51,6 +51,33 @@ Roll and pitch stay zero: CARLA's compass carries heading only.
 Unit tests in `sensor_bridge.rs` pin the two checks above plus north, so the constant can
 never come back silently.
 
+## Measured live
+
+`scripts/check_vehicle_interface.py` against a running `town01_ego_drive.xosc`, 2742
+samples:
+
+```
+imu yaw vs base_link   mean |err| 3.1051 rad   worst 3.1092 rad
+imu yaw spread         0.0811 rad
+```
+
+Two things to read out of that.
+
+The **spread is non-zero**, which is the whole point: before the fix the orientation was
+one of two constants and the spread would have been 0. It now tracks the vehicle's
+heading change over the run.
+
+The **offset is π, and that is correct.** `carla/imu_link` is mounted with `roll: π,
+yaw: π` relative to `base_link` (`acb_sensor_kit_description/config/
+sensor_kit_calibration.yaml`), so the sensor's own heading genuinely is
+`vehicle_heading + π`. CARLA's compass reports the *sensor's* heading, and the message is
+stamped `frame_id: carla/imu_link` — a consumer transforms it through TF. Comparing it
+directly against `base_link` yaw is comparing two different frames.
+
+The evidence that this is a mount offset rather than a sign error is that it stays
+constant: across a 0.081 rad heading change the error moved by 0.004 rad. A sign error
+would have made it vary by twice the heading change.
+
 ## Related
 
 `orientation_covariance` is still all zeros. ROS convention is that element 0 set to `-1`

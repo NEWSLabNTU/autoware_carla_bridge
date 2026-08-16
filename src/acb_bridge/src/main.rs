@@ -293,16 +293,26 @@ fn classify_tick_error(error: &carla::CarlaError) -> TickOutcome {
     }
 }
 
-/// Run one CARLA tick iteration, returning the elapsed simulation seconds.
+/// Wait for one CARLA frame.
+///
+/// `Ok(None)` is the wait expiring with no frame -- normal while the simulation is
+/// paused. `Ok(Some(snapshot))` is a frame that genuinely arrived.
+///
+/// **Read the world's state from the returned snapshot, never from `World::snapshot()`.**
+/// `World::snapshot()` answers from the client's cached episode state, so once frames
+/// stop arriving it keeps returning the last one it saw, forever, with every actor in it
+/// still "present". This function used to throw the return value away
+/// (`let _ = world.wait_for_tick_or_timeout(timeout)?;`) and then call `World::snapshot()`
+/// -- so a paused simulation was indistinguishable from a running one, and a vehicle
+/// destroyed after the last frame stayed alive in the bridge's eyes indefinitely. See
+/// `docs/issues/014-*`.
 ///
 /// `Err` does not necessarily mean CARLA is gone; classify it with [`classify_tick_error`].
 fn carla_tick(
     world: &carla::client::World,
     timeout: Duration,
-) -> std::result::Result<f64, carla::CarlaError> {
-    let _ = world.wait_for_tick_or_timeout(timeout)?;
-    let snapshot = world.snapshot()?;
-    Ok(snapshot.timestamp().elapsed_seconds)
+) -> std::result::Result<Option<carla::client::WorldSnapshot>, carla::CarlaError> {
+    world.wait_for_tick_or_timeout(timeout)
 }
 
 /// Poll CARLA actors until a vehicle with the given role_name is found.
@@ -718,28 +728,37 @@ fn main() -> Result<()> {
                 break SessionExit::AutowareRestarted;
             }
 
-            // Wait for next CARLA tick and get simulation time.
-            let sec = match carla_tick(&world, loop_duration) {
-                Ok(sec) => {
+            // Wait for the next CARLA frame. A frame that did not arrive is `Ok(None)`,
+            // not an error -- see carla_tick.
+            let idle = |idle_ticks: &mut u64| {
+                // The simulation is paused, not broken. Log at a decreasing rate so a
+                // 120s Autoware startup does not bury everything else.
+                *idle_ticks += 1;
+                if *idle_ticks == IDLE_TICKS_BEFORE_FIRST_LOG
+                    || (*idle_ticks > IDLE_TICKS_BEFORE_FIRST_LOG
+                        && idle_ticks.is_multiple_of(IDLE_TICK_LOG_INTERVAL))
+                {
+                    tracing::info!(
+                        "No CARLA frame for {:.0}s; the simulation is paused (waiting for \
+                         the scenario to advance frames)",
+                        *idle_ticks as f64 * loop_duration.as_secs_f64()
+                    );
+                }
+            };
+
+            let snapshot = match carla_tick(&world, loop_duration) {
+                Ok(Some(snapshot)) => {
                     consecutive_failures = 0;
                     idle_ticks = 0;
-                    sec
+                    snapshot
+                }
+                Ok(None) => {
+                    idle(&mut idle_ticks);
+                    continue;
                 }
                 Err(e) => match classify_tick_error(&e) {
                     TickOutcome::Idle => {
-                        // The simulation is paused, not broken. Log at a decreasing rate so
-                        // a 120s Autoware startup does not bury everything else.
-                        idle_ticks += 1;
-                        if idle_ticks == IDLE_TICKS_BEFORE_FIRST_LOG
-                            || (idle_ticks > IDLE_TICKS_BEFORE_FIRST_LOG
-                                && idle_ticks.is_multiple_of(IDLE_TICK_LOG_INTERVAL))
-                        {
-                            tracing::info!(
-                                "No CARLA tick for {:.0}s; the simulation is paused (waiting \
-                                 for the scenario to advance frames)",
-                                idle_ticks as f64 * loop_duration.as_secs_f64()
-                            );
-                        }
+                        idle(&mut idle_ticks);
                         continue;
                     }
                     TickOutcome::ConnectionLost => {
@@ -777,23 +796,22 @@ fn main() -> Result<()> {
             // pointcloud rate and planning trajectory rate all ERROR, so
             // /system/operation_mode/availability said autonomous=False and the state
             // machine sat in PLANNING until the scenario timed out.
-            // The world snapshot is the server's actor list for the frame just ticked.
-            // `World::GetActor` is not a substitute: like `Actor::IsAlive`, it can answer
-            // from the client's own registry and keep reporting an actor this client
-            // remembers but the server destroyed.
-            match world.snapshot() {
-                Ok(snapshot) if !snapshot.contains(vehicle_id) => {
-                    tracing::info!(
-                        "Vehicle '{}' (actor {vehicle_id}) is gone from the world; releasing \
-                         sensors and waiting for the next spawn",
-                        params.vehicle_name
-                    );
-                    break SessionExit::VehicleLost;
-                }
-                Ok(_) => {}
-                // Transport trouble is the tick path's problem, not a despawn.
-                Err(e) => tracing::debug!("Vehicle existence check failed: {e}"),
+            // The snapshot the tick returned is the server's actor list for the frame that
+            // just arrived. `World::snapshot()` is NOT a substitute -- it answers from the
+            // client's cached episode state, so a paused simulation keeps handing back the
+            // last frame with every actor still in it. Neither is `World::GetActor` nor
+            // `Actor::IsAlive`: both can answer from the client's own registry and keep
+            // reporting an actor this client remembers but the server destroyed.
+            if !snapshot.contains(vehicle_id) {
+                tracing::info!(
+                    "Vehicle '{}' (actor {vehicle_id}) is gone from the world; releasing \
+                     sensors and waiting for the next spawn",
+                    params.vehicle_name
+                );
+                break SessionExit::VehicleLost;
             }
+
+            let sec = snapshot.timestamp().elapsed_seconds;
 
             // Publish clock, but only if we own it in this domain. `sec` is CARLA server
             // uptime, so it is rebased onto scenario time before publishing.
