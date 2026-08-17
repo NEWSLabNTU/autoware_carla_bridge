@@ -145,6 +145,17 @@ def main():
             if "imu" in node.latest:
                 row["imu_yaw"] = quat_yaw(node.latest["imu"].orientation)
                 row["yaw_truth"] = truth_ros_yaw
+                # The IMU is mounted with a yaw offset -- base_link -> carla/imu_link is
+                # RPY [-3.141, -0.015, 3.105] in this sensor kit -- so CARLA's compass,
+                # and therefore the published orientation, is the SENSOR's heading, not
+                # the vehicle's. Comparing against the vehicle shows a ~3.105 rad error
+                # that is entirely the mount. The sensor actor's own transform is the
+                # right reference.
+                imu_actor = node.find_imu(vehicle)
+                if imu_actor is not None:
+                    row["imu_yaw_sensor_truth"] = -math.radians(
+                        imu_actor.get_transform().rotation.yaw
+                    )
             if "steering" in node.latest:
                 row["steer_report"] = node.latest["steering"].steering_tire_angle
                 fl = vehicle.get_wheel_steer_angle(carla.VehicleWheelLocation.FL_Wheel)

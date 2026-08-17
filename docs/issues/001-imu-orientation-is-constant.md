@@ -74,9 +74,45 @@ sensor_kit_calibration.yaml`), so the sensor's own heading genuinely is
 stamped `frame_id: carla/imu_link` — a consumer transforms it through TF. Comparing it
 directly against `base_link` yaw is comparing two different frames.
 
-The evidence that this is a mount offset rather than a sign error is that it stays
-constant: across a 0.081 rad heading change the error moved by 0.004 rad. A sign error
-would have made it vary by twice the heading change.
+## Confirmed against the mount, three ways
+
+The offset is not π and not a sign error. It is the mount, to four decimal places.
+
+**1. The live TF.** `ros2 run tf2_ros tf2_echo base_link carla/imu_link` on the running
+stack:
+
+```
+- Rotation: in RPY (radian) [-3.141, -0.015, 3.105]
+```
+
+Yaw **3.105**, against a measured offset of **3.1050 / 3.1051 / 3.1050** rad in three
+separate runs. π would be 3.1416; the missing 0.036 rad is what the
+`base_link -> sensor_kit_base_link` leg contributes (pitch -0.859°, yaw 177.914°).
+
+**2. A standalone CARLA probe** (`scripts/probe_imu_mount.py`), spawning an IMU at that
+mount and sweeping the vehicle's heading:
+
+```
+mean |pi/2-compass  -  (-sensor yaw)|  =   0.000 deg
+mean |pi/2-compass  -  (-vehicle yaw)| = 177.903 deg
+```
+
+`π/2 − compass` reproduces the **sensor's** ROS yaw exactly. 177.903° is 3.1050 rad —
+the same number again.
+
+**3. The published orientation against the sensor actor's own transform**, live, 8785
+samples spanning a 2.23 rad heading change:
+
+```
+imu yaw vs base_link    mean |err| 3.1036 rad
+imu yaw vs sensor tf    mean |err| 0.0031 rad
+```
+
+Three decimal places of agreement with the frame the message is actually stamped in.
+
+(The harness needed a fix of its own to produce that second line: `find_imu` was defined
+but never called, so the comparison silently reported "no samples". The lookup itself —
+`filter("sensor.other.imu")` plus `actor.parent` — works.)
 
 ## Related
 
