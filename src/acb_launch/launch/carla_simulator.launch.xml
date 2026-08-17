@@ -171,6 +171,24 @@
        The high-accuracy traffic light detector stays off, as it was when
        autoware.launch.xml launched perception. -->
   <group if="$(var perception)">
+    <!-- The vibration margins are left at upstream's defaults, and it is worth knowing
+         why, because shrinking them is the obvious idea and it is wrong.
+
+         traffic_light_map_based_detector pads each projected signal by
+         sin(max_vibration_yaw/2) * depth + max_vibration_width/2 per side. Against
+         CARLA's 0.451 m head that padding dominates (3.3x the head at 30 m), so the
+         classifier spends most of its 224x224 input on scenery, and cutting the margins
+         to 0.001 rad / 0.05 m looks like free accuracy.
+
+         Measured, it destroys recognition outright: 534 regions in a run produced ZERO
+         non-empty classifier outputs, against 516 with the defaults. The reason is that
+         the padding is load-bearing. A 0.451 m head subtends about 13 px at 30 m and
+         4 px at 100 m, so with the margins gone the region collapses to the head's true
+         size, and there is nothing left to classify: 4x7 px crops were captured.
+         The margin is what makes the crop big enough to be worth resizing.
+
+         If this is revisited, the lever is the head's apparent size (a longer focal
+         length, or a scenario that gets closer), not the padding. -->
     <include file="$(find-pkg-share autoware_launch)/launch/components/tier4_perception_component.launch.xml">
       <arg name="data_path" value="$(var data_path)"/>
       <arg name="pointcloud_container_name" value="pointcloud_container"/>
