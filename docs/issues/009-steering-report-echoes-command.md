@@ -39,58 +39,47 @@ local server; the reads are not batched with anything else, so this is worth re-
 if the cycle ever gets tight.
 
 
-## Reverted: it destabilises the lateral controller
+## Default reverted, but NOT for the reason first written here
 
-Reporting the measured angle is the honest answer, and it is **off by default** anyway,
-because measuring what it does to Autoware showed it breaks lane keeping here.
+`report_measured_steering` defaults to **false** (echo the command). The honest reading of
+why is: *no evidence either way*, so the default is the historical behaviour until someone
+runs a controlled test.
 
-Same stack, same scenario, same build, one parameter changed:
+### The A/B that motivated this was confounded
 
-| | measured (`report_measured_steering:=true`) | commanded (`false`) |
+It looked decisive. One parameter changed, everything else identical:
+
+| | measured | commanded |
 |---|---|---|
-| lateral position | −130.1 → **−132.9** → **−126.3** | stays −129.4 … −129.9 |
-| steering command | swings ±0.33 rad | ±0.013 rad |
-| result | leaves the lane, wedges on the kerb, 180 s timeout | reaches the goal, **passes** |
+| lateral position (lane at −129.8) | −130.1 → −132.9 → −126.3, departs | −129.4 … −129.9 |
+| steering command | ±0.33 rad | ±0.013 rad |
+| result | wedged on kerb, 180 s timeout | reached the goal |
 
-The lane is at y = −129.8. In the measured arm the ego swings 6.6 m laterally in six
-seconds at 3.6 m/s — a lateral loop oscillating with growing amplitude, not a car tracking
-a path. It then sits with a sustained +0.5 m/s² command and zero motion, stuck against the
-kerb it climbed.
+**It was one run per arm, and the arms differed in something else.** The measured arm ran
+as the second-or-later scenario on an ego stack that had been up a while; the commanded arm
+ran as the *first* scenario after an `ego-av` restart. Every run this session, of either
+kind, follows that split — see issue
+[016](016-the-ego-stack-degrades-after-its-first-run.md). Three consecutive runs on an aged
+stack with **commanded** steering then failed 3/3, which is what the parameter was supposed
+to prevent.
 
-### Why
+So the difference I measured is explained by stack freshness, and this parameter is
+unproven in both directions.
 
-The loop gain is wrong, and this change is what exposed it. The command maps a requested
-tire angle onto CARLA's normalised steer by the wheel **limit** (70° for the Tesla), but
-the vehicle turns at the Ackermann **mean** of its two front wheels — 58.7° at full lock,
-per `scripts/probe_carla_conventions.py`:
+### What is still true
 
-```
-steer cmd=0.25  FL= 15.02  FR= 17.50  mean= 16.26 deg
-steer cmd=0.60  FL= 30.98  FR= 42.00  mean= 36.49 deg
-steer cmd=1.00  FL= 47.43  FR= 70.00  mean= 58.71 deg
-```
+The oscillation seen in the measured arm was real: a 6.6 m lateral swing in six seconds at
+3.6 m/s is a lateral loop going unstable, not a car tracking a path. Whether measured
+feedback caused it, or merely coincided with a degraded stack, is not established.
 
-So honest feedback reports ~18% less angle than was asked for. MPC sees a persistent
-shortfall, winds up against it, and with the actuator lag that the measured signal *also*
-newly exposes, the loop goes unstable. Echoing the command hides both, which is why it was
-stable — a perfect actuator is a lie, but a consistent one.
+There is also a genuine scale mismatch waiting underneath, from
+[006](006-hardcoded-max-steer-angle.md): the command maps a tire angle by the wheel
+**limit** (70°) while the vehicle turns at the Ackermann **mean** (58.7° at full lock, per
+`scripts/probe_carla_conventions.py`). Honest feedback therefore reads ~18% below the
+command, which is a real loop-gain error regardless of what caused these particular
+failures.
 
-This is exactly the follow-up issue [006](006-hardcoded-max-steer-angle.md) left open:
-*"a calibrated inverse would remove the steady-state error instead of asking the controller
-to integrate it away."* Until that exists, honest feedback cannot be the default.
+### How to settle it
 
-### What would make it safe
-
-Map the command through the achieved-angle relationship rather than the wheel limit —
-`cmd = desired_angle / radians(58.7)` for this vehicle, ideally derived at runtime rather
-than hardcoded, since it is a property of each blueprint's Ackermann geometry. With
-commanded and achieved agreeing, measured feedback becomes consistent and the flag can go
-back to true. Re-run the A/B above to confirm before flipping it.
-
-### Note on how this was found
-
-It hid for a long time because it is *marginal*, not deterministic: earlier runs with
-measured reporting passed. It surfaced as "the second run on a stack fails", and I spent
-considerable effort attributing that to the orphaned-stream storm (issue 015) and to clock
-rewinds, neither of which was the cause. A full-run trace of pose, velocity, steering and
-CARLA ground truth is what settled it — `scripts/trace_run.py`.
+Fix the command mapping first (006), then A/B this flag **with every run as run 1 on a
+freshly restarted ego stack**, several runs per arm. Anything less is measuring stack age.

@@ -41,12 +41,11 @@ run  verdict  ego_s  log_MB  storm_lines
 The two symptoms co-occurred because both follow a teardown; neither causes the other. The
 storm was real, is understood, and is fixed.
 
-**The timeouts turned out to be issue [009](009-steering-report-echoes-command.md)** — the
-change that made `SteeringReport` carry the measured wheel angle instead of echoing the
-command. It destabilises Autoware's lateral controller, so the ego oscillates out of its
-lane and wedges on the kerb. A full-run trace and an A/B on that one parameter settled it;
-the details are in 009. It is marginal rather than deterministic, which is why runs
-sometimes passed and why it looked like a property of "the second run".
+**The timeouts are tracked separately as issue
+[016](016-the-ego-stack-degrades-after-its-first-run.md)**: the ego stack passes its first
+scenario after a restart and fails the ones after it, regardless of anything in this issue.
+It was briefly attributed to issue [009](009-steering-report-echoes-command.md) — that
+attribution was wrong too, and 009 records why.
 
 ## Cause
 

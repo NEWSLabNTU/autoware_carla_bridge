@@ -19,13 +19,14 @@ conventions.
 | [006](006-hardcoded-max-steer-angle.md) | Max steer angle hardcoded instead of read from CARLA | Medium | Fixed |
 | [007](007-ground-truth-twist-frame.md) | Ground-truth odometry twist is world-frame under `base_link` | Low | Fixed |
 | [008](008-angular-velocity-units.md) | `Actor::angular_velocity()` units undocumented in CARLA's own API | Medium | Investigated |
-| [009](009-steering-report-echoes-command.md) | SteeringReport echoes the command instead of the measured angle | Low | Reverted (destabilised lateral control) |
+| [009](009-steering-report-echoes-command.md) | SteeringReport echoes the command instead of the measured angle | Low | Behind a flag, default off, unproven |
 | [010](010-actuation-status-not-published.md) | `/vehicle/status/actuation_status` is never published | Low | Fixed |
 | [011](011-lidar-channel-assignment-cost.md) | LiDAR channel assignment is O(points x channels) per scan | Low | Fixed |
 | [012](012-unknown-blueprint-becomes-a-camera.md) | An unrecognised sensor blueprint is silently classified as a camera | Low | Fixed |
 | [013](013-individual-params-is-unreachable.md) | The sensor calibration package is unreachable from Autoware's launch | High | Fixed |
 | [014](014-a-paused-simulation-looks-like-a-running-one.md) | A paused simulation is indistinguishable from a running one | High | Fixed |
 | [015](015-sensors-destroyed-while-still-listening.md) | A listening client's streams are destroyed underneath it | High | Fixed (release protocol) |
+| [016](016-the-ego-stack-degrades-after-its-first-run.md) | The ego stack only passes its first scenario after a restart | High | Open |
 
 ## Severity
 
