@@ -19,7 +19,7 @@ conventions.
 | [006](006-hardcoded-max-steer-angle.md) | Max steer angle hardcoded instead of read from CARLA | Medium | Fixed |
 | [007](007-ground-truth-twist-frame.md) | Ground-truth odometry twist is world-frame under `base_link` | Low | Fixed |
 | [008](008-angular-velocity-units.md) | `Actor::angular_velocity()` units undocumented in CARLA's own API | Medium | Investigated |
-| [009](009-steering-report-echoes-command.md) | SteeringReport echoes the command instead of the measured angle | Low | Fixed |
+| [009](009-steering-report-echoes-command.md) | SteeringReport echoes the command instead of the measured angle | Low | Reverted (destabilised lateral control) |
 | [010](010-actuation-status-not-published.md) | `/vehicle/status/actuation_status` is never published | Low | Fixed |
 | [011](011-lidar-channel-assignment-cost.md) | LiDAR channel assignment is O(points x channels) per scan | Low | Fixed |
 | [012](012-unknown-blueprint-becomes-a-camera.md) | An unrecognised sensor blueprint is silently classified as a camera | Low | Fixed |

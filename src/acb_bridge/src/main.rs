@@ -145,6 +145,15 @@ struct BridgeParams {
     pub release_notify_endpoint: String,
     /// Where to send the acknowledgement (the runner's PULL socket).
     pub release_ack_endpoint: String,
+    /// Report the measured front-wheel angle on `/vehicle/status/steering_status`.
+    ///
+    /// **Defaults to false**, which echoes the command. Measured is the honest answer and
+    /// was the default until an A/B measurement showed it destabilises Autoware's lateral
+    /// controller here: the command maps to the wheel *limit* while the vehicle turns at
+    /// the Ackermann *mean*, so honest feedback sits ~18% below the command and MPC winds
+    /// up against it. Turn this on once the command mapping is calibrated. See
+    /// docs/issues/009 and 006.
+    pub report_measured_steering: bool,
 }
 
 impl BridgeParams {
@@ -201,6 +210,12 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        let report_measured_steering = node
+            .declare_parameter("report_measured_steering")
+            .default(false)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         // Get parameter values
         let carla_address_val: Arc<str> = carla_address.get();
         let carla_port_val: i64 = carla_port.get();
@@ -210,6 +225,7 @@ impl BridgeParams {
         let publish_clock_val: bool = publish_clock.get();
         let release_notify_val: Arc<str> = release_notify_endpoint.get();
         let release_ack_val: Arc<str> = release_ack_endpoint.get();
+        let report_measured_steering_val: bool = report_measured_steering.get();
 
         // Validate required parameters
         if vehicle_config_val.is_empty() {
@@ -227,6 +243,7 @@ impl BridgeParams {
             publish_clock: publish_clock_val,
             release_notify_endpoint: release_notify_val.to_string(),
             release_ack_endpoint: release_ack_val.to_string(),
+            report_measured_steering: report_measured_steering_val,
         })
     }
 }
@@ -725,8 +742,11 @@ fn main() -> Result<()> {
 
         // === Create vehicle control bridge ===
         tracing::info!("Creating vehicle control bridge...");
-        let vehicle_control =
-            vehicle_control::VehicleControlBridge::new(node.clone(), vehicle_shared.clone())?;
+        let vehicle_control = vehicle_control::VehicleControlBridge::new(
+            node.clone(),
+            vehicle_shared.clone(),
+            params.report_measured_steering,
+        )?;
         tracing::info!("Vehicle control bridge created");
 
         tracing::info!("=== Bridge running ===");

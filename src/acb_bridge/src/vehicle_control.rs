@@ -153,6 +153,17 @@ pub struct VehicleControlBridge {
 
     /// Physical steering limit of the spawned vehicle, radians.
     max_steer_angle: f32,
+
+    /// Report the *measured* front-wheel angle rather than echoing the command.
+    ///
+    /// True is the honest answer and the default (issue 009). It is a knob because it
+    /// changes what Autoware's lateral controller sees: echoing the command hands MPC a
+    /// perfect, instantaneous actuator, while the measured angle is the real one -- which
+    /// lags, and which under-delivers by ~18% at the top of the planning range because the
+    /// command maps to the wheel *limit* while the vehicle turns at the Ackermann *mean*
+    /// (issue 006). Set false to get the old behaviour when bisecting a lateral-control
+    /// problem.
+    report_measured_steering: bool,
 }
 
 impl VehicleControlBridge {
@@ -161,7 +172,11 @@ impl VehicleControlBridge {
     /// # Arguments
     /// * `node` - ROS node for creating publishers/subscribers
     /// * `vehicle` - Arc<Mutex<Option<Vehicle>>> shared with main loop
-    pub fn new(node: rclrs::Node, vehicle: Arc<Mutex<Option<Vehicle>>>) -> Result<Self> {
+    pub fn new(
+        node: rclrs::Node,
+        vehicle: Arc<Mutex<Option<Vehicle>>>,
+        report_measured_steering: bool,
+    ) -> Result<Self> {
         let max_steer_angle = Self::read_max_steer_angle(&vehicle);
 
         // Create publishers
@@ -256,6 +271,14 @@ impl VehicleControlBridge {
 
         tracing::info!("Vehicle control bridge created");
         tracing::info!("  Max steering tire angle: {:.3} rad", max_steer_angle);
+        tracing::info!(
+            "  Steering status: {}",
+            if report_measured_steering {
+                "measured wheel angle"
+            } else {
+                "commanded angle (actuator hidden from the controller)"
+            }
+        );
         tracing::info!("  Subscribed to: /control/command/control_cmd");
         tracing::info!("  Subscribed to: /control/command/gear_cmd");
         tracing::info!("  Subscribed to: /control/command/turn_indicators_cmd");
@@ -283,6 +306,7 @@ impl VehicleControlBridge {
             vehicle,
             state,
             max_steer_angle,
+            report_measured_steering,
         })
     }
 
@@ -551,7 +575,12 @@ impl VehicleControlBridge {
             // Publish SteeringReport from the measured wheel angle
             let steering_report = autoware_vehicle_msgs::msg::SteeringReport {
                 stamp: ros_timestamp.clone(),
-                steering_tire_angle: self.measured_steering_angle(vehicle, control.steer),
+                steering_tire_angle: if self.report_measured_steering {
+                    self.measured_steering_angle(vehicle, control.steer)
+                } else {
+                    // Negate: CARLA positive = right turn, Autoware positive = left turn.
+                    -control.steer * self.max_steer_angle
+                },
             };
 
             self.steering_pub.publish(&steering_report)?;

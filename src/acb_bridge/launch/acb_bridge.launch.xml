@@ -21,6 +21,11 @@
        description="Scenario runner's release-notice PUB socket"/>
   <arg name="release_ack_endpoint" default="tcp://127.0.0.1:5557"
        description="Scenario runner's release-acknowledgement PULL socket"/>
+  <!-- Echo the command by default. Reporting the measured wheel angle is truthful but
+       destabilises the lateral controller until the command mapping is calibrated
+       against it; see docs/issues/009. -->
+  <arg name="report_measured_steering" default="false"
+       description="Report the measured wheel angle (true) or echo the command (false)"/>
   <arg name="publish_clock" default="true"
        description="Publish /clock from CARLA simulation time"/>
 
@@ -33,5 +38,6 @@
     <param name="publish_clock" value="$(var publish_clock)"/>
     <param name="release_notify_endpoint" value="$(var release_notify_endpoint)"/>
     <param name="release_ack_endpoint" value="$(var release_ack_endpoint)"/>
+    <param name="report_measured_steering" value="$(var report_measured_steering)"/>
   </node>
 </launch>

@@ -39,13 +39,14 @@ run  verdict  ego_s  log_MB  storm_lines
 ```
 
 The two symptoms co-occurred because both follow a teardown; neither causes the other. The
-storm was real, is understood, and is fixed. The second-run failure is a **separate,
-undiagnosed problem** and is not tracked by this issue.
+storm was real, is understood, and is fixed.
 
-The lead worth pulling on there — evidence, not conclusion — is that localization
-initializes at a pose unrelated to the spawn point on later runs: `(158.25, ...)` and
-`(118.54, -110.32)` were observed where the scenario spawns the ego at `(190.8, -130.1)`.
-That points at Autoware-side state carried across runs rather than anything in CARLA.
+**The timeouts turned out to be issue [009](009-steering-report-echoes-command.md)** — the
+change that made `SteeringReport` carry the measured wheel angle instead of echoing the
+command. It destabilises Autoware's lateral controller, so the ego oscillates out of its
+lane and wedges on the kerb. A full-run trace and an A/B on that one parameter settled it;
+the details are in 009. It is marginal rather than deterministic, which is why runs
+sometimes passed and why it looked like a property of "the second run".
 
 ## Cause
 
