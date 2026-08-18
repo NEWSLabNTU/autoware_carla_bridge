@@ -595,6 +595,11 @@ fn main() -> Result<()> {
     // False when only Autoware restarted: CARLA is still healthy, so its connection and
     // simulation clock must be preserved.
     let mut reconnect_carla = true;
+    // Whether the coming reconnect is because CARLA went away. A reconnect made purely to
+    // drop stale sensor streams (see SessionExit::VehicleLost) talks to the same server,
+    // whose uptime never paused -- rebasing the clock there would rewind `/clock` under a
+    // background AV that owns it, which is the "Detected jump back in time" failure.
+    let mut carla_may_have_restarted = true;
     let mut client: Option<Client> = None;
 
     loop {
@@ -606,7 +611,9 @@ fn main() -> Result<()> {
             };
 
             // A reconnected (possibly restarted) server may have rewound its uptime.
-            clock_epoch.reset();
+            if carla_may_have_restarted {
+                clock_epoch.reset();
+            }
         }
         let client = client.as_ref().expect("client connected above");
 
@@ -913,6 +920,7 @@ fn main() -> Result<()> {
             SessionExit::CarlaLost => {
                 tracing::info!("Attempting to reconnect to CARLA...");
                 reconnect_carla = true;
+                carla_may_have_restarted = true;
             }
             SessionExit::AutowareRestarted => {
                 // CARLA is healthy, so the connection and the simulation clock are kept.
@@ -922,11 +930,34 @@ fn main() -> Result<()> {
                 reconnect_carla = false;
             }
             SessionExit::VehicleLost => {
-                // Same as AutowareRestarted: connection and clock epoch are kept. The
-                // orphaned sensors were destroyed by the cleanup above; the outer loop
-                // re-enters wait_for_vehicle for the next spawn.
-                tracing::info!("Waiting for the next vehicle spawn; CARLA connection kept");
-                reconnect_carla = false;
+                // Reconnect, even though CARLA is perfectly healthy.
+                //
+                // The scenario runner destroys the ego *and its children*, so this
+                // bridge's sensors are destroyed underneath it while it is still
+                // listening to their streams. There is no way to unsubscribe afterwards:
+                // `Sensor::stop()` on a destroyed actor fails ("close: Bad file
+                // descriptor"), and the listening client then retries the dead stream
+                // forever. Measured against a plain two-client reproducer, the server
+                // answers those retries at ~48,000 "Invalid session: no stream available
+                // with id N" per second -- 2.6 MB/s of log -- which starves the
+                // simulation and eventually segfaults it. Killing the listening client
+                // drops the rate to zero instantly; nothing else does.
+                //
+                // Dropping the connection is the only lever this side owns. It was
+                // already the accidental cure: wait_for_vehicle reconnects after
+                // WAIT_RECONNECT_INTERVAL, so a long idle gap self-healed after 60 s
+                // while back-to-back scenario runs never got that far. Do it at once
+                // instead. Reconnecting with nothing attached costs a few hundred ms.
+                //
+                // The real fix is ordering -- the listener must stop() before the owner
+                // destroys -- and that needs the two processes to agree. See
+                // docs/issues/015.
+                tracing::info!(
+                    "Waiting for the next vehicle spawn; reconnecting to CARLA to drop \
+                     the sensor streams the scenario runner destroyed underneath us"
+                );
+                reconnect_carla = true;
+                carla_may_have_restarted = false;
             }
         }
     }
