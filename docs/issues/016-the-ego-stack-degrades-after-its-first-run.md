@@ -188,32 +188,57 @@ here. Run 1 PASS, run 2 FAIL, with the failing run's oscillation the same shape 
 amplitude as before it. In hindsight the prediction was available beforehand: the old
 mapping under-delivered, which is low loop gain, and low gain is stabilising.
 
-## A better lead: a burst of perceived objects at the moment of departure
+## Ruled out: the burst of perceived objects
 
-The same rerun, comparing the passing and failing run on one stack. Object count from
-`/perception/object_recognition/objects`, over the straight stretch where the failing run
-leaves its lane:
+A previous version of this issue offered the object burst as the best lead, on the strength
+of a passing run never exceeding 3 objects while a failing one reached 40 as it left its
+lane. Dumping the objects settles it, and the lead was wrong -- the causality runs the other
+way.
+
+`scripts/dump_objects.py` prints each object in the ego's own frame. During the burst, on a
+third (failing) run:
 
 ```
-run 1 PASS   3  3  3  0  3  3  2  2  3  2        never above 3, lateral -130.1 to -129.5
-run 2 FAIL   3  3  2 18 27 19 23 40 36 39        lateral -129.8 -> -128.8 -> -132.7
+t=40 ego(160.7,-120.3) yaw=82.0  tracked=13  clustering=54
+    lon=  -1.0 lat=   0.0 d=  1.0 UNKNOWN p=1.00 exist=0.94 size=( 0.0, 0.0, 0.1)
+    lon=   2.4 lat=  31.2 d= 31.3 UNKNOWN p=1.00 exist=0.60 size=( 0.0, 0.0, 1.0)
+    lon=   6.7 lat= -17.4 d= 18.7 UNKNOWN p=1.00 exist=0.94 size=( 0.0, 0.0, 0.4)
+    lon= -65.0 lat=  18.1 d= 67.5 UNKNOWN p=1.00 exist=0.98 size=( 0.0, 0.0, 1.5)
+    lon= -58.3 lat= -60.2 d= 83.8 UNKNOWN p=1.00 exist=0.81 size=( 0.0, 0.0, 2.4)
 ```
 
-The burst coincides with the departure, and the planned trajectory lengthens with it --
-`tend` goes 31.3, 40.5, 44.2 -- which is a replan, not a longer view of the same path. The
-ego then follows that replanned path out of its lane.
+Every object is either the ego's own body (`lon=-1.0, lat=0.0`, a 0.1 m high box one metre
+behind it) or roadside clutter 20-80 m off to the sides and behind. All are `UNKNOWN` with
+**zero length and zero width** -- degenerate clusters, not detections of anything. Nothing
+in that set would make a planner swerve.
 
-Both runs are on the same stack minutes apart, so the point cloud and the map are the same
-and the map-based filters are the same. Note this also links the mechanism to the predictor
-for the first time: if perception degrades as a stack ages, later runs see more spurious
-objects, swerve more, and depart. Nothing else in this issue explains the run-order
-dependence at all.
+The order of events points the same way. At 1 Hz:
 
-**This is one run per condition and therefore a lead, not a finding** -- exactly the shape
-of the two claims already retracted here. Test it by dumping object positions, classes and
-existence probabilities during the burst (are they on the ego's own body? the kerb? the
-parked `bg_av_1`?), and by counting objects across n >= 10 runs per condition with run order
-held fixed.
+```
+t=27 ego(188.7,-130.1) yaw= 180.0 clustering= 3    on the lane centre, heading west
+t=28 ego(185.7,-130.0) yaw= 178.5 clustering= 3    yaw already moving, clusters unchanged
+t=29 ego(182.4,-129.5) yaw= 168.0 clustering=28    10 deg/s yaw rate, then the burst
+```
+
+The yaw departs first and the clusters follow it. As the car rotates, the LiDAR sweeps the
+kerb and buildings at a new angle and ground segmentation leaks, so cluster count is a
+*measure* of the departure rather than its cause. The count then tracks the yaw error all
+the way out: 3, 28, 19, 44, 34 ... 66 at 36 degrees off.
+
+This is the third lead in this issue to be raised and then withdrawn, and the second where a
+real correlation turned out to point backwards.
+
+## What is left
+
+The ego yaws 10 degrees in one second while sitting on the lane centre of a straight route,
+correctly localized, with nothing ahead of it. The controller is issuing the large steering
+that produces that. The open question is whether it is being *asked* to.
+
+The discriminator is the planned path itself, not its endpoints: sample the first several
+trajectory points in the ego frame and see whether the path is straight down the lane while
+the controller steers off it (a control fault) or whether the path itself bends (a planning
+fault). `tend` jumping from 31 to 44 m at the departure says the trajectory changed at that
+moment; it does not say into what shape.
 
 ## Still unexplained
 
