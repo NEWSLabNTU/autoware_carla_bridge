@@ -993,9 +993,9 @@ fn main() -> Result<()> {
                 // descriptor"), and the listening client then retries the dead stream
                 // forever. Measured against a plain two-client reproducer, the server
                 // answers those retries at ~48,000 "Invalid session: no stream available
-                // with id N" per second -- 2.6 MB/s of log -- which starves the
-                // simulation and eventually segfaults it. Killing the listening client
-                // drops the rate to zero instantly; nothing else does.
+                // with id N" per second -- 2.6 MB/s of log -- until the server
+                // segfaults. Killing the listening client drops the rate to zero
+                // instantly; nothing else does.
                 //
                 // Dropping the connection is the only lever this side owns. It was
                 // already the accidental cure: wait_for_vehicle reconnects after

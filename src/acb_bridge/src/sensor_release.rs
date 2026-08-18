@@ -10,8 +10,8 @@
 //! After that there is no way to unsubscribe: `Sensor::stop()` on a destroyed actor fails
 //! with `close: Bad file descriptor`, and the client then retries the dead stream forever.
 //! CARLA 0.9.16 answers those retries at ~48,000 `Invalid session: no stream available
-//! with id N` per second -- 2.6 MB/s of log -- which starves the simulation and eventually
-//! segfaults the server. See `docs/issues/015`.
+//! with id N` per second -- 2.6 MB/s of log -- until the server segfaults. See
+//! `docs/issues/015`.
 //!
 //! Stopping *before* the destroy costs nothing and leaves nothing behind. The only thing
 //! missing was for the two processes to agree on when, which is what this channel is.

@@ -3,7 +3,7 @@
 **Severity**: High
 **Component**: `src/acb_bridge/src/main.rs`, `carla_vehicle.rs`; carla-rust
 `destroy_with_children`
-**Status**: Mitigated in acb; the ordering problem it works around is still open
+**Status**: Fixed by the release protocol (acb `33d90c2`, csb `d4d6f68`)
 
 ## Symptom
 
@@ -17,11 +17,35 @@ ERROR: Invalid session: no stream available with id 5      # lidar
 ```
 
 Four ids, exactly the four sensors acb attaches. Left alone it reached **184 GB** of that
-one line in five hours and the server took SIGSEGV. Long before the crash it starves the
-simulation: the ego barely moves (1286 of 8786 samples above 0.5 m/s in one measured run)
-and the scenario times out with the vehicle nowhere near its goal. This is the "second run
-on one stack" failure phase 007 exists for, and it is why a fresh CARLA has always looked
-like the cure.
+one line in five hours, and the server took SIGSEGV.
+
+### What it does *not* explain
+
+An earlier version of this issue claimed the storm also starved the simulation — that the
+ego barely moved (1286 of 8786 samples above 0.5 m/s in one measured run) and the scenario
+timed out with the vehicle nowhere near its goal, making this the "second run on one stack"
+failure that phase 007 exists for.
+
+**That was wrong, and the fix disproved it.** With the release protocol in place the storm
+is gone completely — `carla.log` stayed at 56 bytes, the startup banner, across a four-run
+sample — and runs 2, 3 and 4 still failed on the scenario's own 180 s timeout:
+
+```
+run  verdict  ego_s  log_MB  storm_lines
+1    PASS     -      0       0
+2    FAIL     189    0       0
+3    FAIL     187    0       0
+4    FAIL     187    0       0
+```
+
+The two symptoms co-occurred because both follow a teardown; neither causes the other. The
+storm was real, is understood, and is fixed. The second-run failure is a **separate,
+undiagnosed problem** and is not tracked by this issue.
+
+The lead worth pulling on there — evidence, not conclusion — is that localization
+initializes at a pose unrelated to the spawn point on later runs: `(158.25, ...)` and
+`(118.54, -110.32)` were observed where the scenario spawns the ego at `(190.8, -130.1)`.
+That points at Autoware-side state carried across runs rather than anything in CARLA.
 
 ## Cause
 
@@ -98,59 +122,59 @@ handles only halved it, because Python does not actually close the connection.
   despawn in ~2 s instead of at the next run's first frame. Useful on its own, but the
   sessions are already unrecoverable by then.
 
-## Mitigation, and what it is worth
+## Fix: the release protocol
 
-`SessionExit::VehicleLost` now **reconnects** to CARLA instead of keeping the connection.
-Dropping the connection is the only lever the listener owns once its actors are gone, and
-it was already the accidental cure: `wait_for_vehicle` reconnects after
-`WAIT_RECONNECT_INTERVAL` (60 s), so a long idle gap self-healed while back-to-back
-scenario runs never got that far. Doing it at once bounds the damage to the detection
-window.
+The bug needed two clients to happen, so it needed two clients to fix. Neither side can do
+it alone — the listener cannot unsubscribe after the destroy, and the destroyer cannot stop
+a stream it never subscribed to — so the two processes now agree on *when*.
 
-The clock epoch is deliberately **not** reset on this reconnect. It talks to the same
-server, whose uptime never paused; rebasing there would rewind `/clock` under a background
-AV that owns it — the "Detected jump back in time" failure. `carla_may_have_restarted`
-separates the two reasons for reconnecting. `Autoware::clear_vehicle` drops the
-coordinator's `CarlaVehicle` first, since it outlives the connection loop and would
-otherwise hold a `Vehicle` — and through it the episode and the old client.
+csb announces a despawn while the sensors are still alive, acb stops them and acknowledges,
+csb destroys. Text frames over ZMQ, keyed on actor id:
 
-Profiling a run shows the shape this produces. The storm is **not** continuous; it is one
-burst per teardown, and nothing at all in between:
+| direction | socket | frame |
+|---|---|---|
+| csb -> acb | PUB / SUB | `release <actor_id> <role_name>` |
+| acb -> csb | PULL / PUSH | `released <actor_id>` |
+
+ZMQ rather than ROS because acb instances live in different ROS domains (ego on 1,
+background AVs on 2+) while csb is domain-less. Endpoints are configured in
+`bridge_config.yaml` (`sensor_release`) and as acb ROS parameters
+(`release_notify_endpoint`, `release_ack_endpoint`).
+
+Best effort in both directions, deliberately: a missing or slow bridge costs csb a 300 ms
+timeout and a burst of log, never a stalled scenario. acb **stops only** — csb still does
+the destroying, so `destroy_with_children` keeps protecting against the orphaned-sensor
+crash in `docs/CHECKPOINT.md`. That tension is exactly why this needed a protocol rather
+than a patch.
+
+Measured end to end:
 
 ```
-t=  5s  delta=10975 KB      <- previous run's ego destroyed under us
-t= 10s  delta= 3864 KB
-t= 15s ... t=195s  delta=0 KB
-t=200s  delta= 6157 KB      <- this run's teardown
+08:12:38.340  acb: Release requested for 'ego' (actor 175): stopping our sensors
+08:12:38.345  acb: Stopped 4 sensor stream(s) before the vehicle is despawned
+08:12:38.347  csb: Despawned 'ego' (actor_id=175)
 ```
 
-Measured per run, with a fresh CARLA each time:
+7 ms, and `carla.log` stayed at **56 bytes** — the startup banner — across a four-run
+sample. Before the fix the same runs produced 129k-1.4M error lines.
 
-| arm | run 1 | run 2 | run 3 | per-run storm |
-|---|---|---|---|---|
-| no `stop()` anywhere | PASS | FAIL | FAIL | unbounded, 184 GB over 5 h |
-| + carla-rust `68aef48` | PASS | PASS | FAIL | ~540k lines |
-| + `VehicleLost` reconnect | PASS | FAIL | FAIL | ~400k lines |
-| + `clear_vehicle` | PASS | FAIL | — | ~410k lines |
+## Defence in depth, kept
 
-The honest reading: the leak between runs is gone — measured directly at **0 KB/s** during
-a gap, against 2.6 MB/s unmitigated — but each teardown still costs one burst whose size is
-the detection latency times 2.6 MB/s. The run-level pass rate on four runs per arm is too
-noisy to claim anything from; the storm rate is the measurement that means something here.
+Three earlier changes remain. None of them cured this on its own, and the write-ups above
+say so, but each is correct in its own right and each shortens the window if the protocol
+is ever unavailable:
 
-`IDLE_TICKS_BETWEEN_ACTOR_CHECKS` is therefore the whole remaining cost, and is set to
-~0.5 s. At 2 s a burst was ~10 MB; this quarters it.
+- **carla-rust `68aef48`** — `destroy_with_children` stops a child sensor before destroying
+  it. Fixes the case where the destroyer *is* the listener.
+- **`VehicleLost` reconnects** rather than keeping the connection, dropping any sessions
+  that were orphaned anyway. The clock epoch is deliberately kept: same server, continuous
+  uptime, and rebasing would rewind `/clock` under a background AV that owns it.
+- **The idle actor-poll** notices a despawn in ~0.5 s instead of at the next run's first
+  frame, which is a promptness fix worth having regardless.
 
 ## Still open
 
-The mitigation drops sessions after the fact and pays one burst per teardown. The actual
-fix is ordering: **the listener must `stop()` before the owner destroys**, which needs the
-two processes to agree. Options, none implemented:
+Nothing in this issue. The storm is fixed and verified at zero.
 
-- csb signals acb to release its sensors before despawning the ego, and waits for an ack.
-- acb, not csb, destroys the sensors it attached — but then csb must not use
-  `destroy_with_children` on the ego, which is what protects against the orphaned-sensor
-  server crash documented in `docs/CHECKPOINT.md`. Those two rules are in direct tension
-  and the resolution needs a protocol, not a patch.
-
-Either would take the burst to zero, which is the only way this stops costing anything.
+The separate second-run failure described under "What it does not explain" is untracked and
+wants its own investigation.
