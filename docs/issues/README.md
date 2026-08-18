@@ -26,7 +26,7 @@ conventions.
 | [013](013-individual-params-is-unreachable.md) | The sensor calibration package is unreachable from Autoware's launch | High | Fixed |
 | [014](014-a-paused-simulation-looks-like-a-running-one.md) | A paused simulation is indistinguishable from a running one | High | Fixed |
 | [015](015-sensors-destroyed-while-still-listening.md) | A listening client's streams are destroyed underneath it | High | Fixed (release protocol) |
-| [016](016-the-ego-stack-degrades-after-its-first-run.md) | The ego stack only passes its first scenario after a restart | High | Open |
+| [016](016-the-ego-stack-degrades-after-its-first-run.md) | The ego stops mid-route and never resumes | High | Open |
 
 ## Severity
 

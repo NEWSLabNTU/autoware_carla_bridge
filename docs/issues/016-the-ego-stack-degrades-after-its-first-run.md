@@ -4,21 +4,46 @@
 **Component**: not yet identified; Autoware-side state carried across runs is the lead
 **Status**: Open
 
-## The pattern
+## The pattern, as far as it goes
 
-Across every run measured on 2026-08-18, with several different builds:
+The ego **stops mid-route and never resumes**, and the scenario hits its 180 s timeout.
+That much is consistent. What predicts it is not.
 
-| stack state | verdict |
+Verdicts collected on 2026-08-18 across several builds:
+
+| condition | passes |
 |---|---|
-| first scenario after `just ego-av` | **PASS** |
-| second and later scenarios on the same stack | **FAIL**, 180 s timeout |
+| first scenario after an `ego-av` restart | 6 of 7 |
+| second and later scenarios on the same stack | 2 of 12 |
 
-Samples: demo run PASS; four-run samples that went PASS/FAIL/FAIL/FAIL twice; a two-run
-sample PASS/FAIL; a freshly restarted stack PASS; and three consecutive runs on an aged
-stack **FAIL/FAIL/FAIL**. The one exception in the record is a PASS/PASS/FAIL, which puts
-the boundary after run 2 rather than run 1 that time.
+Run order clearly matters, but it is **not deterministic in either direction**: one run 2
+passed, and one first-run-after-restart failed. An earlier version of this issue stated the
+split as a rule; it is a tendency.
 
-This is what phase 007's "second run on one stack" refers to, and it is still open.
+Two distinct signatures have been traced, both ending in the same stall:
+
+**With lateral departure** — the ego oscillates out of its lane and wedges on the kerb:
+
+```
+t=23  pose (190.8,-130.1)  vel 0.00
+t=35  pose (165.3,-132.9)  vel 3.62   <- 3 m one way
+t=41  pose (158.3,-126.3)  vel 0.02   <- 6.6 m back the other way, in 6 s
+t=48+ pose (158.4,-126.3)  vel 0.00   <- +0.5 m/s2 commanded, no motion
+```
+
+**Without** — lane tracking is near perfect and it stops anyway, 14 m short of the goal:
+
+```
+t=25  190.8 -130.0  vel 0.00
+t=50  154.4 -129.4  vel 4.81          <- within 0.4 m of the lane centre
+t=58  133.7 -129.1  vel 0.00          <- stops
+t=74  133.7 -129.1  vel 0.00          <- never resumes
+```
+
+The second one rules out lateral control as *the* cause: something stops the vehicle while
+it is tracking the path correctly. Localization is not the cause either — in the traced
+failures Autoware's pose agrees with CARLA ground truth throughout (`(157.8,-128.1)` against
+truth `(159,-128)`).
 
 ## What it is not
 
@@ -64,12 +89,21 @@ would explain both symptoms without anything being wrong in the bridge.
 
 ## How to investigate
 
-- Trace a failing run with `scripts/trace_run.py` and compare `/localization/kinematic_state`
-  against CARLA ground truth from the first frame, not just after convergence.
-- Check whether the concealer re-initialises localization per run
-  (`/api/localization/initialize`), or whether GNSS auto-init is left to reconcile a stale
-  EKF.
-- Try clearing localization between runs and see whether the pass rate follows.
+The vehicle stops while correctly localized and correctly on its path, so look at what
+would command a stop:
 
-Every measurement must treat "first run after restart" as a separate condition; mixing the
-two is what produced the wrong conclusion in 009.
+- `/planning/scenario_planning/trajectory` — does it still reach the goal, or does it end
+  at the stopping point? A truncated trajectory is the likeliest single explanation.
+- `/perception/object_recognition/objects` — is something being perceived in the lane?
+  `lidar_detection_model` is `clustering` here, a rule-based detector that can promote
+  kerbs and walls to obstacles.
+- `/planning/scenario_planning/status/stop_reason`, and the behaviour-velocity modules.
+- The background AV `bg_av_1`, parked at (230, -130). It is behind the ego for this
+  scenario, but confirm it is not being perceived.
+
+**On method**, learned the hard way here: single-run comparisons cannot distinguish causes
+in this system. Two conclusions were drawn and retracted this session — the orphaned-stream
+storm ([015](015-sensors-destroyed-while-still-listening.md)) and the steering report
+([009](009-steering-report-echoes-command.md)) — both from one run per arm, both explained
+afterwards by run order or by nothing at all. Any future claim needs n >= 10 per condition
+with run order held fixed.
