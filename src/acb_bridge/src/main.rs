@@ -712,9 +712,16 @@ fn main() -> Result<()> {
         /// After that, roughly every 30s at a 50ms loop.
         const IDLE_TICK_LOG_INTERVAL: u64 = 600;
         /// How often to ask the server whether the vehicle still exists while no frames
-        /// are arriving. ~2s at a 50ms loop: one cheap RPC, against a gap between
-        /// scenario runs that would otherwise be minutes of streaming into dead sessions.
-        const IDLE_TICKS_BETWEEN_ACTOR_CHECKS: u64 = 40;
+        /// are arriving. ~0.5s at a 50ms loop.
+        ///
+        /// This interval is the width of the error storm in docs/issues/015: from the
+        /// moment the scenario runner destroys our sensors until we notice and drop the
+        /// connection, the server logs "Invalid session" at ~2.6 MB/s. Profiling a run
+        /// showed exactly that shape -- a burst at each teardown, zero in between -- so
+        /// the interval is the whole cost. At 2s it was ~10 MB and ~400k lines per run;
+        /// 0.5s quarters it. One `get_actors` RPC per half second while paused is
+        /// cheaper than the log it prevents.
+        const IDLE_TICKS_BETWEEN_ACTOR_CHECKS: u64 = 10;
 
         // === Main Loop ===
         let exit_reason = loop {
@@ -911,6 +918,12 @@ fn main() -> Result<()> {
 
         // Clear vehicle reference so stale pointers aren't used
         vehicle_shared.lock().unwrap().take();
+
+        // And drop the coordinator's copy. `Autoware` outlives this loop, so its
+        // `Arc<Mutex<CarlaVehicle>>` -- which holds a `Vehicle`, hence the episode, hence
+        // the *client* -- would otherwise keep the old connection alive across a
+        // reconnect, streaming sessions and all. See docs/issues/015.
+        autoware.clear_vehicle();
 
         match exit_reason {
             SessionExit::Shutdown => {

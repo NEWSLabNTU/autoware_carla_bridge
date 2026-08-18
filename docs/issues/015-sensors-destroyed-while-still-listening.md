@@ -98,28 +98,59 @@ handles only halved it, because Python does not actually close the connection.
   despawn in ~2 s instead of at the next run's first frame. Useful on its own, but the
   sessions are already unrecoverable by then.
 
-## Mitigation
+## Mitigation, and what it is worth
 
 `SessionExit::VehicleLost` now **reconnects** to CARLA instead of keeping the connection.
 Dropping the connection is the only lever the listener owns once its actors are gone, and
-it is the same thing that made the bug look intermittent: `wait_for_vehicle` reconnects
-after `WAIT_RECONNECT_INTERVAL` (60 s), so a long idle gap self-healed while back-to-back
-scenario runs never got that far. Doing it immediately bounds the storm to the detection
-window rather than the whole gap.
+it was already the accidental cure: `wait_for_vehicle` reconnects after
+`WAIT_RECONNECT_INTERVAL` (60 s), so a long idle gap self-healed while back-to-back
+scenario runs never got that far. Doing it at once bounds the damage to the detection
+window.
 
 The clock epoch is deliberately **not** reset on this reconnect. It talks to the same
 server, whose uptime never paused; rebasing there would rewind `/clock` under a background
 AV that owns it — the "Detected jump back in time" failure. `carla_may_have_restarted`
-distinguishes the two reasons for reconnecting.
+separates the two reasons for reconnecting. `Autoware::clear_vehicle` drops the
+coordinator's `CarlaVehicle` first, since it outlives the connection loop and would
+otherwise hold a `Vehicle` — and through it the episode and the old client.
+
+Profiling a run shows the shape this produces. The storm is **not** continuous; it is one
+burst per teardown, and nothing at all in between:
+
+```
+t=  5s  delta=10975 KB      <- previous run's ego destroyed under us
+t= 10s  delta= 3864 KB
+t= 15s ... t=195s  delta=0 KB
+t=200s  delta= 6157 KB      <- this run's teardown
+```
+
+Measured per run, with a fresh CARLA each time:
+
+| arm | run 1 | run 2 | run 3 | per-run storm |
+|---|---|---|---|---|
+| no `stop()` anywhere | PASS | FAIL | FAIL | unbounded, 184 GB over 5 h |
+| + carla-rust `68aef48` | PASS | PASS | FAIL | ~540k lines |
+| + `VehicleLost` reconnect | PASS | FAIL | FAIL | ~400k lines |
+| + `clear_vehicle` | PASS | FAIL | — | ~410k lines |
+
+The honest reading: the leak between runs is gone — measured directly at **0 KB/s** during
+a gap, against 2.6 MB/s unmitigated — but each teardown still costs one burst whose size is
+the detection latency times 2.6 MB/s. The run-level pass rate on four runs per arm is too
+noisy to claim anything from; the storm rate is the measurement that means something here.
+
+`IDLE_TICKS_BETWEEN_ACTOR_CHECKS` is therefore the whole remaining cost, and is set to
+~0.5 s. At 2 s a burst was ~10 MB; this quarters it.
 
 ## Still open
 
-The mitigation drops sessions after the fact. The actual fix is ordering: **the listener
-must `stop()` before the owner destroys**, which needs the two processes to agree. Options,
-none implemented:
+The mitigation drops sessions after the fact and pays one burst per teardown. The actual
+fix is ordering: **the listener must `stop()` before the owner destroys**, which needs the
+two processes to agree. Options, none implemented:
 
 - csb signals acb to release its sensors before despawning the ego, and waits for an ack.
 - acb, not csb, destroys the sensors it attached — but then csb must not use
   `destroy_with_children` on the ego, which is what protects against the orphaned-sensor
   server crash documented in `docs/CHECKPOINT.md`. Those two rules are in direct tension
   and the resolution needs a protocol, not a patch.
+
+Either would take the burst to zero, which is the only way this stops costing anything.

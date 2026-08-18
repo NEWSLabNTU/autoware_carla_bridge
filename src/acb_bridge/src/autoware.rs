@@ -482,6 +482,20 @@ impl Autoware {
         self.vehicle = Some(vehicle);
     }
 
+    /// Drop the vehicle reference.
+    ///
+    /// Must be called before reconnecting to CARLA. `CarlaVehicle` holds a `Vehicle`
+    /// actor handle, which transitively holds the episode and therefore the *client* it
+    /// came from -- and this struct outlives the connection loop, so a stale reference
+    /// here keeps the old client alive with all of its streaming sessions. Those sessions
+    /// then keep retrying streams whose sensors are gone, which is the error storm in
+    /// docs/issues/015.
+    pub fn clear_vehicle(&mut self) {
+        if self.vehicle.take().is_some() {
+            tracing::debug!("Vehicle reference cleared for Autoware coordinator");
+        }
+    }
+
     /// Main tick function - call once per frame
     ///
     /// Handles:
