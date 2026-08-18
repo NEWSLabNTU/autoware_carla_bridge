@@ -6,6 +6,7 @@ mod clock;
 mod coordinate_conversion;
 mod error;
 mod sensor_config;
+mod sensor_release;
 mod tf_bridge;
 mod types;
 mod urdf_parser;
@@ -136,6 +137,14 @@ struct BridgeParams {
     /// "Detected jump back in time. Clearing TF buffer". Stays `true` in background-AV
     /// domains, which have no SSv2 and would otherwise have no simulation clock at all.
     pub publish_clock: bool,
+    /// Scenario runner's release-notice PUB socket, or empty to disable the channel.
+    ///
+    /// The runner despawns the vehicle we attached sensors to, destroying them while we
+    /// are still listening. It tells us first over this channel so we can stop them; see
+    /// `sensor_release` and docs/issues/015.
+    pub release_notify_endpoint: String,
+    /// Where to send the acknowledgement (the runner's PULL socket).
+    pub release_ack_endpoint: String,
 }
 
 impl BridgeParams {
@@ -180,6 +189,18 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        let release_notify_endpoint = node
+            .declare_parameter("release_notify_endpoint")
+            .default("tcp://127.0.0.1:5556".into())
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
+        let release_ack_endpoint = node
+            .declare_parameter("release_ack_endpoint")
+            .default("tcp://127.0.0.1:5557".into())
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         // Get parameter values
         let carla_address_val: Arc<str> = carla_address.get();
         let carla_port_val: i64 = carla_port.get();
@@ -187,6 +208,8 @@ impl BridgeParams {
         let vehicle_config_val: Arc<str> = vehicle_config.get();
         let publish_direct_localization_val: bool = publish_direct_localization.get();
         let publish_clock_val: bool = publish_clock.get();
+        let release_notify_val: Arc<str> = release_notify_endpoint.get();
+        let release_ack_val: Arc<str> = release_ack_endpoint.get();
 
         // Validate required parameters
         if vehicle_config_val.is_empty() {
@@ -202,6 +225,8 @@ impl BridgeParams {
             vehicle_config: vehicle_config_val.to_string(),
             publish_direct_localization: publish_direct_localization_val,
             publish_clock: publish_clock_val,
+            release_notify_endpoint: release_notify_val.to_string(),
+            release_ack_endpoint: release_ack_val.to_string(),
         })
     }
 }
@@ -681,6 +706,22 @@ fn main() -> Result<()> {
         let _sensor_bridges =
             create_sensor_bridges(node.clone(), &carla_vehicle.lock().unwrap(), &autoware)?;
         tracing::info!("Created {} sensor bridges", _sensor_bridges.len());
+
+        // === Listen for release requests from the scenario runner ===
+        // It owns the vehicle's lifetime and destroys these sensors with it. Being told
+        // first is the difference between a clean teardown and this client retrying four
+        // dead streams at 2.6 MB/s of server log; see docs/issues/015.
+        let _release_listener = if params.release_notify_endpoint.is_empty() {
+            tracing::info!("Sensor release channel disabled (no endpoint configured)");
+            None
+        } else {
+            sensor_release::SensorReleaseListener::start(
+                &params.release_notify_endpoint,
+                &params.release_ack_endpoint,
+                carla_vehicle.clone(),
+                vehicle_id,
+            )
+        };
 
         // === Create vehicle control bridge ===
         tracing::info!("Creating vehicle control bridge...");

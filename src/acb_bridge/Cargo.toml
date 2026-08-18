@@ -19,6 +19,10 @@ path = "src/main.rs"
 install_to_share = ["launch", "config"]
 
 [dependencies]
+# Side-channel to carla_scenario_bridge, so it can tell us to release our sensors before
+# it despawns the vehicle they are attached to. ZMQ rather than ROS because acb instances
+# live in different ROS domains (ego on 1, background AVs on 2+) while csb is domain-less.
+zmq = "0.10"
 # ROS 2 dependencies
 rclrs = "0.7"
 

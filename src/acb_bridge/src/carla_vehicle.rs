@@ -237,6 +237,27 @@ impl CarlaVehicle {
         &self.sensor_types
     }
 
+    /// Stop listening to every sensor, without destroying anything.
+    ///
+    /// Called when the scenario runner is about to despawn the vehicle these are attached
+    /// to. It destroys them with the vehicle, and a sensor destroyed while still listening
+    /// leaves this client retrying a dead stream forever -- see `sensor_release` and
+    /// `docs/issues/015`. Stopping first costs nothing and leaves nothing behind.
+    ///
+    /// Best effort: a sensor that is already gone has nothing useful to report.
+    pub fn stop_sensors(&mut self) {
+        let mut stopped = 0usize;
+        for (name, sensor) in &self.sensors {
+            match sensor.stop() {
+                Ok(()) => stopped += 1,
+                Err(e) => tracing::debug!("Sensor '{name}' stop failed (already gone?): {e}"),
+            }
+        }
+        if stopped > 0 {
+            tracing::info!("Stopped {stopped} sensor stream(s) before the vehicle is despawned");
+        }
+    }
+
     /// Cleanup: destroy spawned sensors only.
     ///
     /// The vehicle is owned by the scenario script, not the bridge, so it is not
