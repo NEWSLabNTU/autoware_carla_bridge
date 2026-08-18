@@ -1,13 +1,19 @@
 # 016 — The ego stack only passes its first scenario after a restart
 
 **Severity**: High
-**Component**: not yet identified; Autoware-side state carried across runs is the lead
+**Component**: lateral control path (`vehicle_control.rs` steer scale, MPC feedback); run-order
+dependence still unexplained
 **Status**: Open
 
 ## The pattern, as far as it goes
 
 The ego **stops mid-route and never resumes**, and the scenario hits its 180 s timeout.
 That much is consistent. What predicts it is not.
+
+The stall itself is now understood -- the ego departs its lane through a diverging steering
+oscillation and wedges off-road, where the commanded acceleration cannot free it. See
+"What the trajectory and perception instrumentation showed" below. What remains unexplained
+is why this depends on how many scenarios the stack has already run.
 
 Verdicts collected on 2026-08-18 across several builds:
 
@@ -87,19 +93,97 @@ re-spawned ego initialises against the old estimate, NDT converges slowly or to 
 place, and planning and control then act on a pose that does not match the vehicle. That
 would explain both symptoms without anything being wrong in the bridge.
 
-## How to investigate
+## What the trajectory and perception instrumentation showed
 
-The vehicle stops while correctly localized and correctly on its path, so look at what
-would command a stop:
+`scripts/trace_run.py` now samples three more things once a second: the planned trajectory
+(point count, distance to its end, arc length to its first zero-velocity point), the
+predicted objects (count and distance to the nearest), and `/api/planning/velocity_factors`,
+which is the planner stating its own reason for slowing.
 
-- `/planning/scenario_planning/trajectory` — does it still reach the goal, or does it end
-  at the stopping point? A truncated trajectory is the likeliest single explanation.
-- `/perception/object_recognition/objects` — is something being perceived in the lane?
-  `lidar_detection_model` is `clustering` here, a rule-based detector that can promote
-  kerbs and walls to obstacles.
-- `/planning/scenario_planning/status/stop_reason`, and the behaviour-velocity modules.
-- The background AV `bg_av_1`, parked at (230, -130). It is behind the ego for this
-  scenario, but confirm it is not being perceived.
+Two runs on one freshly restarted stack, 2026-08-19. **The stop is not commanded by
+anything.** At the stalled pose, held for 130 s:
+
+```
+ t   pose            vel   steer   cmd_a  tpts  tend  tstop  obj  onear  velocity_factors
+ 50  158.8 -116.3  -0.02   0.159   +0.43   162  32.8   34.1    0    nan                 -
+```
+
+The trajectory is 162 points reaching **32.8 m ahead**, and its first zero-velocity point is
+at 34.3 m — its far end, not the vehicle. Control is commanding **+0.43 m/s²**. No velocity
+factor is present. So the planner still intends to drive, the controller is still asking for
+acceleration, and the vehicle does not move.
+
+That exonerates the two suspects this section previously named. The trajectory is not
+truncated and no perceived object is stopping the vehicle. In fact the *entire* velocity
+factor record for a run is a single sample, `route-obstacle:APPROACHING@-5`, logged at the
+instant of the lane departure and referring to a point 5 m **behind** the ego.
+
+### The real failure is a diverging lateral oscillation
+
+At one-second resolution the departure is unambiguous. The route is straight — spawn
+`(190.8, -130.1)`, goal `(120.0, -129.8)` — so every metre of lateral movement below is
+error:
+
+```
+ t   pose            vel   steer
+ 26  180.5 -128.8   4.11   0.037
+ 27  176.2 -128.4   4.32   0.267
+ 29  170.7 -130.5   1.90   0.017
+ 31  165.9 -132.2   3.55  -0.402
+ 32  161.9 -131.0   4.39  -0.578
+ 33  159.0 -126.7   5.01  -0.357
+ 35  159.0 -119.8   0.00
+```
+
+Steering amplitude grows 0.04 -> 0.27 -> -0.40 -> -0.58 rad while the lateral error grows
+with it: -128.4, -132.2, -126.7, -119.8. That is a positive-feedback loop, not a vehicle
+tracking a path. It ends 13.5 m off the lane at `(158.5, -116.3)`, and CARLA ground truth
+agrees the vehicle is physically there.
+
+**The stall is a consequence, not a cause.** Once off the road the ego is wedged, and
+`+0.43 m/s²` becomes `0.43 / MAX_ACCEL = 0.14` throttle, which will not climb a kerb. The
+vehicle then sits there commanding acceleration until the scenario times out.
+
+### A sign error that is not one
+
+Worth recording to save the next reader the false start: in these traces a *positive*
+commanded tire angle moves the ego toward **-y**, which looks like an inverted steering
+sign. It is not. The ego drives west (`h = 3.14159`, decreasing x), so its left hand points
+toward -y. The conversion in `vehicle_control.rs` is correct.
+
+### The second signature may not be a failure at all
+
+The "stops 14 m short with near-perfect tracking" trace recorded above needs re-reading. In
+the equivalent run here, `tend` shrinks monotonically — 29.9, 25.2, 21.6, 18.2, 14.4, 9.7,
+6.5, 4.7 — which is exactly the distance to the goal at each step, so the trajectory was
+never truncated. The ego reached `(124.7, -129.7)`, **4.7 m from the goal and inside the
+scenario's 5.0 m `ReachPositionCondition` tolerance**, and the trace then froze: every
+field, including CARLA ground truth and a non-zero 0.62 m/s velocity, identical for 25 s.
+A simulation that stops ticking mid-motion is a scenario that has ended, not a vehicle that
+has stopped. That run most likely passed.
+
+This is not confirmed — the harness deletes `result.junit.xml` before each run and its
+verdict echo was swallowed by pipe buffering, so run 1's verdict was lost. Fix the harness
+to save each run's junit before drawing on this.
+
+## Where this leaves the issue
+
+The failure mode to explain is now specific: **the lateral controller goes unstable**, and
+everything after that is consequence. Candidates, in order:
+
+- The steer command scale ([006](006-hardcoded-max-steer-angle.md)). The command maps a tire
+  angle through the wheel **limit** (70 deg) while the vehicle turns at the Ackermann
+  **mean** (58.7 deg). That is an 18% loop-gain error. Low gain alone does not destabilise a
+  loop, but it is a known-wrong constant sitting directly in the path.
+- Actuator lag hidden from the controller ([009](009-steering-report-echoes-command.md)).
+  With `report_measured_steering=false` the MPC is handed back its own command with zero lag
+  while the CARLA wheel has real dynamics. A plant slower than the controller's model is a
+  classic instability source, and this is exactly what 009 argued before its A/B was found
+  to be confounded.
+- Whatever makes it run-order dependent, which neither of the above explains on its own.
+
+Note that stack freshness still predicts the outcome, and lateral instability does not
+obviously depend on it. Fix 006 first, since it is wrong regardless, then A/B 009 properly.
 
 **On method**, learned the hard way here: single-run comparisons cannot distinguish causes
 in this system. Two conclusions were drawn and retracted this session — the orphaned-stream
