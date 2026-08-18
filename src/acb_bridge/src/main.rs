@@ -293,6 +293,22 @@ fn classify_tick_error(error: &carla::CarlaError) -> TickOutcome {
     }
 }
 
+/// Ask the *server* whether an actor still exists, over RPC.
+///
+/// Unlike a frame snapshot this works while the simulation is paused, and unlike
+/// `World::actor` / `Actor::is_alive` it cannot answer from the client's own registry:
+/// `World::actors()` is a fresh `get_actors` call. Returns `true` on a transport error,
+/// so a hiccup is never mistaken for a despawn -- the tick path owns connection loss.
+fn actor_still_exists(world: &carla::client::World, id: carla::rpc::ActorId) -> bool {
+    match world.actors() {
+        Ok(actors) => actors.iter().any(|actor| actor.id() == id),
+        Err(e) => {
+            tracing::debug!("Actor existence check failed: {e}");
+            true
+        }
+    }
+}
+
 /// Wait for one CARLA frame.
 ///
 /// `Ok(None)` is the wait expiring with no frame -- normal while the simulation is
@@ -688,6 +704,10 @@ fn main() -> Result<()> {
         const IDLE_TICKS_BEFORE_FIRST_LOG: u64 = 40;
         /// After that, roughly every 30s at a 50ms loop.
         const IDLE_TICK_LOG_INTERVAL: u64 = 600;
+        /// How often to ask the server whether the vehicle still exists while no frames
+        /// are arriving. ~2s at a 50ms loop: one cheap RPC, against a gap between
+        /// scenario runs that would otherwise be minutes of streaming into dead sessions.
+        const IDLE_TICKS_BETWEEN_ACTOR_CHECKS: u64 = 40;
 
         // === Main Loop ===
         let exit_reason = loop {
@@ -754,6 +774,32 @@ fn main() -> Result<()> {
                 }
                 Ok(None) => {
                     idle(&mut idle_ticks);
+
+                    // A paused simulation sends no frames, but the server still answers
+                    // RPCs -- so "no frame" is not the same as "no information". Ask it
+                    // directly, every few seconds, whether the vehicle is still there.
+                    //
+                    // Without this the despawn is not noticed until the *next* run's
+                    // first frame, which between scenario runs can be minutes away: the
+                    // bridge sits holding sensors for an actor that is long gone, and its
+                    // status topics stay silent for reasons no log line explains.
+                    //
+                    // This is a promptness fix, not a fix for the orphaned-stream error
+                    // storm in docs/issues/015. That was the hypothesis; it was measured
+                    // and it was wrong -- with the ego despawned and both clients idle,
+                    // the server emits nothing at all (0 B/s). The storm grows *during*
+                    // runs, not in the gap between them.
+                    if idle_ticks.is_multiple_of(IDLE_TICKS_BETWEEN_ACTOR_CHECKS)
+                        && !actor_still_exists(&world, vehicle_id)
+                    {
+                        tracing::info!(
+                            "Vehicle '{}' (actor {vehicle_id}) is gone while the simulation \
+                             is paused; releasing sensors now rather than waiting for a \
+                             frame that may be minutes away",
+                            params.vehicle_name
+                        );
+                        break SessionExit::VehicleLost;
+                    }
                     continue;
                 }
                 Err(e) => match classify_tick_error(&e) {

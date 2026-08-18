@@ -12,7 +12,7 @@ carla = "0.14.0"
 [patch.crates-io]
 # Must stay on the same rev as carla-scenario-bridge: both bridges talk to one CARLA server,
 # and building them against different FFI is what produced std::bad_array_new_length before.
-carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "9596cde" }
+carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "68aef48" }
 
 # Custom profile: release with debug info and assertions
 # Useful for debugging performance issues while maintaining release optimizations

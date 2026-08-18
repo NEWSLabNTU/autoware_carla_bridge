@@ -244,6 +244,19 @@ impl CarlaVehicle {
     pub fn cleanup(&mut self) -> Result<()> {
         for (name, sensor) in self.sensors.drain() {
             tracing::info!("Destroying sensor '{}' (ID: {})", name, sensor.id());
+
+            // Close the stream before destroying the actor. Destroying a sensor that is
+            // still listening leaves the server delivering into a session whose subscriber
+            // is going away, which is the `Invalid session: no stream available with id N`
+            // that precedes CARLA 0.9.16's teardown segfault. Every CARLA example stops a
+            // sensor before destroying it, for this reason. See docs/issues/015-*.
+            //
+            // Best effort: a sensor that was never listening, or whose actor is already
+            // gone, reports an error here and there is nothing useful to do about it.
+            if let Err(e) = sensor.stop() {
+                tracing::debug!("Sensor '{}' stop failed (already gone?): {e}", name);
+            }
+
             match sensor.destroy() {
                 Ok(true) => {}
                 Ok(false) => tracing::warn!(

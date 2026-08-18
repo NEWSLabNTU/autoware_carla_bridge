@@ -25,6 +25,7 @@ conventions.
 | [012](012-unknown-blueprint-becomes-a-camera.md) | An unrecognised sensor blueprint is silently classified as a camera | Low | Fixed |
 | [013](013-individual-params-is-unreachable.md) | The sensor calibration package is unreachable from Autoware's launch | High | Fixed |
 | [014](014-a-paused-simulation-looks-like-a-running-one.md) | A paused simulation is indistinguishable from a running one | High | Fixed |
+| [015](015-sensors-destroyed-while-still-listening.md) | Sensors are destroyed while still listening | High | Partly fixed; root cause open |
 
 ## Severity
 
