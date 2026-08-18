@@ -107,3 +107,67 @@ storm ([015](015-sensors-destroyed-while-still-listening.md)) and the steering r
 ([009](009-steering-report-echoes-command.md)) — both from one run per arm, both explained
 afterwards by run order or by nothing at all. Any future claim needs n >= 10 per condition
 with run order held fixed.
+
+## Mechanism at the stall, measured (2026-08-19)
+
+Traced on a `town01_traffic_light.xosc` run (the y=-55.9 street, not y=-129.8) with
+csb's `scripts/stall_probe.py`, which samples pose, trajectory, velocity factors and
+perceived objects on one timeline. This is a single run, so it establishes **mechanism
+only** -- no causal claim, per the method note above.
+
+Three of this issue's leads are ruled out at the stall.
+
+**The trajectory is not truncated.** It stays healthy and keeps commanding motion for as
+long as the ego sits there:
+
+```
+t+26s ego(291.3,-54.4) 0.0 m/s traj[n=161 start=(295,-55) end=(261,-55) vmax=4.2 start_gap=4.1m]
+t+57s ego(291.3,-54.2) 0.0 m/s traj[n=159 start=(295,-55) end=(261,-55) vmax=4.2 start_gap=3.9m]
+                               factors[traffic-signal@186.2m/st1]  objs<30m=4
+```
+
+159 points reaching 30 m ahead at 4.2 m/s. **No velocity factor demands a stop** -- the
+only one present is the traffic signal 186 m away. Four perceived objects within 30 m,
+none of them stopping anything.
+
+**Control is delivering, and the vehicle is wedged.** CARLA's own view of the actor:
+
+```
+hero carla=(291.5,54.1) yaw=-140.9
+   speed=0.00  throttle=0.27  brake=0.00  steer=-0.02  hand_brake=False  gear=1
+```
+
+27% throttle, no brake, no hand brake, and no motion. So nothing is commanding a stop and
+nothing is applying one; the vehicle is physically stuck.
+
+**Localization is right, including heading.** At the same moment:
+
+```
+CARLA    pos=(291.4,-54.2)  yaw(ROS)=140.7
+Autoware pos=(291.4,-54.1)  yaw=139.0
+```
+
+0.1 m and 1.7 deg of agreement. The ego therefore *knows* it is pointing 139 deg while its
+lane runs 180 deg -- 41 deg out, nose into the kerb -- and lateral control is commanding
+`steer=-0.02`, essentially straight. (At zero speed that may be a consequence rather than
+a cause; most lateral controllers have no authority on a stopped vehicle.)
+
+## What that leaves
+
+The question is not what stops the ego. It is what turns it out of the lane, and the
+approach shows a lateral oscillation that grows until the kerb ends it:
+
+```
+t+16s  -55.9    t+18s  -54.7    t+20s  -56.3    t+22s  -57.6
+t+24s  -55.4    t+26s  -54.4    then stuck at -54.2
+```
+
+±1.5 m about a lane centre of -55.85, at 3-4.5 m/s, diverging over about 10 s. That is the
+"lateral departure" signature of this issue, caught with pose, planning and control all
+verified good at the same instant.
+
+An untested hypothesis that fits it: steering command scaling. `CLAUDE.md` still lists
+"vehicle calibration per CARLA model (steering multiplier, wheelbase)" as open, and an
+over-large lateral gain produces exactly this -- growing oscillation, divergence, kerb.
+Worth an n>=10 A/B against the steering multiplier with run order held fixed, which is the
+only kind of comparison this issue has found trustworthy.
