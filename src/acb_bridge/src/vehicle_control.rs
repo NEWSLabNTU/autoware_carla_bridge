@@ -26,6 +26,75 @@ const FALLBACK_MAX_STEER_ANGLE: f32 = 1.22;
 /// Maximum expected acceleration magnitude for throttle/brake mapping (m/s²)
 const MAX_ACCEL: f32 = 3.0;
 
+/// How CARLA turns a normalized steer command into a physical tire angle.
+///
+/// Read from the spawned vehicle's own wheels, so it follows the blueprint rather than
+/// assuming the Tesla. See `docs/issues/006-*`.
+#[derive(Debug, Clone, Copy)]
+struct SteerGeometry {
+    /// The steered wheels' physical limit, radians.
+    max_steer_angle: f32,
+    /// track / wheelbase -- the Ackermann differential term. Zero reduces the model to a
+    /// plain bicycle, which is the behaviour this replaced.
+    track_over_wheelbase: f32,
+}
+
+impl Default for SteerGeometry {
+    fn default() -> Self {
+        Self {
+            max_steer_angle: FALLBACK_MAX_STEER_ANGLE,
+            track_over_wheelbase: 0.0,
+        }
+    }
+}
+
+/// The bicycle-model tire angle CARLA actually delivers for a normalized steer command.
+///
+/// CARLA drives the *inner* wheel to `cmd * max_steer_angle` and places the outer wheel by
+/// Ackermann geometry, `cot(outer) = cot(inner) + track / wheelbase`. The angle the vehicle
+/// turns at is the mean of the two, which is well below the wheel limit: for the Tesla at
+/// full lock the wheels sit at 70 and 47.4 degrees, a 58.7 degree mean.
+///
+/// Verified against CARLA 0.9.16 by `scripts/probe_carla_conventions.py`, which reads the
+/// physical wheel angles back over the whole command range. This model reproduces them to
+/// better than 0.05 degrees.
+fn effective_tire_angle(steer_cmd: f32, geometry: &SteerGeometry) -> f32 {
+    let inner = steer_cmd.abs().clamp(0.0, 1.0) * geometry.max_steer_angle;
+    if inner <= f32::EPSILON {
+        return 0.0;
+    }
+    let outer = (inner.tan().recip() + geometry.track_over_wheelbase)
+        .recip()
+        .atan();
+    (0.5 * (inner + outer)).copysign(steer_cmd)
+}
+
+/// The normalized steer command that delivers `tire_angle`, in CARLA's sign convention.
+///
+/// Dividing by the wheel limit -- what this replaced -- asks for the angle the *inner*
+/// wheel would reach and therefore under-delivers by 7-13% across Autoware's 0.70 rad
+/// planning range. `effective_tire_angle` is monotonic in the command, so invert it by
+/// bisection; 30 iterations resolve it far below the resolution of the physics.
+fn steer_command_for(tire_angle: f32, geometry: &SteerGeometry) -> f32 {
+    let target = tire_angle.abs();
+    if target <= f32::EPSILON {
+        return 0.0;
+    }
+    if target >= effective_tire_angle(1.0, geometry) {
+        return 1.0_f32.copysign(tire_angle);
+    }
+    let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
+    for _ in 0..30 {
+        let mid = 0.5 * (lo + hi);
+        if effective_tire_angle(mid, geometry) < target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (0.5 * (lo + hi)).copysign(tire_angle)
+}
+
 /// What the bridge last applied to CARLA, and therefore what it reports to Autoware.
 ///
 /// Autoware compares commanded against reported state (`vehicle_cmd_gate` will not
@@ -151,8 +220,8 @@ pub struct VehicleControlBridge {
     /// What was last applied, shared with the command callbacks.
     state: Arc<Mutex<AppliedState>>,
 
-    /// Physical steering limit of the spawned vehicle, radians.
-    max_steer_angle: f32,
+    /// How the spawned vehicle converts a steer command into a tire angle.
+    steer_geometry: SteerGeometry,
 
     /// Report the *measured* front-wheel angle rather than echoing the command.
     ///
@@ -177,7 +246,7 @@ impl VehicleControlBridge {
         vehicle: Arc<Mutex<Option<Vehicle>>>,
         report_measured_steering: bool,
     ) -> Result<Self> {
-        let max_steer_angle = Self::read_max_steer_angle(&vehicle);
+        let steer_geometry = Self::read_steer_geometry(&vehicle);
 
         // Create publishers
         let velocity_pub =
@@ -211,7 +280,7 @@ impl VehicleControlBridge {
                 if let Err(e) = Self::apply_control_command(
                     &vehicle_for_control,
                     &state_for_control,
-                    max_steer_angle,
+                    steer_geometry,
                     &msg,
                 ) {
                     tracing::error!("Failed to apply control command: {}", e);
@@ -270,7 +339,12 @@ impl VehicleControlBridge {
         )?);
 
         tracing::info!("Vehicle control bridge created");
-        tracing::info!("  Max steering tire angle: {:.3} rad", max_steer_angle);
+        tracing::info!(
+            "  Steering: limit {:.3} rad, track/wheelbase {:.4}, {:.3} rad at full lock",
+            steer_geometry.max_steer_angle,
+            steer_geometry.track_over_wheelbase,
+            effective_tire_angle(1.0, &steer_geometry),
+        );
         tracing::info!(
             "  Steering status: {}",
             if report_measured_steering {
@@ -305,61 +379,108 @@ impl VehicleControlBridge {
             _hazard_lights_sub: hazard_lights_sub,
             vehicle,
             state,
-            max_steer_angle,
+            steer_geometry,
             report_measured_steering,
         })
     }
 
-    /// Read the spawned vehicle's physical steering limit from CARLA.
+    /// Read the spawned vehicle's steering geometry from CARLA.
     ///
-    /// `vehicle_config.yaml` offers several blueprints and each has its own limit;
-    /// hardcoding the Tesla's 70 degrees scales every steering command by a constant
-    /// factor on anything else. See `docs/issues/006-*`.
-    fn read_max_steer_angle(vehicle: &Arc<Mutex<Option<Vehicle>>>) -> f32 {
+    /// Two things come out of `physics_control`: the steered wheels' limit, and the
+    /// track/wheelbase ratio that sets how far the outer wheel trails the inner one.
+    /// `vehicle_config.yaml` offers several blueprints and each has its own, so neither
+    /// can be a constant. See `docs/issues/006-*`.
+    ///
+    /// Degrades to a plain bicycle model -- today's behaviour before this -- rather than to
+    /// no steering, so a CARLA hiccup costs accuracy and not control.
+    fn read_steer_geometry(vehicle: &Arc<Mutex<Option<Vehicle>>>) -> SteerGeometry {
         let guard = vehicle.lock().unwrap();
         let Some(vehicle) = guard.as_ref() else {
             tracing::warn!(
-                "No vehicle when reading physics control; using the fall back max steer \
-                 angle of {FALLBACK_MAX_STEER_ANGLE:.3} rad"
+                "No vehicle when reading physics control; using the fall back steering \
+                 limit of {FALLBACK_MAX_STEER_ANGLE:.3} rad with no Ackermann term"
             );
-            return FALLBACK_MAX_STEER_ANGLE;
+            return SteerGeometry::default();
         };
 
-        match vehicle.physics_control() {
-            Ok(physics) => {
-                // CARLA reports max_steer_angle per wheel, in degrees. Only the steered
-                // wheels carry a non-zero value, so the maximum over all of them is the
-                // vehicle's steering limit without having to know the axle layout.
-                let max_degrees = physics
-                    .wheels
-                    .iter()
-                    .map(|w| w.max_steer_angle)
-                    .fold(0.0_f32, f32::max);
-
-                if max_degrees > 0.0 {
-                    let radians = max_degrees.to_radians();
-                    tracing::info!(
-                        "Max steering tire angle from CARLA physics: {:.1} deg ({:.3} rad)",
-                        max_degrees,
-                        radians
-                    );
-                    radians
-                } else {
-                    tracing::warn!(
-                        "CARLA reported no steerable wheel; using the fall back max steer \
-                         angle of {FALLBACK_MAX_STEER_ANGLE:.3} rad"
-                    );
-                    FALLBACK_MAX_STEER_ANGLE
-                }
-            }
+        let physics = match vehicle.physics_control() {
+            Ok(physics) => physics,
             Err(e) => {
                 tracing::warn!(
-                    "Failed to read CARLA physics control ({e}); using the fall back max \
-                     steer angle of {FALLBACK_MAX_STEER_ANGLE:.3} rad"
+                    "Failed to read CARLA physics control ({e}); using the fall back \
+                     steering limit of {FALLBACK_MAX_STEER_ANGLE:.3} rad with no \
+                     Ackermann term"
                 );
-                FALLBACK_MAX_STEER_ANGLE
+                return SteerGeometry::default();
             }
+        };
+
+        // CARLA reports max_steer_angle per wheel, in degrees. Only the steered wheels
+        // carry a non-zero value, which is also how the axles are told apart here.
+        let (steered, fixed): (Vec<_>, Vec<_>) = physics
+            .wheels
+            .iter()
+            .partition(|w| w.max_steer_angle > 0.0);
+
+        let max_degrees = steered
+            .iter()
+            .map(|w| w.max_steer_angle)
+            .fold(0.0_f32, f32::max);
+        if max_degrees <= 0.0 {
+            tracing::warn!(
+                "CARLA reported no steerable wheel; using the fall back steering limit of \
+                 {FALLBACK_MAX_STEER_ANGLE:.3} rad with no Ackermann term"
+            );
+            return SteerGeometry::default();
         }
+
+        // Track and wheelbase from the wheel positions. Only their ratio is used, so
+        // CARLA's centimetres need no conversion.
+        let track_over_wheelbase = match (steered.as_slice(), fixed.as_slice()) {
+            ([a, b], [c, d]) => {
+                let track: f32 = (a.position.x - b.position.x).hypot(a.position.y - b.position.y);
+                let front = (
+                    0.5 * (a.position.x + b.position.x),
+                    0.5 * (a.position.y + b.position.y),
+                );
+                let rear = (
+                    0.5 * (c.position.x + d.position.x),
+                    0.5 * (c.position.y + d.position.y),
+                );
+                let wheelbase: f32 = (front.0 - rear.0).hypot(front.1 - rear.1);
+                if wheelbase > 0.0 && track > 0.0 {
+                    track / wheelbase
+                } else {
+                    tracing::warn!(
+                        "Degenerate wheel geometry (track {track:.1}, wheelbase \
+                         {wheelbase:.1}); steering without an Ackermann term"
+                    );
+                    0.0
+                }
+            }
+            _ => {
+                tracing::warn!(
+                    "Expected two steered and two fixed wheels, found {} and {}; steering \
+                     without an Ackermann term",
+                    steered.len(),
+                    fixed.len()
+                );
+                0.0
+            }
+        };
+
+        let geometry = SteerGeometry {
+            max_steer_angle: max_degrees.to_radians(),
+            track_over_wheelbase,
+        };
+        tracing::info!(
+            "Steering geometry from CARLA physics: limit {:.1} deg, track/wheelbase \
+             {:.4}, so {:.1} deg at full lock",
+            max_degrees,
+            track_over_wheelbase,
+            effective_tire_angle(1.0, &geometry).to_degrees(),
+        );
+        geometry
     }
 
     /// Push the light state implied by `state` to CARLA.
@@ -406,7 +527,7 @@ impl VehicleControlBridge {
     fn apply_control_command(
         vehicle: &Arc<Mutex<Option<Vehicle>>>,
         state: &Arc<Mutex<AppliedState>>,
-        max_steer_angle: f32,
+        geometry: SteerGeometry,
         cmd: &autoware_control_msgs::msg::Control,
     ) -> Result<()> {
         let accel = cmd.longitudinal.acceleration;
@@ -439,9 +560,11 @@ impl VehicleControlBridge {
                 gear: 0,
             };
 
-            // Steering: convert tire angle (rad) to normalized (-1 to 1)
-            // Negate: Autoware positive = left turn (ROS), CARLA positive = right turn (left-handed)
-            control.steer = (-cmd.lateral.steering_tire_angle / max_steer_angle).clamp(-1.0, 1.0);
+            // Steering: tire angle (rad) to normalized (-1 to 1), through CARLA's own
+            // Ackermann geometry rather than a straight division by the wheel limit, which
+            // asks for the inner wheel's angle and so under-delivers. See docs/issues/006-*.
+            // Negate: Autoware positive = left turn (ROS), CARLA positive = right turn.
+            control.steer = -steer_command_for(cmd.lateral.steering_tire_angle, &geometry);
 
             // Longitudinal: acceleration (m/s²) → throttle or brake (0 to 1).
             if accel > 0.01 {
@@ -519,7 +642,7 @@ impl VehicleControlBridge {
                 // Rate-limited by being a debug line: a CARLA build without the API would
                 // otherwise log at 20 Hz for the whole run.
                 tracing::debug!("Wheel steer angle unavailable; reporting the commanded angle");
-                -commanded_steer * self.max_steer_angle
+                -effective_tire_angle(commanded_steer, &self.steer_geometry)
             }
         }
     }
@@ -579,7 +702,7 @@ impl VehicleControlBridge {
                     self.measured_steering_angle(vehicle, control.steer)
                 } else {
                     // Negate: CARLA positive = right turn, Autoware positive = left turn.
-                    -control.steer * self.max_steer_angle
+                    -effective_tire_angle(control.steer, &self.steer_geometry)
                 },
             };
 
@@ -710,5 +833,89 @@ mod tests {
             ..Default::default()
         };
         assert!(state.light_state().contains(VehicleLightState::BRAKE));
+    }
+
+    /// The Tesla Model 3 as CARLA 0.9.16 reports it.
+    fn tesla() -> SteerGeometry {
+        SteerGeometry {
+            max_steer_angle: 70.0_f32.to_radians(),
+            track_over_wheelbase: 0.5548,
+        }
+    }
+
+    /// Wheel angles measured off a live server by `scripts/probe_steer_curve.py`, at rest.
+    ///
+    /// The model has to reproduce the *mean* of the two front wheels, which is the angle
+    /// the vehicle actually turns at -- not the wheel limit the command used to be scaled
+    /// against.
+    #[test]
+    fn effective_angle_matches_measured_wheels() {
+        // (steer command, measured mean of FL and FR, degrees)
+        let measured = [
+            (0.10, 6.78),
+            (0.20, 13.18),
+            (0.25, 16.26),
+            (0.30, 19.28),
+            (0.40, 25.16),
+            (0.50, 30.88),
+            (0.60, 36.49),
+            (0.70, 42.04),
+            (0.80, 47.56),
+            (0.90, 53.11),
+            (1.00, 58.71),
+        ];
+        for (cmd, expected_deg) in measured {
+            let got = effective_tire_angle(cmd, &tesla()).to_degrees();
+            assert!(
+                (got - expected_deg).abs() < 0.15,
+                "cmd {cmd}: model {got:.2} deg, measured {expected_deg:.2} deg"
+            );
+        }
+    }
+
+    #[test]
+    fn steer_command_inverts_the_model() {
+        for cmd in [0.05_f32, 0.2, 0.5, 0.8, 1.0] {
+            let angle = effective_tire_angle(cmd, &tesla());
+            let back = steer_command_for(angle, &tesla());
+            assert!((back - cmd).abs() < 1e-3, "cmd {cmd} round tripped to {back}");
+        }
+    }
+
+    /// The bug this fixes: dividing by the wheel limit under-delivers, and by how much.
+    #[test]
+    fn dividing_by_the_wheel_limit_under_delivers() {
+        let g = tesla();
+        // The top of Autoware's 0.70 rad planning range.
+        let requested = 0.70_f32;
+        let old_cmd = requested / g.max_steer_angle;
+        let old_delivered = effective_tire_angle(old_cmd, &g);
+        assert!(
+            old_delivered < requested * 0.92,
+            "expected the old mapping to under-deliver, got {old_delivered:.4} for \
+             {requested:.4}"
+        );
+        // The fix delivers what was asked for.
+        let delivered = effective_tire_angle(steer_command_for(requested, &g), &g);
+        assert!((delivered - requested).abs() < 1e-3);
+    }
+
+    #[test]
+    fn steering_is_signed_and_saturates() {
+        let g = tesla();
+        assert_eq!(steer_command_for(0.0, &g), 0.0);
+        assert!(steer_command_for(-0.3, &g) < 0.0);
+        assert_eq!(steer_command_for(2.0, &g), 1.0);
+        assert_eq!(steer_command_for(-2.0, &g), -1.0);
+    }
+
+    /// Without geometry the model must reduce to exactly what it replaced.
+    #[test]
+    fn zero_ackermann_term_is_the_old_linear_mapping() {
+        let g = SteerGeometry {
+            max_steer_angle: 1.22,
+            track_over_wheelbase: 0.0,
+        };
+        assert!((steer_command_for(0.61, &g) - 0.5).abs() < 1e-4);
     }
 }
