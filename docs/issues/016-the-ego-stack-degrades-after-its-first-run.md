@@ -10,10 +10,10 @@ dependence still unexplained
 The ego **stops mid-route and never resumes**, and the scenario hits its 180 s timeout.
 That much is consistent. What predicts it is not.
 
-The stall itself is now understood -- the ego departs its lane through a diverging steering
-oscillation and wedges off-road, where the commanded acceleration cannot free it. See
-"What the trajectory and perception instrumentation showed" below. What remains unexplained
-is why this depends on how many scenarios the stack has already run.
+The stall itself is now understood, and confirmed by two independent traces on two different
+scenarios: the ego departs its lane through a diverging steering oscillation and wedges
+off-road, where the commanded throttle cannot free it. What remains unexplained is why this
+depends on how many scenarios the stack has already run.
 
 Verdicts collected on 2026-08-18 across several builds:
 
@@ -65,64 +65,74 @@ truth `(159,-128)`).
   the arms differed in stack freshness as well as in the parameter. Aged stacks fail with
   *either* setting.
 
-## Symptoms worth chasing
+## The mechanism, measured twice independently (2026-08-19)
 
-From `scripts/trace_run.py` on a failing run — pose, velocity, steering and CARLA ground
-truth once a second:
+Two traces, taken separately and on different scenarios, agree on every point below. One is
+`scripts/trace_run.py` on `town01_ego_drive.xosc` (the y=-129.8 street), which samples the
+planned trajectory, the predicted objects and `/api/planning/velocity_factors` alongside
+pose and control. The other is csb's `scripts/stall_probe.py` on
+`town01_traffic_light.xosc` (the y=-55.9 street), which adds CARLA's own view of the applied
+`VehicleControl`. Each is a single run, so together they establish **mechanism, not cause**.
 
-```
-t=23  pose (190.8,-130.1)  vel  0.00   ← spawn, on the lane
-t=29  pose (183.9,-129.6)  vel  3.41
-t=35  pose (165.3,-132.9)  vel  3.62   ← 3 m one way
-t=41  pose (158.3,-126.3)  vel  0.02   ← 6.6 m back the other way, in 6 s
-t=48+ pose (158.4,-126.3)  vel  0.00   ← stopped, +0.5 m/s² commanded, never moves
-```
+### Nothing commands the stop
 
-Two things to explain:
-
-1. **The ego oscillates out of its lane** and ends up wedged against the kerb, with a
-   sustained positive acceleration command and no motion.
-2. **Localization initialises from a stale pose.** On later runs the first
-   `/localization/kinematic_state` values are nowhere near the spawn point: `(155.8,
-   -116.3)`, `(158.25, …)` and `(118.54, -110.32)` were all observed where the scenario
-   spawns the ego at `(190.8, -130.1)`. `(118, -110)` is close to where the *previous* run
-   ended.
-
-The obvious hypothesis, untested: Autoware's localization carries state across runs, so a
-re-spawned ego initialises against the old estimate, NDT converges slowly or to the wrong
-place, and planning and control then act on a pose that does not match the vehicle. That
-would explain both symptoms without anything being wrong in the bridge.
-
-## What the trajectory and perception instrumentation showed
-
-`scripts/trace_run.py` now samples three more things once a second: the planned trajectory
-(point count, distance to its end, arc length to its first zero-velocity point), the
-predicted objects (count and distance to the nearest), and `/api/planning/velocity_factors`,
-which is the planner stating its own reason for slowing.
-
-Two runs on one freshly restarted stack, 2026-08-19. **The stop is not commanded by
-anything.** At the stalled pose, held for 130 s:
+At the stalled pose, held for over two minutes:
 
 ```
  t   pose            vel   steer   cmd_a  tpts  tend  tstop  obj  onear  velocity_factors
  50  158.8 -116.3  -0.02   0.159   +0.43   162  32.8   34.1    0    nan                 -
 ```
 
-The trajectory is 162 points reaching **32.8 m ahead**, and its first zero-velocity point is
-at 34.3 m — its far end, not the vehicle. Control is commanding **+0.43 m/s²**. No velocity
-factor is present. So the planner still intends to drive, the controller is still asking for
-acceleration, and the vehicle does not move.
+```
+t+26s ego(291.3,-54.4) 0.0 m/s traj[n=161 start=(295,-55) end=(261,-55) vmax=4.2 start_gap=4.1m]
+t+57s ego(291.3,-54.2) 0.0 m/s traj[n=159 start=(295,-55) end=(261,-55) vmax=4.2 start_gap=3.9m]
+                               factors[traffic-signal@186.2m/st1]  objs<30m=4
+```
 
-That exonerates the two suspects this section previously named. The trajectory is not
-truncated and no perceived object is stopping the vehicle. In fact the *entire* velocity
-factor record for a run is a single sample, `route-obstacle:APPROACHING@-5`, logged at the
-instant of the lane departure and referring to a point 5 m **behind** the ego.
+**The trajectory is not truncated.** 162 points reaching 32.8 m ahead in one trace, 159
+points reaching 30 m at 4.2 m/s in the other, both still commanding motion for as long as
+the ego sits there. The first zero-velocity point is at 34.3 m -- the trajectory's far end,
+not the vehicle.
+
+**No velocity factor demands a stop.** The second trace's only factor is a traffic signal
+186 m away. The first run's *entire* velocity-factor record is a single sample,
+`route-obstacle:APPROACHING@-5`, logged at the instant of the lane departure and referring
+to a point 5 m **behind** the ego. Perceived objects are present and stopping nothing.
+
+Both of the leads this issue previously named -- a truncated trajectory, and the rule-based
+`clustering` detector promoting a kerb to an obstacle -- are therefore ruled out at the
+stall.
+
+### The vehicle is physically wedged
+
+CARLA's own view of the actor settles it:
+
+```
+hero carla=(291.5,54.1) yaw=-140.9
+   speed=0.00  throttle=0.27  brake=0.00  steer=-0.02  hand_brake=False  gear=1
+```
+
+27% throttle, no brake, no hand brake, no motion. Control is delivering and the vehicle
+cannot move. The same holds in the other trace by arithmetic: `+0.43 m/s²` becomes
+`0.43 / MAX_ACCEL = 0.14` throttle, which will not climb a kerb.
+
+### Localization is right at the stall, including heading
+
+```
+CARLA    pos=(291.4,-54.2)  yaw(ROS)=140.7
+Autoware pos=(291.4,-54.1)  yaw=139.0
+```
+
+0.1 m and 1.7 deg of agreement. The ego therefore *knows* it is pointing 139 deg while its
+lane runs 180 deg -- 41 deg out, nose into the kerb -- and lateral control is commanding
+`steer=-0.02`, essentially straight. At zero speed that is likely a consequence rather than
+a cause; most lateral controllers have no authority on a stopped vehicle.
 
 ### The real failure is a diverging lateral oscillation
 
-At one-second resolution the departure is unambiguous. The route is straight — spawn
-`(190.8, -130.1)`, goal `(120.0, -129.8)` — so every metre of lateral movement below is
-error:
+The stall is a consequence. What precedes it, in both traces, is a steering loop going
+unstable. On the straight route -- spawn `(190.8, -130.1)`, goal `(120.0, -129.8)` -- every
+metre of lateral movement below is error:
 
 ```
  t   pose            vel   steer
@@ -136,54 +146,72 @@ error:
 ```
 
 Steering amplitude grows 0.04 -> 0.27 -> -0.40 -> -0.58 rad while the lateral error grows
-with it: -128.4, -132.2, -126.7, -119.8. That is a positive-feedback loop, not a vehicle
-tracking a path. It ends 13.5 m off the lane at `(158.5, -116.3)`, and CARLA ground truth
-agrees the vehicle is physically there.
+with it: -128.4, -132.2, -126.7, -119.8. It ends 13.5 m off the lane at `(158.5, -116.3)`,
+and CARLA ground truth agrees the vehicle is physically there.
 
-**The stall is a consequence, not a cause.** Once off the road the ego is wedged, and
-`+0.43 m/s²` becomes `0.43 / MAX_ACCEL = 0.14` throttle, which will not climb a kerb. The
-vehicle then sits there commanding acceleration until the scenario times out.
+The other scenario shows the same shape about its own lane centre of -55.85:
+
+```
+t+16s  -55.9    t+18s  -54.7    t+20s  -56.3    t+22s  -57.6
+t+24s  -55.4    t+26s  -54.4    then stuck at -54.2
+```
+
+±1.5 m, at 3-4.5 m/s, diverging over about 10 s. That is a positive-feedback loop, not a
+vehicle tracking a path.
 
 ### A sign error that is not one
 
-Worth recording to save the next reader the false start: in these traces a *positive*
+Worth recording to save the next reader the false start: in the first trace a *positive*
 commanded tire angle moves the ego toward **-y**, which looks like an inverted steering
 sign. It is not. The ego drives west (`h = 3.14159`, decreasing x), so its left hand points
 toward -y. The conversion in `vehicle_control.rs` is correct.
 
 ### The second signature may not be a failure at all
 
-The "stops 14 m short with near-perfect tracking" trace recorded above needs re-reading. In
-the equivalent run here, `tend` shrinks monotonically — 29.9, 25.2, 21.6, 18.2, 14.4, 9.7,
-6.5, 4.7 — which is exactly the distance to the goal at each step, so the trajectory was
-never truncated. The ego reached `(124.7, -129.7)`, **4.7 m from the goal and inside the
-scenario's 5.0 m `ReachPositionCondition` tolerance**, and the trace then froze: every
-field, including CARLA ground truth and a non-zero 0.62 m/s velocity, identical for 25 s.
-A simulation that stops ticking mid-motion is a scenario that has ended, not a vehicle that
-has stopped. That run most likely passed.
+The "stops 14 m short with near-perfect tracking" trace recorded earlier in this issue needs
+re-reading. In the equivalent run here, `tend` shrinks monotonically -- 29.9, 25.2, 21.6,
+18.2, 14.4, 9.7, 6.5, 4.7 -- which is exactly the distance to the goal at each step, so the
+trajectory was never truncated. The ego reached `(124.7, -129.7)`, **4.7 m from the goal and
+inside the scenario's 5.0 m `ReachPositionCondition` tolerance**, and the trace then froze:
+every field, including CARLA ground truth and a non-zero 0.62 m/s velocity, identical for
+25 s. A simulation that stops ticking mid-motion is a scenario that has ended, not a vehicle
+that has stopped. That run most likely passed.
 
-This is not confirmed — the harness deletes `result.junit.xml` before each run and its
-verdict echo was swallowed by pipe buffering, so run 1's verdict was lost. Fix the harness
-to save each run's junit before drawing on this.
+This is not confirmed -- the harness deletes `result.junit.xml` before each run and its
+verdict echo was swallowed by pipe buffering, so that run's verdict was lost. Fix the
+harness to save each run's junit before drawing on this.
+
+## Still unexplained
+
+**Why it depends on run order.** Nothing above explains why a freshly restarted stack
+usually passes and a used one usually does not. Lateral instability has no obvious reason to
+care how many scenarios preceded it.
+
+**A stale initial pose on later runs.** The first `/localization/kinematic_state` values on
+later runs are nowhere near the spawn point: `(155.8, -116.3)`, `(158.25, ...)` and
+`(118.54, -110.32)` were observed where the scenario spawns the ego at `(190.8, -130.1)`.
+`(118, -110)` is close to where the *previous* run ended. Localization is correct by the
+time of the stall, but a bad initial estimate would give the controller a large transient to
+reject -- which is exactly the disturbance an unstable loop needs to diverge. That would
+link the two halves of this issue, and it is untested.
 
 ## Where this leaves the issue
 
-The failure mode to explain is now specific: **the lateral controller goes unstable**, and
-everything after that is consequence. Candidates, in order:
+The question is no longer what stops the ego. It is what turns it out of the lane.
+Candidates, in order:
 
-- The steer command scale ([006](006-hardcoded-max-steer-angle.md)). The command maps a tire
-  angle through the wheel **limit** (70 deg) while the vehicle turns at the Ackermann
-  **mean** (58.7 deg). That is an 18% loop-gain error. Low gain alone does not destabilise a
-  loop, but it is a known-wrong constant sitting directly in the path.
-- Actuator lag hidden from the controller ([009](009-steering-report-echoes-command.md)).
-  With `report_measured_steering=false` the MPC is handed back its own command with zero lag
-  while the CARLA wheel has real dynamics. A plant slower than the controller's model is a
-  classic instability source, and this is exactly what 009 argued before its A/B was found
-  to be confounded.
-- Whatever makes it run-order dependent, which neither of the above explains on its own.
-
-Note that stack freshness still predicts the outcome, and lateral instability does not
-obviously depend on it. Fix 006 first, since it is wrong regardless, then A/B 009 properly.
+- **The steer command scale** ([006](006-hardcoded-max-steer-angle.md)). The command maps a
+  tire angle through the wheel **limit** (70 deg) while the vehicle turns at the Ackermann
+  **mean** (58.7 deg). `CLAUDE.md` still lists "vehicle calibration per CARLA model
+  (steering multiplier, wheelbase)" as open, and a mis-scaled lateral gain produces exactly
+  this -- growing oscillation, divergence, kerb. Fix this first; it is wrong regardless.
+- **Actuator lag hidden from the controller**
+  ([009](009-steering-report-echoes-command.md)). With `report_measured_steering=false` the
+  MPC is handed back its own command with zero lag while the CARLA wheel has real dynamics.
+  A plant slower than the controller's model is a classic instability source, and this is
+  what 009 argued before its A/B was found to be confounded.
+- **Whatever makes it run-order dependent**, for which the stale initial pose above is the
+  only lead.
 
 **On method**, learned the hard way here: single-run comparisons cannot distinguish causes
 in this system. Two conclusions were drawn and retracted this session — the orphaned-stream
@@ -191,67 +219,3 @@ storm ([015](015-sensors-destroyed-while-still-listening.md)) and the steering r
 ([009](009-steering-report-echoes-command.md)) — both from one run per arm, both explained
 afterwards by run order or by nothing at all. Any future claim needs n >= 10 per condition
 with run order held fixed.
-
-## Mechanism at the stall, measured (2026-08-19)
-
-Traced on a `town01_traffic_light.xosc` run (the y=-55.9 street, not y=-129.8) with
-csb's `scripts/stall_probe.py`, which samples pose, trajectory, velocity factors and
-perceived objects on one timeline. This is a single run, so it establishes **mechanism
-only** -- no causal claim, per the method note above.
-
-Three of this issue's leads are ruled out at the stall.
-
-**The trajectory is not truncated.** It stays healthy and keeps commanding motion for as
-long as the ego sits there:
-
-```
-t+26s ego(291.3,-54.4) 0.0 m/s traj[n=161 start=(295,-55) end=(261,-55) vmax=4.2 start_gap=4.1m]
-t+57s ego(291.3,-54.2) 0.0 m/s traj[n=159 start=(295,-55) end=(261,-55) vmax=4.2 start_gap=3.9m]
-                               factors[traffic-signal@186.2m/st1]  objs<30m=4
-```
-
-159 points reaching 30 m ahead at 4.2 m/s. **No velocity factor demands a stop** -- the
-only one present is the traffic signal 186 m away. Four perceived objects within 30 m,
-none of them stopping anything.
-
-**Control is delivering, and the vehicle is wedged.** CARLA's own view of the actor:
-
-```
-hero carla=(291.5,54.1) yaw=-140.9
-   speed=0.00  throttle=0.27  brake=0.00  steer=-0.02  hand_brake=False  gear=1
-```
-
-27% throttle, no brake, no hand brake, and no motion. So nothing is commanding a stop and
-nothing is applying one; the vehicle is physically stuck.
-
-**Localization is right, including heading.** At the same moment:
-
-```
-CARLA    pos=(291.4,-54.2)  yaw(ROS)=140.7
-Autoware pos=(291.4,-54.1)  yaw=139.0
-```
-
-0.1 m and 1.7 deg of agreement. The ego therefore *knows* it is pointing 139 deg while its
-lane runs 180 deg -- 41 deg out, nose into the kerb -- and lateral control is commanding
-`steer=-0.02`, essentially straight. (At zero speed that may be a consequence rather than
-a cause; most lateral controllers have no authority on a stopped vehicle.)
-
-## What that leaves
-
-The question is not what stops the ego. It is what turns it out of the lane, and the
-approach shows a lateral oscillation that grows until the kerb ends it:
-
-```
-t+16s  -55.9    t+18s  -54.7    t+20s  -56.3    t+22s  -57.6
-t+24s  -55.4    t+26s  -54.4    then stuck at -54.2
-```
-
-±1.5 m about a lane centre of -55.85, at 3-4.5 m/s, diverging over about 10 s. That is the
-"lateral departure" signature of this issue, caught with pose, planning and control all
-verified good at the same instant.
-
-An untested hypothesis that fits it: steering command scaling. `CLAUDE.md` still lists
-"vehicle calibration per CARLA model (steering multiplier, wheelbase)" as open, and an
-over-large lateral gain produces exactly this -- growing oscillation, divergence, kerb.
-Worth an n>=10 A/B against the steering multiplier with run order held fixed, which is the
-only kind of comparison this issue has found trustworthy.
