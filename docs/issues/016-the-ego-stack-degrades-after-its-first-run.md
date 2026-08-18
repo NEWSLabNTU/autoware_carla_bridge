@@ -181,6 +181,40 @@ This is not confirmed -- the harness deletes `result.junit.xml` before each run 
 verdict echo was swallowed by pipe buffering, so that run's verdict was lost. Fix the
 harness to save each run's junit before drawing on this.
 
+## Ruled out: the steer command scale
+
+[006](006-hardcoded-max-steer-angle.md)'s Ackermann mapping fix landed and changed nothing
+here. Run 1 PASS, run 2 FAIL, with the failing run's oscillation the same shape and the same
+amplitude as before it. In hindsight the prediction was available beforehand: the old
+mapping under-delivered, which is low loop gain, and low gain is stabilising.
+
+## A better lead: a burst of perceived objects at the moment of departure
+
+The same rerun, comparing the passing and failing run on one stack. Object count from
+`/perception/object_recognition/objects`, over the straight stretch where the failing run
+leaves its lane:
+
+```
+run 1 PASS   3  3  3  0  3  3  2  2  3  2        never above 3, lateral -130.1 to -129.5
+run 2 FAIL   3  3  2 18 27 19 23 40 36 39        lateral -129.8 -> -128.8 -> -132.7
+```
+
+The burst coincides with the departure, and the planned trajectory lengthens with it --
+`tend` goes 31.3, 40.5, 44.2 -- which is a replan, not a longer view of the same path. The
+ego then follows that replanned path out of its lane.
+
+Both runs are on the same stack minutes apart, so the point cloud and the map are the same
+and the map-based filters are the same. Note this also links the mechanism to the predictor
+for the first time: if perception degrades as a stack ages, later runs see more spurious
+objects, swerve more, and depart. Nothing else in this issue explains the run-order
+dependence at all.
+
+**This is one run per condition and therefore a lead, not a finding** -- exactly the shape
+of the two claims already retracted here. Test it by dumping object positions, classes and
+existence probabilities during the burst (are they on the ego's own body? the kerb? the
+parked `bg_av_1`?), and by counting objects across n >= 10 runs per condition with run order
+held fixed.
+
 ## Still unexplained
 
 **Why it depends on run order.** Nothing above explains why a freshly restarted stack

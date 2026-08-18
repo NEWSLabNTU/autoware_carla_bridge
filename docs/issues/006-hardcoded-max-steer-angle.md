@@ -58,6 +58,22 @@ steer cmd=1.00  FL= 47.43  FR= 70.00  mean= 58.71 deg (1.0247 rad)
 So 1.22 rad was the right number for this blueprint, and the fix changes nothing for the
 Tesla — it changes the answer for every other one.
 
+## It did not fix 016
+
+Rerun on a freshly restarted stack straight after this change: run 1 PASS, run 2 FAIL --
+the same split as before, and the failing run is near indistinguishable from the pre-fix
+one.
+
+```
+pre-fix   t=27  y -128.4  steer  0.267 | t=31 -132.2 -0.402 | t=32 -131.0 -0.598
+post-fix  t=29  y -128.2  steer  0.251 | t=33 -132.7 -0.391 | t=34 -131.9 -0.598
+```
+
+Same oscillation, same amplitudes, wedged 4 m further along the street. That is the
+expected result on reflection: under-delivering steering is *low* loop gain, which is
+stabilising, so correcting it upward was never likely to cure an instability. This fix is
+worth having because it was wrong, not because it was the cause.
+
 ## Not done
 
 Two things this does not address:
@@ -111,6 +127,22 @@ A 4% speed-dependent term is worth having eventually -- gain that changes with s
 better instability candidate than a constant error -- but modelling it from two points, to a
 curve the measurements already contradict, would add error rather than remove it. Left
 unmodelled and recorded here.
+
+## It did not fix 016
+
+Rerun on a freshly restarted stack straight after this change: run 1 PASS, run 2 FAIL --
+the same split as before, and the failing run is near indistinguishable from the pre-fix
+one.
+
+```
+pre-fix   t=27  y -128.4  steer  0.267 | t=31 -132.2 -0.402 | t=32 -131.0 -0.598
+post-fix  t=29  y -128.2  steer  0.251 | t=33 -132.7 -0.391 | t=34 -131.9 -0.598
+```
+
+Same oscillation, same amplitudes, wedged 4 m further along the street. That is the
+expected result on reflection: under-delivering steering is *low* loop gain, which is
+stabilising, so correcting it upward was never likely to cure an instability. This fix is
+worth having because it was wrong, not because it was the cause.
 
 ## Not done
 
