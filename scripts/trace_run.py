@@ -17,6 +17,7 @@ from autoware_control_msgs.msg import Control
 from autoware_planning_msgs.msg import Trajectory
 from autoware_perception_msgs.msg import PredictedObjects
 from autoware_adapi_v1_msgs.msg import VelocityFactorArray
+import math
 
 SECONDS = int(sys.argv[1]) if len(sys.argv) > 1 else 260
 OPMODE = {0: "UNK", 1: "STOP", 2: "AUTO", 3: "LOCAL", 4: "REMOTE"}
@@ -36,7 +37,8 @@ class T(Node):
         self.create_subscription(RouteState, "/api/routing/state",
             lambda m: self.d.__setitem__("route", m.state), latched)
         self.create_subscription(Odometry, "/localization/kinematic_state",
-            lambda m: self.d.__setitem__("pose", m.pose.pose.position), 1)
+            lambda m: (self.d.__setitem__("pose", m.pose.pose.position),
+                       self.d.__setitem__("quat", m.pose.pose.orientation)), 1)
         self.create_subscription(VelocityReport, "/vehicle/status/velocity_status",
             lambda m: self.d.__setitem__("vel", m.longitudinal_velocity), 1)
         self.create_subscription(SteeringReport, "/vehicle/status/steering_status",
@@ -74,6 +76,68 @@ def traj_summary(traj, pose):
             d_stop = run
             break
     return len(pts), d_end, d_stop
+
+
+def yaw_of(q):
+    return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+
+def traj_shape(traj, pose, quat):
+    """The planned path's own shape, in the ego's frame.
+
+    Every probe so far sampled the trajectory's endpoints, which cannot tell a controller
+    that steers off a straight path from a planner that hands it a bent one. This walks the
+    path from the ego outwards and reports its lateral offset at fixed look-ahead distances.
+
+    Returns (cross-track, lat@5m, lat@10m, lat@20m, heading of the path at 5 m relative to
+    the ego in degrees, map-frame y of the path 20 m ahead, ego yaw in degrees).
+
+    Positive lateral is to the ego's left. The ego-frame numbers alone CANNOT tell a bent
+    path from a yawed ego: the planner anchors its path to the ego's pose, so a yawed ego
+    makes a perfectly good lane-following path look laterally offset far ahead while
+    cross-track stays small. `mapy20` is the discriminator -- on this straight route the
+    lane centre is a constant map y, so a path that stays on the lane holds it whatever the
+    ego is doing.
+    """
+    nan = float("nan")
+    if traj is None or not traj.points or pose is None or quat is None:
+        return nan, nan, nan, nan, nan, nan, nan
+    eyaw = yaw_of(quat)
+    c, s_ = math.cos(eyaw), math.sin(eyaw)
+
+    def to_ego(p):
+        dx, dy = p.x - pose.x, p.y - pose.y
+        return dx * c + dy * s_, -dx * s_ + dy * c
+
+    local = [to_ego(tp.pose.position) for tp in traj.points]
+    world = [(tp.pose.position.x, tp.pose.position.y) for tp in traj.points]
+    # Cross-track: the lateral offset of the path point closest to the ego.
+    xtrack = min(local, key=lambda q: q[0] * q[0] + q[1] * q[1])[1]
+
+    # Lateral offset at fixed arc lengths measured along the path from its start.
+    wanted, out, run = [5.0, 10.0, 20.0], [], 0.0
+    idx, mapy20 = 0, nan
+    for i in range(1, len(local)):
+        run += math.dist(local[i - 1], local[i])
+        while idx < len(wanted) and run >= wanted[idx]:
+            out.append(local[i][1])
+            if wanted[idx] == 20.0:
+                mapy20 = world[i][1]
+            idx += 1
+        if idx >= len(wanted):
+            break
+    out += [nan] * (len(wanted) - len(out))
+
+    # Heading of the path about 5 m out, relative to the ego.
+    dyaw = nan
+    run = 0.0
+    for i in range(1, len(local)):
+        run += math.dist(local[i - 1], local[i])
+        if run >= 5.0:
+            dyaw = math.degrees(math.atan2(local[i][1] - local[i - 1][1],
+                                           local[i][0] - local[i - 1][0]))
+            break
+    return (xtrack, out[0], out[1], out[2], dyaw, mapy20, math.degrees(eyaw))
 
 
 def obj_summary(objs, pose):
@@ -118,8 +182,9 @@ n = T()
 t0 = time.time()
 last = 0
 print(f"{'t':>4} {'clock':>12} {'mode':>5} {'ok':>5} {'route':>7} {'ax':>7} {'ay':>7} "
-      f"{'vel':>6} {'steer':>6} {'cmd_a':>6} {'tpts':>5} {'tend':>6} {'tstop':>6} "
-      f"{'obj':>4} {'onear':>6} {'velocity_factors':>20} | CARLA vehicles")
+      f"{'vel':>6} {'steer':>6} {'cmd_a':>6} {'tpts':>5} {'tend':>6} "
+      f"{'xtrack':>7} {'lat20':>6} {'mapy20':>7} {'egoyaw':>7} {'dyaw':>6} "
+      f"{'obj':>4} {'velocity_factors':>18} | CARLA vehicles")
 while time.time() - t0 < SECONDS:
     rclpy.spin_once(n, timeout_sec=0.1)
     if time.time() - last < 1.0:
@@ -130,6 +195,8 @@ while time.time() - t0 < SECONDS:
     cars = " ".join(f"{r}({x:.0f},{y:.0f},{s:.1f})" for r, x, y, s in carla_state())
     tpts, tend, tstop = traj_summary(d.get("traj"), p)
     nobj, onear = obj_summary(d.get("objs"), p)
+    xtrack, lat5, lat10, lat20, dyaw, mapy20, egoyaw = traj_shape(
+        d.get("traj"), p, d.get("quat"))
     print(f"{int(time.time()-t0):4d} {d.get('clock', float('nan')):12.2f} "
           f"{OPMODE.get(getattr(m,'mode',None),'-'):>5} "
           f"{str(getattr(m,'is_autonomous_mode_available','-')):>5} "
@@ -137,7 +204,8 @@ while time.time() - t0 < SECONDS:
           f"{(p.x if p else float('nan')):7.1f} {(p.y if p else float('nan')):7.1f} "
           f"{d.get('vel', float('nan')):6.2f} {d.get('steer', float('nan')):6.3f} "
           f"{getattr(getattr(c,'longitudinal',None),'acceleration',float('nan')):6.2f} "
-          f"{tpts:5d} {tend:6.1f} {tstop:6.1f} {nobj:4d} {onear:6.1f} "
-          f"{vf_summary(d.get('vf')):>20} | {cars}",
+          f"{tpts:5d} {tend:6.1f} "
+          f"{xtrack:7.2f} {lat20:6.2f} {mapy20:7.2f} {egoyaw:7.1f} {dyaw:6.1f} "
+          f"{nobj:4d} {vf_summary(d.get('vf')):>18} | {cars}",
           flush=True)
 rclpy.shutdown()

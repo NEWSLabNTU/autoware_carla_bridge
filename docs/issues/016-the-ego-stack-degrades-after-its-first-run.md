@@ -228,17 +228,60 @@ the way out: 3, 28, 19, 44, 34 ... 66 at 36 degrees off.
 This is the third lead in this issue to be raised and then withdrawn, and the second where a
 real correlation turned out to point backwards.
 
-## What is left
+## The path shape in the ego frame, and why it does not settle the question
 
-The ego yaws 10 degrees in one second while sitting on the lane centre of a straight route,
-correctly localized, with nothing ahead of it. The controller is issuing the large steering
-that produces that. The open question is whether it is being *asked* to.
+`scripts/trace_run.py` now walks the planned path outward from the ego and reports its
+*shape* rather than its endpoints: `xtrack` is the lateral offset of the path point nearest
+the ego, `lat20` its offset 20 m along, and `dyaw` its heading 5 m out relative to the ego.
 
-The discriminator is the planned path itself, not its endpoints: sample the first several
-trajectory points in the ego frame and see whether the path is straight down the lane while
-the controller steers off it (a control fault) or whether the path itself bends (a planning
-fault). `tend` jumping from 31 to 44 m at the departure says the trajectory changed at that
-moment; it does not say into what shape.
+A failing run, through the departure:
+
+```
+ t   ego_y   xtrack  lat20   dyaw   obj   cmd_a
+28  -130.0   -0.18   +0.21   -2.4    2    +0.78
+29  -129.6   -0.07   +2.53   +6.5    1    +0.80
+30  -128.9   +0.61   +2.84   +7.2    2    +0.64
+31  -129.1   +0.34   -3.03  -12.7    3    +0.11
+32  -130.3   -0.83   -6.12  -20.5    1    +0.30
+33  -131.0   -1.56   -4.61  -11.9    1    +1.00
+34  -131.0   -1.58   +0.05   +5.8    3    +1.00
+35  -129.7   -0.20   +9.33  +36.6   17    +0.72
+36  -129.1   +0.26   +9.26  +34.3   17    -1.16
+```
+
+### What this does establish
+
+**It is not obstacle avoidance.** Object count through the three path swings is 1, 2, 3, 1,
+1, 3 -- the same as during healthy cruise (3, 3, 3, 2). The burst reaches 17 only at t=35,
+after the path has already swung three times, and 30-43 later still. That is
+frame-independent and confirms the object dump's conclusion at the moment that actually
+matters.
+
+### What it does NOT establish
+
+An earlier version of this section read the swinging `lat20` as the planner handing the
+controller a thrashing reference. **That inference does not hold**, and the measurement as
+taken cannot support it.
+
+`behavior_path_planner` anchors its path to the ego's current pose. So a *yawed ego* and a
+*bent path* produce the same ego-frame signature: `xtrack` small near the ego by
+construction, and a large lateral offset far ahead. With the ego's heading swinging tens of
+degrees -- which the wheel-lag measurement above gives a mechanism for -- a perfectly good
+lane-following path would look exactly like the table above.
+
+The ego frame was the wrong frame to ask the question in.
+
+### The discriminator
+
+On this straight route the lane centre is a constant map y of about -129.9, so the map-frame
+position of the path 20 m ahead separates the two cases outright:
+
+- `mapy20` stays near -129.9 while the ego yaws -> the path is fine, the ego is not, and
+  this is the lateral loop (see the wheel lag above).
+- `mapy20` swings with the ego -> the planner really is emitting a bent path.
+
+`trace_run.py` now reports `mapy20` and the ego's own yaw alongside the ego-frame numbers.
+Rerun and read that column.
 
 ## Still unexplained
 
