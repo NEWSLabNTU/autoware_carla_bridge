@@ -467,3 +467,38 @@ The outcome has to be continuous. **Lateral tracking quality** is the right one:
 standard deviation of the ego's lateral position over the straight approach, and its peak
 excursion. It measures the oscillation this issue is actually about, needs no failures to
 be informative, and will separate the arms at far smaller n than a pass count.
+
+### The A/B of that switch: underpowered, direction matches
+
+Twenty runs alternating `report_measured_steering`, fresh ego stack before each, outcome
+the lateral standard deviation and peak excursion over the straight approach (x 300 down
+to 140), measured about each run's own mean so a trim offset does not count as
+instability.
+
+| arm | | n | sd median | sd mean | peak median | peak max |
+|---|---|---|---|---|---|---|
+| A | `false`, echo the command | 8 | 0.0284 | 0.0712 | 0.077 | **1.045** |
+| B | `true`, report the wheel | 8 | 0.0235 | 0.0277 | 0.064 | **0.183** |
+
+**The medians are nearly identical**, so nominal tracking is the same either way. The
+entire difference sits in the tail:
+
+- Both large excursions were in the echo arm -- run 3 peaked 1.04 m off the line, run 5
+  peaked 0.49 m. Arm B's worst run was 0.18 m.
+- Run 3 also produced **the only stall in the whole set**, stopping at x=212 and never
+  reaching the stop line.
+
+That is the shape the hypothesis predicts: feeding MPC its own command does not degrade
+ordinary tracking, it permits divergence. **It is also two runs.** At 2 of 8 against 0 of
+8, Fisher's exact gives p ~ 0.47. This is not a result, it is a reason to run more.
+
+Which is now cheap: csb exposes the switch as a launch argument and `just ego-av` forwards
+`REPORT_MEASURED_STEERING` from the environment (csb f1adc16), so an arm costs a variable
+assignment.
+
+Two caveats on the data. Four of the twenty runs produced no measurement at all -- one
+stack that never came up, three with no samples in the straight segment -- so the same
+roughly-1-in-10 start flakiness noted above is still present and cost more here. And the
+harness's own CSV extraction was buggy (its `n=` match also caught the `n` inside
+`x_span=`), splitting every record across two lines; the numbers above come from
+reparsing, but the raw file is malformed and the harness needs that fixed before reuse.
