@@ -271,17 +271,48 @@ lane-following path would look exactly like the table above.
 
 The ego frame was the wrong frame to ask the question in.
 
-### The discriminator
+### The discriminator, measured: the path is fine and the ego is yawing
 
 On this straight route the lane centre is a constant map y of about -129.9, so the map-frame
-position of the path 20 m ahead separates the two cases outright:
+position of the path 20 m ahead separates the two cases outright. Measured on a failing run:
 
-- `mapy20` stays near -129.9 while the ego yaws -> the path is fine, the ego is not, and
-  this is the lateral loop (see the wheel lag above).
-- `mapy20` swings with the ego -> the planner really is emitting a bent path.
+```
+ t   ego_y   xtrack  lat20   mapy20   egoyaw   dyaw
+26  -130.1   -0.66   -0.61  -129.40   179.8    0.2
+27  -130.0   -0.63   +0.04  -129.40   177.5    2.5
+28  -129.2   +0.18   +4.01  -129.39   166.1   13.8
+29  -128.1   +1.24   +5.03  -129.39   166.3   13.7
+30  -127.9   +1.46   -0.40  -129.39  -173.1   -6.9
+31  -129.1   +0.30   -6.77  -129.39  -153.8  -26.3
+32  -130.2   -0.71   -8.45  -129.38  -149.9  -30.1
+34  -132.7   -3.32   -5.05  -129.37  -173.8   -6.2
+35  -130.6   -0.94   +9.57  -129.35   139.4   40.6
+36  -126.0   +0.45  +16.62  -129.33    97.6   82.3
+```
 
-`trace_run.py` now reports `mapy20` and the ego's own yaw alongside the ego-frame numbers.
-Rerun and read that column.
+**`mapy20` moves 0.07 m across the entire departure** -- -129.40 to -129.33 -- while `lat20`
+swings over 25 m and the ego's heading swings from 180 to 97 degrees. `dyaw` tracks the
+ego's yaw error exactly (at t=28, `egoyaw` 166.1 is 13.9 degrees off and `dyaw` is +13.8).
+
+The planner is emitting a path that sits on the lane centreline, continuously, throughout the
+failure. Every bit of the ego-frame path swing was the ego's own heading.
+
+The passing run's baseline agrees and shows what healthy looks like:
+
+```
+ t    ego_y   xtrack  lat20   mapy20   egoyaw
+28   -130.1   -0.03   -0.59  -129.49   -180.0
+41   -129.5   -0.00   +0.26  -129.38    178.5
+47   -129.4   -0.01   -0.02  -129.32    179.8
+53   -129.3   +0.00   +0.64  -129.79    179.4
+```
+
+Same path quality in both. `mapy20` is indistinguishable between the passing and failing run.
+The entire difference is the ego's heading: within 2 degrees of 180 when it passes, swinging
+80+ degrees when it fails.
+
+**So planning is exonerated and this is the lateral control loop**, which is where the
+measured ~478 ms command-to-wheel lag points. The two independent lines of evidence agree.
 
 ## Still unexplained
 
