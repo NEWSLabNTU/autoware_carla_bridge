@@ -536,7 +536,7 @@ Two corrections to earlier claims in this document, both from the same 33 runs:
 Which leaves stack age as the only thing yet shown to reproduce the failure, and nothing
 identified inside it.
 
-## Nothing external yaws the ego (2026-08-15)
+## Nothing external yaws the ego (2026-08-20)
 
 The open question left by the stall trace was what rotates the ego 41 deg out of a lane it
 is correctly localized in. Three candidates are worth eliminating before looking harder at
