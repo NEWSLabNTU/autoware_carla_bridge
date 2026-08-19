@@ -535,3 +535,43 @@ Two corrections to earlier claims in this document, both from the same 33 runs:
 
 Which leaves stack age as the only thing yet shown to reproduce the failure, and nothing
 identified inside it.
+
+## Nothing external yaws the ego (2026-08-20)
+
+The open question left by the stall trace was what rotates the ego 41 deg out of a lane it
+is correctly localized in. Three candidates are worth eliminating before looking harder at
+the controller: a second writer on the vehicle, a teleport (invariant 5 says only PhysX
+moves the ego), or a kinematic gain error making the car turn more than its wheels ask.
+
+Measured directly against a bicycle model, `yaw_rate = v * tan(delta) / L`, using CARLA's
+own angular velocity and the *measured* front wheel angle, over 826 samples where the ego
+was both moving and steering:
+
+```
+observed |yaw_rate|:      mean 0.0298  max 0.1193 rad/s
+bicycle prediction:       mean 0.0323  max 0.1293 rad/s
+|observed - predicted|:   mean 0.0027 rad/s
+ratio observed/predicted: median 0.922   (L = 2.79 m, Autoware's wheel_base)
+position jumps > 25 m/s:  0
+```
+
+**The rotation is fully accounted for by the front wheels.** The ratio sits within 8% of
+unity and on the low side, which is what tyre slip does; there is no excess yaw to
+attribute to anything else. No position jumps, so nothing is teleporting the ego, and no
+sign of a second actor writing to the vehicle.
+
+So the yaw is not externally applied: whatever the ego does, it does by steering. Combined
+with the earlier finding that acb's tire-angle mapping is self-consistent, and with
+planning already exonerated, the departure has to be the lateral control loop commanding
+those angles -- genuine closed-loop behaviour rather than a bridge or physics artefact.
+
+**Limit worth stating**: this measured a normal run, not a divergence. It rules out an
+external torque during ordinary driving; it does not rule out kerb contact adding yaw once
+a departure is already under way, which is a different claim and would need the same
+measurement captured during a stall.
+
+Two operational notes from getting this measurement. The first attempt produced 2766
+samples and no usable ones because the ego never engaged and sat at its spawn point the
+whole run -- the probe now waits for motion before sampling and reports moving and
+steering counts separately, so a null is interpretable rather than silent. That is the
+same never-engaged failure seen as `min_x=320` in the earlier A/B, and it cost a full run.
