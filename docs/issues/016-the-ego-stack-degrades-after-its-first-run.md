@@ -349,3 +349,47 @@ reproduce even once in 18 runs.
 
 Harness: `/tmp/steer_ab.sh` in this session; csb's `scripts/stall_probe.py` is the tool
 for reading a stall once one occurs.
+
+## The plant really is slower than the model (2026-08-19)
+
+The feedback-lag hypothesis above says acb hands MPC back its own command with zero lag
+while the CARLA wheel has real dynamics. That is only worth testing if the wheel is
+actually slow, so it was measured: command (`/control/command/control_cmd`), report
+(`/vehicle/status/steering_status`) and CARLA's own `get_wheel_steer_angle` sampled
+together for 1675 samples over ~100 s of driving.
+
+```
+|reported - commanded|:     mean 0.034 rad, max 0.184 rad
+best command->wheel shift:  8 samples = ~478 ms   (rms 0.0083 rad)
+zero-shift rms:             0.043 rad
+command range: -0.1721 .. +0.1537 rad
+wheel   range: -0.1647 .. +0.1376 rad
+```
+
+**The wheel lags the command by roughly half a second.** Shifting the command forward by
+~478 ms matches the measured wheel five times more tightly than comparing them at the same
+instant (0.0083 vs 0.043 rad), and the wheel's range is slightly compressed against the
+command's -- lag plus attenuation, which is what a first-order actuator does.
+
+So the premise holds. With `report_measured_steering: false` the loop Autoware closes
+contains no actuator at all, while the plant it is really driving takes ~0.5 s to arrive.
+That is a textbook destabiliser, and unlike the steering-multiplier idea -- whose premise
+was disproved, since acb's tire-angle mapping is self-consistent -- this one survives
+first contact with a measurement.
+
+Two limits on the number. The probe sampled at ~60 ms against a 100 ms simulation step, so
+treat 478 ms as 0.4-0.6 s rather than a precise figure. And this establishes that the lag
+exists, not that it causes the stall.
+
+### Why the obvious A/B does not work, and what to run instead
+
+An A/B of `report_measured_steering` true against false cannot use pass/fail as its
+outcome. The steering A/B above established that the stall does not reproduce at all when
+every run starts on a fresh stack -- 17 of 18 reached the stop line -- so both arms would
+score ~100% and the result would be a null for want of failures, not for want of an
+effect.
+
+The outcome has to be continuous. **Lateral tracking quality** is the right one: the
+standard deviation of the ego's lateral position over the straight approach, and its peak
+excursion. It measures the oscillation this issue is actually about, needs no failures to
+be informative, and will separate the arms at far smaller n than a pass count.
