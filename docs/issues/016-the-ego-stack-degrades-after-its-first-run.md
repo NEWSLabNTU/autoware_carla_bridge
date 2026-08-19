@@ -278,3 +278,74 @@ storm ([015](015-sensors-destroyed-while-still-listening.md)) and the steering r
 ([009](009-steering-report-echoes-command.md)) — both from one run per arm, both explained
 afterwards by run order or by nothing at all. Any future claim needs n >= 10 per condition
 with run order held fixed.
+
+## The steering A/B: no effect, and the failure did not reproduce (2026-08-19)
+
+Autoware's `vehicle_info.param.yaml` declares `max_steer_angle: 0.70` rad while CARLA's
+Model 3 reports 70 deg = **1.222 rad** on its steered wheels, so the controller plans and
+tracks believing the car can steer 40 deg when it can actually do 70. That mismatch was
+the last standing version of the "steering calibration" hypothesis, and it is now tested.
+
+First, what is *not* wrong. acb converts a commanded tire angle to CARLA's [-1,1] by
+dividing by the limit it reads from CARLA physics (`vehicle_control.rs`:
+`control.steer = -steering_tire_angle / max_steer_angle`). That mapping is
+self-consistent: ask for 20 deg and the wheels go to 20 deg. There is no gain error and
+no "steering multiplier" to mis-set, so an over-steering explanation for the lateral
+divergence has nothing to stand on.
+
+The A/B varied the remaining knob, Autoware's assumed limit, 20 runs alternating arms,
+**every run preceded by an `ego-av` restart** so that stack age -- the confound that
+sank the earlier single-run comparisons -- is held constant at "first run after restart":
+
+| arm | `max_steer_angle` | stack failures | reached the stop line | min x reached |
+|---|---|---|---|---|
+| A | 0.70 rad (current) | 1 of 10 | **8 of 9** | mean 105.03, sd 0.72 |
+| B | 1.22 rad (CARLA's real limit) | 1 of 10 | **9 of 9** | mean 104.53, sd 0.71 |
+
+The outcome is the minimum x the ego reaches, sampled from CARLA during the run, because
+this scenario times out by design while the ego waits at a red -- a healthy run and a
+wedged one both score `failures=1`, so the junit verdict cannot separate them.
+
+**No detectable effect.** 8/9 against 9/9 is a coin flip at this n, and the reached runs
+land in a 103.7-106.1 m band in both arms with identical spread. At n=10 per arm this
+design would catch a large effect; it would miss a subtle one, so the honest reading is
+"no effect large enough to matter here", not "no effect".
+
+**The more useful result is the one the A/B was not looking for: the failure barely
+occurred.** Across 18 valid runs there was **not a single lateral-departure stall** -- no
+oscillation, no drift, no kerb wedge. 17 of 18 reached the stop line. The one that did not
+(run 7) sat at x=320.0, which is the spawn point: the ego never moved at all, an engage
+failure rather than the stall this issue is about.
+
+That is direct support for this issue's own framing. With a fresh stack for every run the
+pass rate is 17/18 (94%), consistent with the 6/7 (86%) recorded here for first-runs and
+nothing like the 2/12 for later runs. Whatever degrades the stack, it is not the steering
+model, and controlling stack age is enough to make the failure go away.
+
+Both arms lost one run to the stack failing to come up at all, which is its own small
+signal: roughly 1 in 10 `ego-av` starts did not reach "Startup complete" within 15
+minutes.
+
+### The one stall traced in detail
+
+Measured before this A/B, on an aged stack, with pose, trajectory, velocity factors and
+perceived objects sampled together (csb `scripts/stall_probe.py`). Recorded here because
+the numbers are not elsewhere in this issue:
+
+```
+t+26s ego(291.3,-54.4) 0.0 m/s traj[n=161 start=(295,-55) end=(261,-55) vmax=4.2]
+t+57s ego(291.3,-54.2) 0.0 m/s traj[n=159 start=(295,-55) end=(261,-55) vmax=4.2]
+                               factors[traffic-signal@186.2m/st1]  objs<30m=4
+CARLA: yaw=-140.9  throttle=0.27  brake=0.00  steer=-0.02  hand_brake=False  speed=0.00
+Autoware pose (291.4,-54.1) yaw 139.0  vs  CARLA (291.4,-54.2) yaw(ROS) 140.7
+```
+
+The trajectory was never truncated and kept commanding 4.2 m/s; no velocity factor asked
+for a stop; 27% throttle was applied with no brake and no hand brake; and localization
+agreed with ground truth to 0.1 m and 1.7 deg, heading included. The ego therefore knew it
+was 41 deg out of a lane running 180 deg and was simply wedged. This is consistent with
+the lateral-departure signature, and it is the state the A/B above then failed to
+reproduce even once in 18 runs.
+
+Harness: `/tmp/steer_ab.sh` in this session; csb's `scripts/stall_probe.py` is the tool
+for reading a stall once one occurs.
