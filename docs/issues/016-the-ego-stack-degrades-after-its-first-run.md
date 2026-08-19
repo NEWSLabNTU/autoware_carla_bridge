@@ -502,3 +502,36 @@ roughly-1-in-10 start flakiness noted above is still present and cost more here.
 harness's own CSV extraction was buggy (its `n=` match also caught the `n` inside
 `x_span=`), splitting every record across two lines; the numbers above come from
 reparsing, but the raw file is malformed and the harness needs that fixed before reuse.
+
+### Twenty more runs: the effect was noise
+
+The tail asymmetry above did not survive replication. A second block of 20, identical
+design, reversed it:
+
+| | arm A (echo) | arm B (measured) |
+|---|---|---|
+| round 1 | peak max **1.045**, 2 excursions, 1 stall | peak max 0.183, 0 excursions |
+| round 2 | peak max 0.099, 0 excursions | peak max **1.145**, 1 excursion, 1 stall |
+| **pooled** | n=16, sd median 0.0257, **2** excursions | n=17, sd median 0.0264, **1** excursion |
+
+Pooled medians are indistinguishable, 0.0257 against 0.0264, and the large excursions run
+2 of 16 against 1 of 17 -- p ~ 0.6. **`report_measured_steering` has no detectable effect
+on lateral tracking across 33 valid runs.**
+
+The premise still holds: the wheel really does lag the command by ~0.5 s, and echoing it
+really does leave no actuator in the loop MPC closes. The predicted consequence simply
+does not appear at this scenario's speeds and steering amplitudes (commands stayed inside
++-0.17 rad). Feeding MPC the measured angle is arguably still the more honest thing to
+report, but it is not a fix for this issue and should not be sold as one.
+
+Two corrections to earlier claims in this document, both from the same 33 runs:
+
+- **The stall does occur on fresh stacks**, twice here, at x=212 and x=254, once in each
+  arm. The earlier "17 of 18 reached the stop line" reading was right about the rate and
+  wrong to imply the failure is gated on stack age. It is a strong tendency, not a gate.
+- **The start flakiness is measurable**: 3 of 40 runs produced no measurement at all --
+  one stack that never reached "Startup complete", two with no samples in the straight
+  segment. Roughly 1 in 13.
+
+Which leaves stack age as the only thing yet shown to reproduce the failure, and nothing
+identified inside it.
