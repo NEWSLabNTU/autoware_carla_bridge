@@ -44,7 +44,8 @@ class T(Node):
         self.create_subscription(SteeringReport, "/vehicle/status/steering_status",
             lambda m: self.d.__setitem__("steer", m.steering_tire_angle), 1)
         self.create_subscription(Control, "/control/command/control_cmd",
-            lambda m: self.d.__setitem__("cmd", m), 1)
+            lambda m: (self.d.__setitem__("cmd", m),
+                       self.d.__setitem__("cmd_steer", m.lateral.steering_tire_angle)), 1)
         self.create_subscription(Trajectory, "/planning/scenario_planning/trajectory",
             lambda m: self.d.__setitem__("traj", m), 1)
         self.create_subscription(PredictedObjects, "/perception/object_recognition/objects",
@@ -182,7 +183,7 @@ n = T()
 t0 = time.time()
 last = 0
 print(f"{'t':>4} {'clock':>12} {'mode':>5} {'ok':>5} {'route':>7} {'ax':>7} {'ay':>7} "
-      f"{'vel':>6} {'steer':>6} {'cmd_a':>6} {'tpts':>5} {'tend':>6} "
+      f"{'vel':>6} {'steer':>6} {'cmdsteer':>8} {'cmd_a':>6} {'tpts':>5} {'tend':>6} "
       f"{'xtrack':>7} {'lat20':>6} {'mapy20':>7} {'egoyaw':>7} {'dyaw':>6} "
       f"{'obj':>4} {'velocity_factors':>18} | CARLA vehicles")
 while time.time() - t0 < SECONDS:
@@ -203,6 +204,7 @@ while time.time() - t0 < SECONDS:
           f"{ROUTE.get(d.get('route'),'-'):>7} "
           f"{(p.x if p else float('nan')):7.1f} {(p.y if p else float('nan')):7.1f} "
           f"{d.get('vel', float('nan')):6.2f} {d.get('steer', float('nan')):6.3f} "
+          f"{d.get('cmd_steer', float('nan')):8.3f} "
           f"{getattr(getattr(c,'longitudinal',None),'acceleration',float('nan')):6.2f} "
           f"{tpts:5d} {tend:6.1f} "
           f"{xtrack:7.2f} {lat20:6.2f} {mapy20:7.2f} {egoyaw:7.1f} {dyaw:6.1f} "

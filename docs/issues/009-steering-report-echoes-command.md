@@ -2,7 +2,7 @@
 
 **Severity**: Low
 **Component**: `src/acb_bridge/src/vehicle_control.rs`, `publish_status`
-**Status**: Reverted — the fix destabilised lateral control; available behind a flag
+**Status**: Available behind a flag, default off. A/B on lateral tracking quality is a null (2026-08-20)
 
 ## What is wrong
 
@@ -83,3 +83,60 @@ failures.
 
 Fix the command mapping first (006), then A/B this flag **with every run as run 1 on a
 freshly restarted ego stack**, several runs per arm. Anything less is measuring stack age.
+
+
+## The A/B, run properly: a null (2026-08-20)
+
+The parameter is now forwarded through `ego_av.launch.xml`, so the arms differ in exactly
+one thing and no rebuild is needed between them.
+
+**Outcome.** Not pass/fail, which barely discriminates here -- fresh stacks pass almost
+always, and one traced FAIL had a peak cross-track of 0.24 m while a PASS had 3.44 m.
+Instead, lateral tracking quality over the straight approach: the spread and peak of the
+ego's cross-track error, plus its deviation from the lane centre, scored by
+`scripts/score_tracking.py` from `trace_run.py` output.
+
+**Design.** Arms alternated across freshly restarted stacks, each stack contributing a run 1
+and a run 2, so stack age is balanced across arms rather than confounded with them. The arm
+actually launched is confirmed per stack from play_launch's own
+`play_log/<dir>/node/acb_bridge/params_files/overrides.yaml`.
+
+**Result**, cross-track standard deviation in metres, 13 usable trials:
+
+```
+  run1 measured   n=4 median 0.019  range 0.016-0.051
+  run1 commanded  n=3 median 0.100  range 0.017-0.188
+  run2 measured   n=4 median 1.538  range 0.158-2.051
+  run2 commanded  n=2 median 0.983-1.424
+```
+
+**The arms do not separate.** The direction reverses between run indices -- measured looks
+better on run 1, commanded on run 2 -- and the ranges overlap in both cells, with commanded's
+best run 1 (0.017) matching measured's best (0.016). Nothing here supports an effect in
+either direction.
+
+**What does separate, by 59x**, is run order, pooled across arms:
+
+```
+  run 1 median 0.021 (n=7)      run 2 median 1.234 (n=6)
+```
+
+So the honest reading is that this parameter's effect, if any, is small enough to be
+invisible against an effect 59 times larger. That specifically does **not** support this
+issue's original claim that measured feedback destabilises lateral control, and equally does
+not support the converse. The default stays `false` because it is the historical behaviour,
+not because it is better.
+
+At n = 4 and 3 stacks per arm a modest effect cannot be excluded. Anyone resuming should
+hold run index fixed and raise n, and should expect to need many more runs than this to see
+anything under the run-order effect. The lesson from
+[016](016-the-ego-stack-degrades-after-its-first-run.md) applies here too: the run-order
+effect is the thing worth explaining, and it is where the measured ~478 ms command-to-wheel
+lag points.
+
+### Trials lost, and why
+
+Twelve of 25 trials produced no data. Two stacks never localized at all, and the run
+stopped early when another user's job on this shared host grew to 83 GB of its 125 GB and
+Autoware stacks stopped coming up. Those rows are recorded as `no-data` and excluded rather
+than scored as zeros.
