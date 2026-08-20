@@ -912,3 +912,75 @@ The likely candidate given the pose: the ego sits at 54 deg across a lane whose 
 neighbour is Shoulder, so at that angle its nose is plausibly into the kerb. Testing that
 means recording the collision sensor and the wheel contact state, not more control-side
 measurement.
+
+## What holds the ego is vegetation, and the pin is a consequence (2026-08-20)
+
+The previous section reasoned that something must be physically holding the car, since acb
+engages the hand brake at standstill precisely because a stopped CARLA vehicle idle-creeps
+at zero throttle, and this one had 6.7% throttle and moved 1 mm in 83 s. The kerb was the
+guess. A collision sensor and a bounding-box footprint check, run on every run of a hunt,
+answer it directly.
+
+Across eleven runs, collisions separate cleanly from outcomes: nine runs with 0 events,
+one partial run with 1, and the stalling run with **1323 events, every one against
+`static.vegetation`**. First contact at t+18.0 s, where the speed drops from 0.83 to 0.02
+m/s within 0.4 s, and contact continues to t+229.4 -- 1312 of 2385 samples are touching it.
+
+The footprint says the same thing from the other side. While pinned, all 896 samples read:
+
+```
+  front-left  corner: Sidewalk        rear-left  corner: Driving
+  front-right corner: Sidewalk        rear-right corner: Driving
+```
+
+**The ego is diagonally off the road with its nose on the pavement, jammed against
+vegetation.** Over the last 80 s it travels 0.10 m while pushing with a mean 0.033 throttle
+and a mean acceleration magnitude of 0.029 m/s2.
+
+So the guess was right in substance and wrong in detail: the obstruction is real, but it is
+vegetation on the sidewalk rather than the kerb face. More importantly this settles what the
+pin *is*. It is not a control failure at all -- it is the ordinary consequence of having
+already left the road. The failure to explain remains the lateral behaviour that steers the
+ego off the drivable surface in the first place, which happens well before contact.
+
+### Correction: the stopping position is not fixed
+
+An earlier section made much of two catches stopping within 3 cm of each other and argued
+the repeatability came from an identical start replaying the same transient. With four
+catches the stopping points are 297.90, 297.93, 294.6 and 289.2. The first two agreeing was
+a coincidence of those two runs; there is no fixed stopping place, and the reasoning built
+on it does not stand. What is consistent is the shape -- a growing heading oscillation that
+ends with the car off the road -- not where it ends.
+
+## The first run drives, the second one fails (2026-08-20)
+
+The hunt above was not designed to test this issue's central claim, but it produced the
+cleanest evidence for it so far, because the harness restarts the ego stack after every
+run that fails to engage and so alternates fresh and aged stacks by itself.
+
+```
+  run  1  first on its stack   DROVE               run  2  second  NEVER_MOVED
+  run  3  first                void, CARLA crashed run  4  first usable  DROVE
+  run  5  second               NEVER_MOVED         run  6  first   DROVE
+  run  7  second               NEVER_MOVED         run  8  first   DROVE
+  run  9  second               NEVER_MOVED         run 10  first   drove 96 m
+  run 11  second               STALL_OUT_OF_LANE
+```
+
+**Every first run on a stack drove; every second run failed. Five out of five each way.**
+Run 3 is void -- CARLA segfaulted during it -- so run 4 is counted as the first usable run
+on that stack.
+
+This is a far better reproducer than the roughly 3-in-33 rate this issue has been working
+with. It also means the two failure modes are the same phenomenon wearing different faces:
+four second-runs never engaged at all and one drove off the road, and nothing distinguishes
+them but which way the degraded stack fails that time.
+
+Worth noting the never-engage failures are not a silent Autoware: the control probe reports
+`STREAM_LIVE` at about 10 Hz through a run where the ego never leaves its spawn point.
+
+### CARLA segfaults on long uptime
+
+Separately, CARLA died with `Signal=11` and dumped core after 19 hours, and systemd restarted
+it -- restart counter at 3. Not memory pressure. It cost one run of this hunt and it is worth
+knowing before attributing any long-session flakiness to the bridge or to Autoware.
