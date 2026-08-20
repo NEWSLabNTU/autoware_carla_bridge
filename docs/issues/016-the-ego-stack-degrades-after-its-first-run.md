@@ -3,7 +3,7 @@
 **Severity**: High
 **Component**: lateral control path (`vehicle_control.rs` steer scale, MPC feedback); run-order
 dependence still unexplained
-**Status**: Open
+**Status**: Cause identified and fixed (orphaned interpreter); mechanism still open
 
 ## The pattern, as far as it goes
 
@@ -606,6 +606,58 @@ than by making concurrent interpreters safe.
 
 Four pairs is also a modest n for a stochastic failure. It is enough to act on and not enough
 to close the issue.
+
+## One stack, eight consecutive runs, eight passes (2026-08-21)
+
+If the orphaned interpreter was the whole story, a stack should now run indefinitely --
+which is what the project actually needs, and a sharper test than pairs. One fresh ego
+stack, eight scenario runs on it, nothing touched in between:
+
+```
+run  verdict  cleared   xt_sd   xt_max
+1    PASS     0         0.017   0.050
+2    PASS     2         0.130   0.370
+3    PASS     2         0.030   0.090
+4    PASS     2         0.016   0.040
+5    PASS     2         0.109   0.430
+6    PASS     2         0.121   0.500
+7    PASS     2         0.138   0.560
+8    PASS     2         0.017   0.040
+```
+
+**Eight for eight.** Under the old behaviour this stack fails at run 2 and stays failed; the
+historical rate for run 2 and later was 2 passes in 13. The `cleared` column is the
+mechanism in miniature -- nothing to clear on a fresh stack, exactly two orphans waiting
+before every subsequent run.
+
+Lateral tracking quality was recorded per run rather than pass/fail alone, because a stack
+degrading gradually would show there long before a verdict flipped. It does not degrade:
+median `xt_sd` 0.070, range 0.016 to 0.138, against 0.98 to 2.05 on the historical failing
+runs. An order of magnitude clear of the failure band.
+
+Two honest caveats. Runs 5 through 7 rise monotonically -- 0.109, 0.121, 0.138 -- and runs
+1-4 median 0.024 against runs 5-8 median 0.115, so the later half is looser. Run 8 then
+returns 0.017, the tightest value in the set, which is not what a degrading stack does.
+Call it run-to-run noise with a wide spread rather than accumulation, and re-check if a
+longer sequence ever shows the same halves.
+
+### Where that leaves this issue
+
+The cause is identified and fixed at the harness level, and the fix holds across eight
+consecutive runs and four pairs. What remains open is the **mechanism**: nothing here shows
+what a live orphan actually does to the next run -- answers SSv2 requests, republishes
+entity state, contends over `/clock`. Worth pinning down, because the fix works by removing
+the process rather than by making a second interpreter harmless, so anything launching SSv2
+outside `just scenario` is still exposed.
+
+### What this invalidates
+
+Several conclusions in the sections above were measured on second runs, which are now known
+to have been contaminated by a live orphan. They are not necessarily wrong, but they were
+not measuring what they claimed to. The steering A/B in
+[009](009-steering-report-echoes-command.md) is the clearest case: every one of its
+second-run trials had an orphan present, so its null result should be re-established on
+clean runs before it is relied on.
 
 ## Still unexplained
 
