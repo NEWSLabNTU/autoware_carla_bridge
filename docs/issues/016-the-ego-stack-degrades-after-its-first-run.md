@@ -1122,3 +1122,50 @@ MRM condition. n = 1.
 `duplicated_node_checker` reports errors on every run measured, first and second alike --
 867 to 930 times per run. Whatever it is finding, it is there before the stack degrades, so
 it does not explain the split. It may still be worth fixing on its own.
+
+## Localization is not the cause; it is more accurate on the failing run (2026-08-20)
+
+The diff left localization as the lead, on the strength of `ekf_localizer` and
+`pose_instability_detector` errors appearing on a second run and never on a first. An error
+count says a node is unhappy, not that the estimate is wrong, so the test is to put
+Autoware's estimate and CARLA's ground truth in one process and subtract them.
+
+Measured across a pair on one stack, the second run being the one that failed:
+
+```
+                              run 1 (drove 216 m)     run 2 (never moved)
+  position error vs CARLA     mean 0.511  max 3.363   mean 0.080  max 0.099 m
+  yaw error vs CARLA          mean 0.55   max 5.25    mean 0.01   max 0.26 deg
+  kinematic_state rate        9.9 Hz                  9.8 Hz
+  localization diagnostics    all OK                  all OK but three single hits
+```
+
+**Localization on the failing run is an order of magnitude more accurate than on the run
+that worked**: 8 cm against 51 cm, and 0.01 deg against 0.55 deg. The healthy run is the
+one that drifts, reaching 3.4 m of position error while moving. So localization errors do
+not predict the failure, and the estimate cannot be what stops the ego -- it knows where the
+car is to within 8 cm while the car refuses to move.
+
+The obvious caveat is that run 2's ego is stationary, which makes estimation easy, so this
+is not a like-for-like comparison of estimator difficulty. It does not need to be. The claim
+being tested was that the second run's localization is wrong; it is not wrong, it is right
+to 8 cm. What remains untested is localization during the other failure mode, where the ego
+does drive off the road.
+
+That moves the question back upstream. On both never-move failures the commanded velocity
+is exactly +0.000 m/s with a route SET, mode AUTONOMOUS, and trajectories arriving at the
+normal rate -- and in the first pair the trajectory itself carried a maximum speed of
+0.88 m/s against 4.17 on the healthy run. Something is planning a stop, rather than
+something failing to follow a plan. The velocity factors published by the behaviour
+velocity modules name which module inserted a stop, and that is the next thing to read.
+
+### A note on the harness, not the bug
+
+Two attempts at this measurement were lost to ego stacks that never reached
+`Startup complete`, sitting at 86/89 composables with `LoadNode service call timed out after
+120s`. That was not load and not the bridge: the installed play_launch was a hand-patched
+hybrid, with three binaries replaced by hand in August and the original wheel copies left
+beside them. Rebuilding the wheel from the checkout and reinstalling it fixed startup
+immediately -- 3.5 minutes to `Startup complete` where the patched install had wedged for
+15 minutes twice. Worth remembering before blaming a slow ONNX load for a stack that will
+not come up.
