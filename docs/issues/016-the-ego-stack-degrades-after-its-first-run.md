@@ -387,71 +387,59 @@ tracks within a tick, the measured angle and the command are nearly the same sig
 which one is reported barely matters. The null was not a failure to detect an effect -- there
 was very little effect to detect.
 
-## The command path is not tick-synchronised (2026-08-20)
+## The command path IS tick-synchronised, and the earlier finding was a probe artifact
 
-With the actuator exonerated, the remaining delay had to be in the pipeline. Measuring it
-through a live scenario means measuring whatever input Autoware happened to produce, so
-`scripts/probe_bridge_latency.py` injects a known square wave on
-`/control/command/control_cmd` instead, drives the ticks itself at the production 10 Hz
-(`fixed_delta_seconds=0.1`, which is what the adapter sets -- not the 20 Hz assumed
-elsewhere), and records the physical wheel angle every tick. `vehicle_cmd_gate` is stopped
-first so nothing else publishes on the topic.
+An earlier version of this section reported that the command-to-wheel delay varied between
+1 and 10 ticks across identical runs and concluded the control path was not synchronised
+with the tick. **That was wrong, and the cause was the probe.**
 
-**The floor is one tick.** `apply_control` takes effect on the next tick, so 100 ms is
-inherent and not a defect.
+`scripts/probe_bridge_latency.py` injects a square wave on `/control/command/control_cmd`,
+drives the ticks itself, and records the wheel angle per tick. Its first version ticked in a
+tight loop with no wall-clock pacing, so the simulation advanced far faster than real time
+and acb_bridge's loop was starved of the tick period it gets in production. The varying
+delay measured the starvation, not the bridge.
 
-**The actual delay varies by an order of magnitude between runs.** Three runs of the
-identical probe, delay in ticks at each command transition:
-
-```
-run A   1  4  4  5  8  10 10 10 10 10 10     plateau 10 ticks = 1000 ms
-run B   1  2  3  3  3  3  3  3  3  3  3      plateau  3 ticks =  300 ms
-run C   1  1  1  1  1  1  1                  plateau  1 tick  =  100 ms
-```
-
-Same code, same vehicle, same signal, minutes apart.
-
-### It is a race, not a queue
-
-Run A's climb to exactly 10 -- the rclrs default `KeepLast` depth, which `.reliable()` does
-not change -- looked like a subscription queue filling. It is not.
-`scripts/probe_queue_verify.py` tests that directly: publish every tick, stop for 40 ticks to
-let any backlog drain, then publish every fourth tick, well below any plausible consumption
-rate. A filling queue would climb in the first phase and stay small in the third.
+Production runs at `fixed_delta_seconds=0.1` with SSv2 ticking at real time -- RTF 0.998,
+measured. Pacing the probe's ticks to wall clock to match:
 
 ```
-phase 1  publish every tick    delay 1 tick at every transition
-phase 3  publish every 4th     delay 1 tick at every transition
+                    paced (production, 10 Hz)   unpaced (sim outruns real time)
+callback-apply      1, 1, 1 ticks               1, 3, 10 ticks
 ```
 
-No growth, no drain effect, no dependence on arrival rate. **The queue hypothesis is
-refuted.**
+**One tick, deterministically, every run.** 100 ms, which is the floor: `apply_control`
+takes effect at the next tick and cannot do better. There is no tick-synchronisation defect
+and nothing here to fix.
 
-What is left is a race. Nothing synchronises the control path with the tick: acb_bridge
-receives a command on its executor and calls `apply_control` whenever it is scheduled, while
-whoever owns the tick -- SSv2 in production, the probe here -- ticks on its own schedule. If
-the apply lands after the tick, the command waits for the next one, and how many ticks it
-slips by is a scheduling outcome. That is why the plateau moves between runs while the floor
-stays at one tick.
+### A fix was written, measured, and reverted
 
-A ~478 ms production measurement is an unremarkable sample of that distribution.
+The obvious change -- have the subscription callback store the newest command and apply it
+from the tick loop instead -- was implemented and tested. It is architecturally tidier, takes
+an RPC out of the callback and halves the RPC count, since commands arrive at 20 Hz while
+the simulation ticks at 10 Hz.
 
-### Why this matters for the lateral loop
+It also made things worse:
 
-The controller is told its command was applied instantly (`report_measured_steering=false`)
-while the vehicle acts on an intention that is one to ten ticks old, and the amount varies
-within and between runs. Delay that changes under load is much harder for a controller than
-delay that is merely large, because no fixed compensation is right.
+```
+                    paced (production)          unpaced (sim outruns real time)
+callback-apply      1, 1, 1 ticks               1, 3, 10 ticks
+tick-loop apply     1, 1, 1 ticks               10, 10, 11 ticks
+```
 
-Whether this is *the* cause of the departures is not established here. What is established is
-that the delay exists, is ours rather than CARLA's, and is variable.
+No difference at production pacing, and consistently pinned at the worst end when the
+simulation outruns real time, because binding application to the bridge's own loop lets it
+fall behind while the callback keeps up. A change with no measured benefit and a measured
+regression is not worth carrying, so it was reverted. The patch is kept out of tree.
 
-### Also observed
+### The lesson, which cost the most here
 
-The probe logs `New subscription discovered ... requesting incompatible QoS. Last
-incompatible policy: DURABILITY`. Some subscriber on `/control/command/control_cmd` wants
-`TRANSIENT_LOCAL` and receives nothing from a `VOLATILE` publisher. Not chased here, and not
-necessarily a defect, but worth knowing when reasoning about who sees what on that topic.
+A probe that drives the clock has to drive it at the rate the system really runs at.
+Ticking as fast as the RPCs allow measures a regime the software never sees, and it does so
+convincingly -- the numbers were stable, repeatable, and completely misleading. Any future
+tick-driving probe in this repo should pace to wall clock and say so.
+
+So the ~478 ms figure remains unexplained by anything measured so far, and the actuator,
+the queue and the tick synchronisation are all now excluded as candidates.
 
 ## Still unexplained
 

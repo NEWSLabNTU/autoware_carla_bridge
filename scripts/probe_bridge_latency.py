@@ -47,6 +47,18 @@ def wheel_rad():
     fr = v.get_wheel_steer_angle(carla.VehicleWheelLocation.FR_Wheel)
     return -math.radians(0.5 * (fl + fr))     # CARLA right-positive -> ROS left-positive
 
+_next = [time.time()]
+
+def _pace():
+    """Hold the tick rate to wall time, as SSv2 does in production (RTF ~1.0)."""
+    _next[0] += DT
+    slack = _next[0] - time.time()
+    if slack > 0:
+        time.sleep(slack)
+    else:
+        _next[0] = time.time()
+
+
 def publish(angle):
     m = Control()
     now = n.get_clock().now().to_msg()
@@ -60,7 +72,7 @@ def publish(angle):
 
 try:
     for _ in range(10):
-        publish(0.0); world.tick()
+        publish(0.0); world.tick(); _pace()
     cmds, meas = [], []
     tick = 0
     for cyc in range(CYCLES):
@@ -70,6 +82,7 @@ try:
                 publish(target)
                 rclpy.spin_once(n, timeout_sec=0.001)
                 world.tick()
+                _pace()
                 cmds.append(target)
                 meas.append(wheel_rad())
                 tick += 1
