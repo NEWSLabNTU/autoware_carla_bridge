@@ -648,3 +648,65 @@ samples and no usable ones because the ego never engaged and sat at its spawn po
 whole run -- the probe now waits for motion before sampling and reports moving and
 steering counts separately, so a null is interpretable rather than silent. That is the
 same never-engaged failure seen as `min_x=320` in the earlier A/B, and it cost a full run.
+
+## Two stalls caught on tape, and they are the same stall (2026-08-20)
+
+The yaw measurement above answered the healthy case and left one question open: does the
+rotation stay wheel-explained while the ego is actually diverging? Catching a stall with
+the trace attached needed a harness that keeps one aged stack and cycles the scenario on
+it, rather than restarting between runs and pinning stack age at "fresh".
+
+Two stalls were caught, one before and one after the CARLA sync-mode fix in csb. They are
+near enough to identical that they are clearly one phenomenon:
+
+```
+              distance   final x   head_err   lane_off   max speed   yaw ratio
+  catch 1      22.1 m     297.90    +35.8       0.35      2.67 m/s     0.927
+  catch 2      22.1 m     297.93    +34.0       0.38      2.40 m/s     0.934
+  healthy run     --      104.3        --         --         --        0.921
+```
+
+**The rotation is wheel-explained during the divergence too.** 0.927 and 0.934 against
+0.921 on a run that drove the whole route: the same ratio, inside the failure and outside
+it. No position jumps in either. Together with the earlier healthy-run measurement this
+closes the external-torque question in both directions -- kerb contact, a second writer,
+a teleport. Whatever the ego does, it does by steering.
+
+**It is not the road.** Both runs stop within 3 cm of each other, which looks like geometry
+until the map is checked: from x=320 to x=280 the ego is on road 10, lane 1, no junction,
+lane width a constant 4.00 m, lane yaw a constant 180.0 deg. There is nothing there. The
+repeatability comes from the start condition being identical, so the same transient plays
+out the same way.
+
+**The shape is a growing heading oscillation, not a drift.** Heading error swings roughly
+0 -> +9 -> -17 -> +18 -> wedged in catch 1, and 0 -> +8 -> -17 -> +25 -> wedged in catch 2,
+while the wheel swings between -0.33 and +0.56 rad. Lateral offset never exceeds 1.4 m in a
+4 m lane: the ego does not leave its lane, it rotates inside it. The steering command peaks
+at 0.53 of an available 1.0, so this is not command saturation.
+
+**What the wedge looks like is worth a separate look.** For the last 120 s of both runs the
+ego is pinned -- x drifts 0.00 m -- while throttle sits latched at exactly 0.067 with no
+brake, and the heading still creeps about 5 deg. A control output that takes one or two
+distinct values across two minutes is not a live controller responding to a stopped car;
+MPC would wind up against a car that will not move. That points at the control command
+having gone stale rather than at lateral control still fighting, which is a different
+failure from the one this issue has been chasing and needs its own measurement: whether
+/control/command/control_cmd is still publishing during the wedge, and whether hand_brake,
+reverse or gear are set.
+
+Note the earlier instrumented stall in this issue recorded planning commanding 4.2 m/s and
+control applying 27% throttle, so control was live in that instance. Either these are two
+distinct failures or the wedge is a late phase of one; the trace above cannot tell which.
+
+### The harness that caught it
+
+Kept for reuse, because the run conditions matter more than the probe:
+
+* one aged stack, scenario cycled on it -- restarting between runs pins age at the
+  condition where the stall is rarest
+* a stall is stopped **out of lane**, not merely stopped: this scenario commands a red
+  light, and a car waiting at a red is stopped and correct. Heading error against the
+  nearest driving lane is what separates them
+* an ego that spawns and never engages is a dud, not a data point; it restarts the stack
+  rather than counting toward anything
+* the trace is written per sample as it goes, so a killed probe still leaves the data
