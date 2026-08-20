@@ -710,3 +710,65 @@ Kept for reuse, because the run conditions matter more than the probe:
 * an ego that spawns and never engages is a dud, not a data point; it restarts the stack
   rather than counting toward anything
 * the trace is written per sample as it goes, so a killed probe still leaves the data
+
+## The command stream is live while the ego sits pinned (2026-08-20)
+
+The previous section flagged a control output that took one or two distinct values across
+two minutes and suggested the command stream might have stopped, with acb holding the last
+value. That is wrong, and the measurement that settles it is direct: record
+`/control/command/control_cmd` on the same wall clock as the CARLA trace, since a stale
+command and a live command for the same value are indistinguishable from the plant.
+
+A third stall was caught with both probes attached. Over the whole 240 s run:
+
+```
+control_cmd messages: 2532 in 240s (10.6 Hz average)
+final gear: DRIVE   control mode: AUTONOMOUS
+gaps > 1 s: none
+silent 10 s windows: 0/23
+```
+
+And in the wedged window specifically, with the ego pinned at x = 294.65 and never
+exceeding 0.035 m/s:
+
+```
+t+140..240s, 1086 msgs (10.9 Hz)
+  commanded velocity  mean +0.214  range +0.000..+0.288 m/s
+  commanded accel     mean -0.053  range -2.011..+0.207 m/s2
+  commanded steer     mean +0.0284 range +0.0142..+0.0439 rad, 140 distinct values
+```
+
+**Autoware is actively commanding throughout.** It asks the ego to creep forward at about
+0.2 m/s, never commands reverse, never stops publishing, and emits 140 distinct steering
+values in the window -- that is a controller running, not a latched output. The near
+constant applied throttle seen in the first two catches is the controller's own output at
+a standstill, not a frozen stream.
+
+So the failure is not a lost command. It is that a commanded 0.2 m/s produces 0.035 m/s:
+roughly 6.7% throttle, with the ego sitting at about 54 deg to its lane, does not move the
+car. The planner has already backed its target down to a crawl by this point, so nothing
+in the loop asks hard enough to break the car out of it.
+
+Worth separating from the earlier instrumented stall in this issue, where planning
+commanded 4.2 m/s and control applied 27% throttle. Those are different regimes, so either
+there are two failures or the crawl is the late phase of one.
+
+### Two corrections to earlier numbers here
+
+**`max_head_err` of 180 deg is an artefact, not a spin.** Heading error is measured against
+the nearest driving lane, and once the ego rotates past about 90 deg the nearest lane can
+be the opposing one, so the error jumps to near 180 with the ego having turned only a
+degree. In this trace it goes -31.5 to +149.7 while the yaw moves 148.5 to 149.7. The same
+applies to the 130.5 and 131.6 figures reported for healthy runs, which are junction turns
+matching an adjacent lane. The probe now folds the error onto the lane axis. Nothing else
+in this issue rests on those numbers -- the stall detector uses the same value but at a
+20 deg threshold, well below where the flip happens.
+
+**The excursion does leave the lane, unlike the first two catches.** Lateral offset reaches
+1.99 m in a 4.00 m lane, so the ego is at the lane edge, and y swings 54.5 to 57.8 and back
+while the commanded steering swings between -0.70 and +0.48 rad. The first two catches
+stayed within 1.4 m and rotated in place.
+
+**Still open**: the hand brake is engaged in 4% of samples in this run, first at t+0 before
+the ego is even engaged and last at t+156.7, so it appears intermittently inside the wedged
+window. It is not a clean explanation for the pin and it is not ruled out either.
