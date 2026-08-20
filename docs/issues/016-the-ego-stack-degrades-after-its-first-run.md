@@ -555,6 +555,58 @@ Lower command latency is worth having on its own, but the ego leaves the drivabl
 before it is pinned, and the vegetation contact above is a consequence of that. Nothing here
 explains the lateral behaviour that steers it off the road.
 
+## The previous run's orphaned interpreter is what breaks the next one (2026-08-20)
+
+Every harness that produced this issue's data killed the scenario's `play_launch` between
+runs -- `pkill -f "csb_launch carla_scenario.launch.xml"` or equivalent -- which does **not**
+reap its child `openscenario_interpreter_node`. The child survived as an orphan, holding the
+`/simulation` namespace and its simulator connection, and the next run started alongside it.
+
+So every run 2 in this issue's history ran with run 1's interpreter still alive. Run 1 never
+had a predecessor. That is the split.
+
+`just scenario` now clears them first (csb `9d2fa71`). Re-running the same experiment --
+one fresh ego stack, two runs on it, nothing else changed:
+
+```
+pair  run  verdict  stale processes cleared
+1     1    PASS     0
+1     2    PASS     2
+2     1    PASS     0
+2     2    PASS     2
+3     1    PASS     0
+3     2    PASS     2
+```
+
+Plus one earlier pair on the same fix, also PASS/PASS. **Four run 2s, four passes**, against
+2 of 13 historically and a split that reproduced 7 for 7 in dedicated pairs. Under the
+historical failure rate that is a 0.05% coincidence. The `cleared` column is the tell: a
+fresh stack has nothing to clear, and every second run had exactly two orphans waiting.
+
+### Why this fits everything else in this issue
+
+- **Perfect run-order dependence.** Run 1 has no predecessor; every later run does.
+- **Only a stack restart cured it.** A restart kills the orphans as collateral, which is why
+  restarting looked like the remedy and why "stack age" looked like the variable.
+- **Nothing downstream was ever wrong.** CARLA, the actuator, localization, path shape, the
+  validators and the steering report were each measured and each came back clean, because
+  the contamination sits at the SSv2/ROS-graph level above all of them. Every section above
+  that ruled something out was ruling out the wrong layer.
+- **Two unstable failure signatures.** A second interpreter contending over entity state and
+  the clock has no reason to fail the same way twice, which is why a commanded standstill and
+  a drive off the road both appeared.
+
+### What is not established
+
+The *mechanism* by which a live orphan breaks the next run. Correlation between clearing it
+and passing is strong, but nothing here shows what the orphan actually does -- whether it
+answers SSv2 requests, republishes entity state, fights over `/clock`, or something else.
+That is worth pinning down, because the fix currently works by removing the process rather
+than by making concurrent interpreters safe.
+
+Four pairs is also a modest n for a stochastic failure. It is enough to act on and not enough
+to close the issue.
+
 ## Still unexplained
 
 **Why it depends on run order.** Nothing above explains why a freshly restarted stack
