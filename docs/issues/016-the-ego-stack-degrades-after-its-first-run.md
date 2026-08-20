@@ -487,6 +487,52 @@ ended -- and the ego was driving nearly straight, so the command spanned only -0
 +0.023 rad. Small, smooth signals are the hardest case for exactly the estimator problem
 described above, which is why C, a model-free edge measurement, matters more than A here.
 
+## Sub-stepping cuts the command lag from ~200 ms to ~60 ms (2026-08-20)
+
+The ~200 ms above is mostly the frame quantum: Autoware publishes control at 20 Hz on its
+own clock, SSv2 asks for a 0.1 s frame, and nothing synchronises them, so a command waits up
+to a full step before any tick can act on it.
+
+csb can divide that without touching the scenario's timeline. `substeps` (csb
+`bridge_config.yaml`) splits the SSv2 frame into N CARLA ticks at `step_time / N`, so a frame
+still advances by `step_time` while control is picked up N times as often. Measured on a
+live run at `substeps: 2`, against the same three estimators as before:
+
+```
+                                      substeps 1      substeps 2
+A. raw signals (original method)         280 ms          60 ms
+B. derivatives (high-passed)             200 ms          60 ms
+C. edge timing at sharp steps       median 200 ms   median 20 ms (p90 100)
+```
+
+All three agree and the improvement is larger than the halving predicted, because both
+components halve: the phase wait and the observation artifact, since a client reading wheel
+angle now sees a 50 ms tick rather than a 100 ms one.
+
+The scenario passed on that run. That is **one run**, and this issue's whole history says a
+single passing run means very little -- it is reported as "did not break it", not as a fix.
+
+### What it costs, and what is unverified
+
+Every tick fires sensors configured to publish per frame rather than on a timer. The ego
+LiDAR is one (`sensor_tick: 0.0`), so its point clouds double to 20 Hz. That suits the sensor
+-- `rotation_frequency` is 20 Hz, so at one substep each scan sweeps two rotations and at two
+it sweeps exactly one, which is what its own config comment asks for -- but it doubles the
+point cloud rate into Autoware, and physics runs at the finer delta.
+
+**The doubled LiDAR rate was not measured live**: the topic rate check ran after the ego had
+despawned and returned nothing. Before raising the default, confirm the perception and
+localization rates Autoware actually sees, and run enough scenarios to say something about
+pass rate.
+
+`substeps` therefore defaults to **1**, exactly the previous behaviour.
+
+### It does not address the departure
+
+Lower command latency is worth having on its own, but the ego leaves the drivable surface
+before it is pinned, and the vegetation contact above is a consequence of that. Nothing here
+explains the lateral behaviour that steers it off the road.
+
 ## Still unexplained
 
 **Why it depends on run order.** Nothing above explains why a freshly restarted stack
