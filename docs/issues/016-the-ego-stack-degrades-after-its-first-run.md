@@ -772,3 +772,43 @@ stayed within 1.4 m and rotated in place.
 **Still open**: the hand brake is engaged in 4% of samples in this run, first at t+0 before
 the ego is even engaged and last at t+156.7, so it appears intermittently inside the wedged
 window. It is not a clean explanation for the pin and it is not ruled out either.
+
+## The hand brake is not what pins the ego (2026-08-20)
+
+Left open above: the hand brake appears inside the wedged window, so it might be what holds
+the car. It is not, and the trace already caught the moment that shows it.
+
+The hand brake fires in four short episodes, and in every one the speed is exactly 0.000
+and the throttle exactly 0.000:
+
+```
+  t+  0.0..  1.7s    t+ 78.5.. 82.4s    t+145.0..147.2s    t+150.8..156.7s
+```
+
+The last one ends at t+156.7. The run continues to t+240, and across those remaining 83 s:
+
+```
+  hand_brake ever on: False
+  x  294.65 -> 294.65   (drift 0.001 m)
+  throttle mean 0.067   brake max 0.000   reverse: never
+  speed max 0.035 m/s   head_err +53.2 -> +54.5
+```
+
+**The ego stays pinned for 83 s with the hand brake off and throttle applied.** Whatever
+holds it is still holding it when the hand brake is not there, so the hand brake cannot be
+the cause. It is a consequence of stopping, not a reason for it, which matches what the
+code does: `vehicle_control.rs` engages it when the gear is PARK or when commanded velocity
+and acceleration are both within 0.01 of zero -- a commanded standstill hold, added because
+CARLA's automatic transmission idle-creeps at zero throttle.
+
+That comment is also what makes the remaining behaviour strange, and it is the thread worth
+pulling next. acb engages the hand brake precisely because a stopped CARLA vehicle *creeps
+to about 1 m/s on its own at zero throttle and zero brake*. Here the vehicle has 6.7%
+throttle, no brake, no hand brake, and moves 1 mm in 83 s. It is not that the command is too
+weak to overcome standstill friction: by acb's own measurement this vehicle should be
+creeping forward with no command at all. Something is physically holding it.
+
+The likely candidate given the pose: the ego sits at 54 deg across a lane whose right
+neighbour is Shoulder, so at that angle its nose is plausibly into the kerb. Testing that
+means recording the collision sensor and the wheel contact state, not more control-side
+measurement.
