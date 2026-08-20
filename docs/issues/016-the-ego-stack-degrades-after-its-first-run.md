@@ -314,6 +314,79 @@ The entire difference is the ego's heading: within 2 degrees of 180 when it pass
 **So planning is exonerated and this is the lateral control loop**, which is where the
 measured ~478 ms command-to-wheel lag points. The two independent lines of evidence agree.
 
+## What CARLA's steering actuator actually does (2026-08-20)
+
+The ~478 ms command-to-wheel lag measured above is real as a correlation, but the number
+alone does not say what produces it, and the candidates call for different fixes. Measured
+directly against CARLA with no ROS in the path (`scripts/probe_steer_lag.py`,
+`probe_steer_inputrate.py`, `probe_steer_tickrate.py`):
+
+**It is a rate limit, not a first-order lag.** Step responses at four sizes:
+
+```
+ step   final   t63    t95   peak_rate
+ 0.10    6.78   50ms   50ms      0 deg/s
+ 0.20   13.18   50ms  100ms     95 deg/s
+ 0.40   25.16  100ms  200ms    157 deg/s
+ 0.80   47.56  200ms  350ms    157 deg/s
+```
+
+`t63` grows with step size and the peak rate saturates. A first-order lag would hold `t63`
+constant regardless of step size.
+
+**The limit is on the normalized steer input, at exactly 0.125 per tick at 20 Hz.**
+Inverting the Ackermann map turns the slightly-decaying wheel increments into a dead
+constant:
+
+```
+tick   wheel_deg   implied_cmd   d_cmd
+   1        8.41        0.1250  0.1250
+   4       30.88        0.5000  0.1250
+   8       58.71        1.0000  0.1250
+```
+
+**It is per second, not per tick**, so the simulation step size is not a lever:
+
+```
+  dt(s)    Hz  ticks_to_full  ms_to_full  d_cmd/tick  d_cmd/s
+  0.100    10              4         400      0.2500     2.50
+  0.050    20              8         400      0.1250     2.50
+  0.025    40             16         400      0.0625     2.50
+```
+
+So CARLA slews the steer input at a constant **2.5 units/s**: full lock in 400 ms, and any
+commanded change in `|delta_cmd| / 2.5` seconds. Small corrections complete within a single
+tick and are effectively instantaneous.
+
+### This exonerates the actuator
+
+2.5 units/s is **147-169 deg/s** of tire angle, depending where on the Ackermann curve it
+sits. Autoware limits itself well below that:
+
+```
+mpc.param.yaml         steer_rate_lim_dps_list_by_curvature   40, 50, 60 deg/s
+mpc.param.yaml         steer_rate_lim_dps_list_by_velocity    60, 50, 40 deg/s
+vehicle_cmd_gate       steer_rate_lim_for_steer_cmd           1.0 rad/s = 57 deg/s
+```
+
+At 20 Hz, Autoware's own 60 deg/s ceiling is 3 deg per tick, or about 0.044 input units --
+roughly a third of the 0.125 CARLA allows per tick. **CARLA's rate limit therefore never
+binds on anything Autoware commands**, and the actuator tracks within one tick.
+
+So the 478 ms cannot be actuator dynamics. Whatever produces that correlation shift lives in
+the pipeline -- ROS transport, the bridge's own apply path, tick alignment between SSv2's
+ticking and the control stream, or the measurement itself, which cross-correlated two
+asynchronously sampled streams at ~60 ms against a 100 ms step. That is where to look next,
+and it is a different search than "the plant is slow".
+
+### It also explains the steering A/B null
+
+[009](009-steering-report-echoes-command.md)'s A/B found no difference between reporting the
+measured wheel angle and echoing the command. That is consistent with this: if the actuator
+tracks within a tick, the measured angle and the command are nearly the same signal, so
+which one is reported barely matters. The null was not a failure to detect an effect -- there
+was very little effect to detect.
+
 ## Still unexplained
 
 **Why it depends on run order.** Nothing above explains why a freshly restarted stack
