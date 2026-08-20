@@ -387,6 +387,72 @@ tracks within a tick, the measured angle and the command are nearly the same sig
 which one is reported barely matters. The null was not a failure to detect an effect -- there
 was very little effect to detect.
 
+## The command path is not tick-synchronised (2026-08-20)
+
+With the actuator exonerated, the remaining delay had to be in the pipeline. Measuring it
+through a live scenario means measuring whatever input Autoware happened to produce, so
+`scripts/probe_bridge_latency.py` injects a known square wave on
+`/control/command/control_cmd` instead, drives the ticks itself at the production 10 Hz
+(`fixed_delta_seconds=0.1`, which is what the adapter sets -- not the 20 Hz assumed
+elsewhere), and records the physical wheel angle every tick. `vehicle_cmd_gate` is stopped
+first so nothing else publishes on the topic.
+
+**The floor is one tick.** `apply_control` takes effect on the next tick, so 100 ms is
+inherent and not a defect.
+
+**The actual delay varies by an order of magnitude between runs.** Three runs of the
+identical probe, delay in ticks at each command transition:
+
+```
+run A   1  4  4  5  8  10 10 10 10 10 10     plateau 10 ticks = 1000 ms
+run B   1  2  3  3  3  3  3  3  3  3  3      plateau  3 ticks =  300 ms
+run C   1  1  1  1  1  1  1                  plateau  1 tick  =  100 ms
+```
+
+Same code, same vehicle, same signal, minutes apart.
+
+### It is a race, not a queue
+
+Run A's climb to exactly 10 -- the rclrs default `KeepLast` depth, which `.reliable()` does
+not change -- looked like a subscription queue filling. It is not.
+`scripts/probe_queue_verify.py` tests that directly: publish every tick, stop for 40 ticks to
+let any backlog drain, then publish every fourth tick, well below any plausible consumption
+rate. A filling queue would climb in the first phase and stay small in the third.
+
+```
+phase 1  publish every tick    delay 1 tick at every transition
+phase 3  publish every 4th     delay 1 tick at every transition
+```
+
+No growth, no drain effect, no dependence on arrival rate. **The queue hypothesis is
+refuted.**
+
+What is left is a race. Nothing synchronises the control path with the tick: acb_bridge
+receives a command on its executor and calls `apply_control` whenever it is scheduled, while
+whoever owns the tick -- SSv2 in production, the probe here -- ticks on its own schedule. If
+the apply lands after the tick, the command waits for the next one, and how many ticks it
+slips by is a scheduling outcome. That is why the plateau moves between runs while the floor
+stays at one tick.
+
+A ~478 ms production measurement is an unremarkable sample of that distribution.
+
+### Why this matters for the lateral loop
+
+The controller is told its command was applied instantly (`report_measured_steering=false`)
+while the vehicle acts on an intention that is one to ten ticks old, and the amount varies
+within and between runs. Delay that changes under load is much harder for a controller than
+delay that is merely large, because no fixed compensation is right.
+
+Whether this is *the* cause of the departures is not established here. What is established is
+that the delay exists, is ours rather than CARLA's, and is variable.
+
+### Also observed
+
+The probe logs `New subscription discovered ... requesting incompatible QoS. Last
+incompatible policy: DURABILITY`. Some subscriber on `/control/command/control_cmd` wants
+`TRANSIENT_LOCAL` and receives nothing from a `VOLATILE` publisher. Not chased here, and not
+necessarily a defect, but worth knowing when reasoning about who sees what on that topic.
+
 ## Still unexplained
 
 **Why it depends on run order.** Nothing above explains why a freshly restarted stack
