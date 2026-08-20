@@ -520,10 +520,32 @@ LiDAR is one (`sensor_tick: 0.0`), so its point clouds double to 20 Hz. That sui
 it sweeps exactly one, which is what its own config comment asks for -- but it doubles the
 point cloud rate into Autoware, and physics runs at the finer delta.
 
-**The doubled LiDAR rate was not measured live**: the topic rate check ran after the ego had
-despawned and returned nothing. Before raising the default, confirm the perception and
-localization rates Autoware actually sees, and run enough scenarios to say something about
-pass rate.
+Rates measured during real drives, `substeps` 1 against 2:
+
+```
+/sensing/imu/imu_data                     10.71 -> 20.61 Hz    doubled
+/localization/kinematic_state             10.25 ->  9.95 Hz    unchanged
+/control/command/control_cmd               9.91 -> 10.53 Hz    unchanged
+/perception/object_recognition/objects     5.39 ->  5.35 Hz    unchanged
+```
+
+The IMU confirms the mechanism directly: `sensor_tick: 0.01` is shorter than either tick
+period, so it fires once per tick and doubles with the tick rate. The LiDAR is
+`sensor_tick: 0.0`, so the same applies to it.
+
+What matters more is what did not move. Autoware's own pipeline -- localization, control,
+perception -- runs at the same rates either way, so sub-stepping doubles the raw sensor
+input without destabilising anything downstream.
+
+**The LiDAR rate itself is still not measured directly.** Its topic name is assigned at
+runtime from Autoware's sensor kit, and across several attempts the topic was never present
+in a sampling window -- the ego had either not spawned yet or had already despawned. The IMU
+is a fair proxy for the mechanism but not for the cost, since point clouds are far heavier
+than IMU samples. Treat "point clouds double to 20 Hz" as inferred.
+
+Also note `/control/command/control_cmd` publishes at ~10 Hz, not the 20 Hz assumed earlier
+in this issue: Autoware's control loop runs on simulation time, so it tracks the frame rate.
+The command and the tick are therefore rate-matched and merely out of phase.
 
 `substeps` therefore defaults to **1**, exactly the previous behaviour.
 
