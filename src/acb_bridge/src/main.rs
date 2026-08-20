@@ -756,7 +756,21 @@ fn main() -> Result<()> {
         // reset, the health check would immediately fail on the first tick.
         autoware.reset_heartbeat();
 
-        // Main loop timing: 20Hz (50ms per iteration)
+        // Main loop timing: 20 Hz, so a 50 ms tick timeout.
+        //
+        // This value is deliberately not configurable. It was worth a parameter back when a
+        // timeout meant "CARLA is gone", because then it set how long a paused simulation
+        // could pause before being declared dead -- and 150 ms was far too short, since SSv2
+        // routinely pauses for Autoware's initialize_duration of 120 s. Now that a timeout
+        // classifies as TickOutcome::Idle and only transport errors count toward the
+        // reconnect counter, the timeout no longer decides anything: it only sets how
+        // promptly a new frame is noticed, and how often the idle log ticks over.
+        //
+        // 50 ms is chosen against the frames it waits for. CARLA runs at a 100 ms step in
+        // this workspace, so polling twice per step notices a frame without busy-waiting,
+        // and the residual latency it can add is half a poll -- 25 ms against a 100 ms
+        // frame. A knob here would let someone tune a number that no longer affects
+        // robustness, which is how a parameter becomes a trap.
         const LOOP_RATE_HZ: u64 = 20;
         let loop_duration = Duration::from_millis(1000 / LOOP_RATE_HZ);
 

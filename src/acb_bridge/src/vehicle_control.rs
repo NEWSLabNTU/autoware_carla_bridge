@@ -434,18 +434,19 @@ impl VehicleControlBridge {
             return SteerGeometry::default();
         }
 
-        // Track and wheelbase from the wheel positions. Only their ratio is used, so
-        // CARLA's centimetres need no conversion.
+        // Track and wheelbase from the wheel offsets, which carla-rust exposes as
+        // `offset` from the vehicle origin. Only their ratio is used, so whatever unit
+        // CARLA reports cancels and no conversion is needed.
         let track_over_wheelbase = match (steered.as_slice(), fixed.as_slice()) {
             ([a, b], [c, d]) => {
-                let track: f32 = (a.position.x - b.position.x).hypot(a.position.y - b.position.y);
+                let track: f32 = (a.offset.x - b.offset.x).hypot(a.offset.y - b.offset.y);
                 let front = (
-                    0.5 * (a.position.x + b.position.x),
-                    0.5 * (a.position.y + b.position.y),
+                    0.5 * (a.offset.x + b.offset.x),
+                    0.5 * (a.offset.y + b.offset.y),
                 );
                 let rear = (
-                    0.5 * (c.position.x + d.position.x),
-                    0.5 * (c.position.y + d.position.y),
+                    0.5 * (c.offset.x + d.offset.x),
+                    0.5 * (c.offset.y + d.offset.y),
                 );
                 let wheelbase: f32 = (front.0 - rear.0).hypot(front.1 - rear.1);
                 if wheelbase > 0.0 && track > 0.0 {
