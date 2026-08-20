@@ -1169,3 +1169,48 @@ beside them. Rebuilding the wheel from the checkout and reinstalling it fixed st
 immediately -- 3.5 minutes to `Startup complete` where the patched install had wedged for
 15 minutes twice. Worth remembering before blaming a slow ONNX load for a stack that will
 not come up.
+
+## Correction: the first run is not immune (2026-08-20)
+
+Two sections above report the first-run/second-run split as five out of five each way, and
+then as seven for seven. A further pair broke it: on a freshly started stack, the **first**
+run drove 120 m and then stalled off the road, and the second run stalled at 28 m. The
+claim that a fresh stack always drives is wrong.
+
+The corrected tally across every pair and hunt run recorded here:
+
+```
+  first run on a stack    8 drove, 1 failed   (8/9)
+  second run on a stack   0 drove, 9 failed   (9/9)
+```
+
+The effect is still large and still worth building on -- a second run has failed every single
+time it has been tried -- but it is a strong tendency on the first run, not immunity, and it
+matches the roughly 3-in-33 rate this issue originally measured on fresh stacks. Any
+experiment that treats a fresh run as a guaranteed control will occasionally be wrong, so
+the control has to be measured rather than assumed.
+
+## Nothing claims responsibility for the stop (2026-08-20)
+
+With localization ruled out, the remaining reading was that something plans a stop: the
+never-move runs command exactly +0.000 m/s, and one of them carried a trajectory whose
+maximum speed was 0.88 m/s. Velocity factors are Autoware's own account of why it is
+slowing down, naming the behaviour module responsible.
+
+Across a pair, the only factor either run ever reports is:
+
+```
+  run 1   991/1000 msgs   traffic-signal/APPROACHING   distance 94.5..214.8 m
+  run 2  1001/1001 msgs   traffic-signal/APPROACHING   distance 95.4..214.8 m
+```
+
+That is the red light this scenario commands at Init, sitting 95 to 215 m ahead. It is
+expected, and it is not what stops a car that wedges 28 m from its spawn point. **No
+behaviour module claims to be stopping the ego.** In this pair the trajectory head never
+asks for zero either -- its minimum target velocity is 0.250 m/s on the failing run.
+
+The caveat that matters: both runs in this pair failed by driving off the road, not by
+refusing to move. So this measures the off-road variant and leaves the never-move variant
+unexplained -- the one where commanded velocity really is +0.000 and the trajectory carried
+0.88 m/s. The same probe needs to catch a never-move run before that variant can be
+attributed, and a run that fails one way cannot be used to explain the other.
