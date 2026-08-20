@@ -984,3 +984,73 @@ Worth noting the never-engage failures are not a silent Autoware: the control pr
 Separately, CARLA died with `Signal=11` and dumped core after 19 hours, and systemd restarted
 it -- restart counter at 3. Not memory pressure. It cost one run of this hunt and it is worth
 knowing before attributing any long-session flakiness to the bridge or to Autoware.
+
+## Diffing a fresh stack against the same stack's second run (2026-08-20)
+
+With the first-run/second-run split reproducing deterministically, the experiment is cheap:
+start one ego stack, run the scenario twice without touching the stack in between, and
+record the same signals on both. Two pairs were run. The split held both times, which puts
+it at seven for seven counting the hunt.
+
+Both pairs agree on what is *not* different. Operation mode reaches AUTONOMOUS, routing
+reaches SET, and localization reaches INITIALIZED on the second run exactly as on the
+first. Trajectories keep arriving at roughly the same rate. So the second run is not a
+stack that failed to start, failed to accept a route, or stopped planning.
+
+**Pair A** -- second run never moved:
+
+```
+                        run 1 (fresh)        run 2 (same stack)
+  commanded velocity    max +4.457           max +0.000, mean +0.000
+  trajectory points     min 142 max 172      min 11  max 170
+  trajectory max speed  4.17 m/s             0.88 m/s
+  ego speed max         5.31 m/s             0.00 m/s
+  new errors            --                   planning_validator:
+                                               trajectory_validation_distance_deviation x2042
+                                               ..._longitudinal_distance_deviation x2042
+                                             control_validator: ..._yaw_deviation x1980
+```
+
+**Pair B** -- second run drove 29 m and wedged:
+
+```
+                        run 1 (fresh)        run 2 (same stack)
+  commanded velocity    max +4.280           max +4.170, mean +0.142
+  trajectory max speed  4.17 m/s             4.17 m/s
+  control_cmd rate      9.8 Hz               17.7 Hz
+  new errors            --                   localization: ekf_localizer x548
+                                             localization: pose_instability_detector x6
+```
+
+### A hypothesis this refutes
+
+The obvious reading of pair A is that the stack keeps the previous run's route while SSv2
+respawns the ego at the start line, so the trajectory sits 200 m away and the validator
+rejects it for distance deviation. Pair B says no. Its trajectory spans (295.0, -55.5) to
+(260.6, -55.5) with the ego at (290.6, -54.7), and the largest gap between the ego and the
+nearest trajectory point across the whole run is 2.5 m. The trajectory tracks the ego. It
+is not stale and it is not somewhere else.
+
+### What actually separates the two runs
+
+The failure mode is not stable between pairs -- once a commanded standstill, once ordinary
+looking commands and a drive off the road -- so a single mechanism is not yet established.
+Two things do stand out and neither appears on a first run:
+
+* `control_validator: control_validation_max_distance_deviation` fires on both second runs
+  in volume, 1980 and 2938 times, against 1187 and 1324 on the corresponding first runs.
+* Pair B's second run is the first sighting of localization complaining directly:
+  `ekf_localizer` 548 times and `pose_instability_detector` six times, both absent from
+  every first run recorded. Localization sits upstream of both failure modes, which makes
+  it the more interesting of the two.
+
+The doubled control_cmd rate in pair B is worth a note and not a conclusion: a publisher
+count taken on the idle stack afterwards reads 1, so it is not a second controller left
+over from the previous run. It might be `vehicle_cmd_gate` behaving differently under an
+MRM condition. n = 1.
+
+### A standing anomaly, not a differentiator
+
+`duplicated_node_checker` reports errors on every run measured, first and second alike --
+867 to 930 times per run. Whatever it is finding, it is there before the stack degrades, so
+it does not explain the split. It may still be worth fixing on its own.
