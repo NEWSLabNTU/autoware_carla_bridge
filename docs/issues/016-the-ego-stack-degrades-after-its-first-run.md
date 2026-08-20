@@ -659,6 +659,45 @@ not measuring what they claimed to. The steering A/B in
 second-run trials had an orphan present, so its null result should be re-established on
 clean runs before it is relied on.
 
+## A ROUTER-based session guard was tried and reverted (2026-08-21)
+
+The orphan fix lives in `just scenario`, so anything else launching SSv2 is still exposed.
+The obvious hardening is to make csb refuse a second client itself. csb's ZMQ socket is
+`REP`, which hides which peer sent a request; `ROUTER` speaks the same wire protocol to a
+REQ client but prepends an identity frame, so the bridge can tell the live scenario from a
+previous run's orphan and reject the latter.
+
+It was implemented, unit-tested and measured. **It regresses the simulation and was
+reverted.**
+
+```
+                     runs   passes   xt_sd range
+REP (unchanged)        8      8/8     0.016 - 0.138
+ROUTER session guard   4      2/4     0.032 - 2.210
+```
+
+Same harness, same scenario, fresh stack each. The failures are not the guard firing -- it
+rejected nothing in any run, and no malformed frame or send error was logged. The tell is
+that even the *passing* ROUTER runs are degraded: run 4 passed with `xt_sd` 0.647, five
+times worse than the worst of the eight REP runs. Lateral tracking gets worse across the
+board, which is what a disrupted frame cadence looks like rather than a protocol fault.
+
+A likely mechanism, unconfirmed: `ROUTER` does not enforce the strict request-reply lockstep
+`REP` does, and it drops unroutable messages silently unless `ROUTER_MANDATORY` is set. A
+reply that vanishes leaves SSv2 waiting and stalls the frame it was driving. Anyone
+retrying this should set `ROUTER_MANDATORY`, check every `send_multipart` return, and
+measure tracking quality rather than pass/fail -- pass/fail alone would have called run 4 a
+success.
+
+The rejected implementation is kept out of tree. The session-guard idea is not disproved;
+this way of building it is.
+
+### It also rescues the eight-run result
+
+The failing runs in this experiment all carried the ROUTER change, so they are not evidence
+against the orphaned-interpreter finding above. The eight consecutive passes were measured
+on unmodified `REP` and stand.
+
 ## Still unexplained
 
 **Why it depends on run order.** Nothing above explains why a freshly restarted stack
