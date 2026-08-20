@@ -441,6 +441,52 @@ tick-driving probe in this repo should pace to wall clock and say so.
 So the ~478 ms figure remains unexplained by anything measured so far, and the actuator,
 the queue and the tick synchronisation are all now excluded as candidates.
 
+## Re-measuring the 478 ms figure: it is about 200 ms (2026-08-20)
+
+A synthetic square wave through the same path measures a deterministic one tick, so the
+478 ms needed reproducing on a real Autoware-driven run before anything was built on it.
+`scripts/probe_478.py` samples the command and the physical wheel angle at 50 Hz during a
+scenario and applies three estimators to the same samples:
+
+```
+A. raw signals (the original method)   best 280 ms   56% better than zero shift
+B. derivatives (high-passed)           best 200 ms   uniquely minimised
+C. edge timing at sharp command steps  median 200 ms   p10 0, p90 380
+```
+
+**The lag is real, and it is about 200 ms -- two ticks at the production 10 Hz.**
+
+**The original method reads high.** On identical samples, correlating the raw signals gives
+280 ms while both estimators that are robust to smoothness give 200 ms. Autoware's steering
+command is rate-limited and slowly varying, and cross-correlating two smooth signals is
+ill-conditioned: many shifts fit nearly as well, so the argmin drifts. With coarser sampling
+and a longer window, 478 ms is plausibly that same bias stretched further. Treat 478 as an
+upper bound produced by the estimator rather than as a measurement.
+
+### Where two ticks comes from
+
+Autoware publishes control at 20 Hz. SSv2 ticks CARLA at 10 Hz. **Nothing synchronises the
+two**, so a command waits 0-100 ms for the next tick and then takes effect on it. Part of
+the remainder is observation: a separate client reading `get_wheel_steer_angle` sees the
+last *completed* tick, which adds up to a tick of apparent delay that the vehicle does not
+actually experience.
+
+So the honest decomposition of ~200 ms is roughly one tick of real waiting plus up to one
+tick of measurement, against a floor of one tick that cannot be removed at all.
+
+Note this is **not** the tick-synchronisation defect withdrawn above. Applying on the tick
+boundary would not shorten this: the wait exists because the producer and the tick are on
+different clocks, not because the bridge applies at the wrong moment. Shortening it would
+mean either ticking at the command rate, or having whoever owns the tick pull the newest
+command as part of the tick.
+
+### Caveats
+
+The run was 31.6 s rather than the intended 100 s -- the ego despawned when the scenario
+ended -- and the ego was driving nearly straight, so the command spanned only -0.055 to
++0.023 rad. Small, smooth signals are the hardest case for exactly the estimator problem
+described above, which is why C, a model-free edge measurement, matters more than A here.
+
 ## Still unexplained
 
 **Why it depends on run order.** Nothing above explains why a freshly restarted stack
