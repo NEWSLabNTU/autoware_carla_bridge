@@ -756,6 +756,50 @@ what a stochastic failure produces some of the time, and a run of eight is not s
 evidence when the base rate being tested against is 15%. The correct response to 8/8 was to
 keep going, not to change the status line.
 
+## What made the eight-run sequence different: nothing (2026-08-21)
+
+The 8/8 sequence was treated as evidence the orphan fix cured the split, and the sixteen
+runs that followed contradicted it. The obvious explanations were checked and eliminated one
+by one:
+
+- **Harness code.** The per-run logic of the two scripts is identical -- same trace window,
+  same waits, same scoring, differing only in filenames and indentation.
+- **Accumulated CARLA state.** Census during the failing period: 0 sensors, 1 stray vehicle,
+  `carla.log` at 56 bytes. No actor leak and no stream storm.
+- **CARLA server uptime.** The streak ran at ~7 h uptime and the failures at 15-17 h, so
+  CARLA was restarted and the sequence repeated on a server minutes old. Run 2 failed
+  anyway.
+- **The acb binary.** The only commit between the two sequences changed comments in
+  `main.rs` plus a field name that was reverted. Functionally identical.
+- **The steering arm.** The failing set includes `commanded` stacks, which is the same
+  default the streak ran under.
+
+**What remains is chance, and it fits quantitatively.** Every later run measured since the
+fix:
+
+```
+later runs since the orphan fix:  13/24 = 54%
+historical, orphans present:       2/13 = 15%
+run 2 specifically:                5/10 = 50%
+
+P(7 consecutive later-run passes | p = 0.5) = 0.008
+```
+
+A seven-run streak at even odds is about a 1-in-130 event per attempt. Twenty-four later
+runs were measured and the streak happened to fall first, which makes it a good deal less
+remarkable than it appeared while it was happening.
+
+### Which leaves the fix real and the cure incomplete
+
+Clearing orphaned interpreters raises the later-run pass rate from 15% to 54%, a 3.6-fold
+improvement, and that is worth having. It also leaves roughly half of later runs failing,
+which the streak hid completely. Both earlier readings in this issue were wrong in opposite
+directions: "cause identified and fixed" over-claimed it, and the subsequent worry that the
+fix might be worthless under-claimed it.
+
+The remaining ~50% is the thing still to explain, and it is the same first-run/later-run
+shape as before -- run 1 has passed on every stack measured this session, 8 for 8.
+
 ## Still unexplained
 
 **Why it depends on run order.** Nothing above explains why a freshly restarted stack
