@@ -800,6 +800,67 @@ fix might be worthless under-claimed it.
 The remaining ~50% is the thing still to explain, and it is the same first-run/later-run
 shape as before -- run 1 has passed on every stack measured this session, 8 for 8.
 
+## Hunting the residual 50%: two more candidates eliminated (2026-08-21)
+
+Run 1 has passed on every stack measured -- 9 of 9 -- while later runs pass about half the
+time. So whatever is left **requires a prior run on the same stack**, which is a sharp
+constraint: it has to be something that persists across a despawn/respawn but is cleared by
+restarting the ego stack.
+
+### Not stale sensor re-attachment
+
+SSv2 despawns the ego between runs and acb_bridge re-attaches its sensors to the new one. A
+re-attachment leaving the old publishers or callbacks alive would give duplicated data.
+Publisher counts and rates, sampled during both runs of a pair:
+
+```
+                              run 1 (PASS)        run 2 (FAIL)
+/sensing/imu/imu_data         1 pub, 10.54 Hz     1 pub, 10.47 Hz
+lidar pointcloud_before_sync  1 pub,  7.37 Hz     1 pub,  7.24 Hz
+/vehicle/status/velocity      1 pub, 10.30 Hz     1 pub, 10.18 Hz
+/localization/kinematic_state 1 pub,  9.95 Hz     1 pub,  9.97 Hz
+```
+
+Every count is one and every rate matches. Re-attachment is clean.
+
+### `/clock` jumps forward at every run boundary -- but that is not the cause
+
+`/clock` carries Unix epoch time and SSv2 stops publishing between runs, so sim time resumes
+at current wall time when the next scenario starts, jumping forward by the length of the gap.
+Caught directly:
+
+```
+[23:12:45] FORWARD JUMP +31.475s   1787325134.051 -> 1787325165.526
+```
+
+Run 1 never sees one; every later run begins with a ~30 s time discontinuity. That fits the
+constraint exactly, and under `use_sim_time` a forward jump invalidates every TF buffer entry
+at once.
+
+It is still not the cause. The dose-response test -- six back-to-back runs started the moment
+the previous interpreter exited, shrinking the jump from ~31 s to a few seconds -- gives
+**1 pass in 6** against the 50% baseline. No improvement, and if anything worse, though at
+n=6 that direction is not significant (`P(<=1 | p=0.5) = 0.11`).
+
+Two supporting observations against it: no TF extrapolation errors appear in the stack logs
+around the jump, and the jump is present on passing later runs as well as failing ones.
+
+The discontinuity is real and worth knowing about -- it is a genuine artifact of an
+epoch-based clock with gaps -- but it does not explain the split.
+
+### Where the residual stands
+
+Eliminated so far, each by measurement: CARLA's actuator dynamics, the steer command scale,
+perceived objects, planned path geometry, localization, subscription queueing, tick
+synchronisation, the steering report, CARLA server uptime, accumulated CARLA actor state,
+sensor re-attachment, and now the clock discontinuity. Orphaned interpreters are a
+contributing cause worth roughly 15% -> 50%, not the remainder.
+
+What has never been examined is Autoware's own internal state across runs. Every experiment
+in this issue has looked at the bridge, CARLA, or the interfaces between them, because that
+is what this repository owns. The constraint now says the carrier survives a despawn and
+respawn and is cleared only by restarting the Autoware nodes, which points inside them.
+
 ## Still unexplained
 
 **Why it depends on run order.** Nothing above explains why a freshly restarted stack
