@@ -3,7 +3,7 @@
 **Severity**: High
 **Component**: lateral control path (`vehicle_control.rs` steer scale, MPC feedback); run-order
 dependence still unexplained
-**Status**: Cause identified and fixed (orphaned interpreter); mechanism still open
+**Status**: Open. Clearing orphaned interpreters helps but does not cure it -- the split still reproduces
 
 ## The pattern, as far as it goes
 
@@ -716,6 +716,45 @@ this way of building it is.
 The failing runs in this experiment all carried the ROUTER change, so they are not evidence
 against the orphaned-interpreter finding above. The eight consecutive passes were measured
 on unmodified `REP` and stand.
+
+## The split still reproduces with orphan cleanup active (2026-08-21)
+
+The eight-run sequence above was read as the orphaned interpreter being the whole story.
+**Sixteen further runs say it is not.** Four fresh stacks, four scenario runs each, orphan
+cleanup confirmed running before every run (`cleared 2` in each log):
+
+```
+by run index, both steering arms pooled and balanced across stacks
+
+run 1:  pass 4/4   median xt_sd 0.068
+run 2:  pass 0/4   median xt_sd 1.212
+run 3:  pass 1/4
+run 4:  pass 1/4
+```
+
+Run 1 passes on every stack. Run 2 fails on every stack. That is the original split, intact,
+with the fix in place -- and it happens on both steering arms, so it is not the parameter
+under test either.
+
+### What that changes
+
+Clearing orphans is still a real improvement. Across everything measured since the fix the
+aggregate is roughly 22 of 36 later runs passing, against 2 of 13 historically. But it is a
+contributing cause, not the cause, and "cause identified and fixed" was wrong.
+
+The eight consecutive passes remain unexplained as an outlier. The obvious differences were
+checked and eliminated: same tick rate (`fixed_delta_seconds=0.1`, `substeps: 1`), same
+config, same inter-run handling in the harness, and the only acb commit in between changed
+comments alone. Something separated that sequence from these sixteen runs and it is not yet
+known what.
+
+### On how this was over-claimed
+
+The eight-run result was written up while its own caveat -- "four pairs is a modest n for a
+stochastic failure" -- was still on the page a few sections above. A clean streak is exactly
+what a stochastic failure produces some of the time, and a run of eight is not strong
+evidence when the base rate being tested against is 15%. The correct response to 8/8 was to
+keep going, not to change the status line.
 
 ## Still unexplained
 

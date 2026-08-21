@@ -140,3 +140,28 @@ Twelve of 25 trials produced no data. Two stacks never localized at all, and the
 stopped early when another user's job on this shared host grew to 83 GB of its 125 GB and
 Autoware stacks stopped coming up. Those rows are recorded as `no-data` and excluded rather
 than scored as zeros.
+
+
+## Re-run on uncontaminated runs: still a null on pass rate (2026-08-21)
+
+The A/B above is void: every one of its second runs shared the host with the previous run's
+orphaned `openscenario_interpreter` ([016](016-the-ego-stack-degrades-after-its-first-run.md)),
+so the arms were compared across runs that were not equivalent. Re-run with orphan cleanup
+active, one arm per stack and four runs per stack, arms alternating so stack-to-stack
+variation spreads over both, and the arm verified per stack from play_launch's own parameter
+file:
+
+```
+measured    pass 3/8   median xt_sd 1.319   range 0.105-2.416
+commanded   pass 3/8   median xt_sd 0.157   range 0.018-1.704
+```
+
+**Identical pass rates.** The tracking medians differ by a factor of eight in favour of
+echoing the command, which is the direction this issue originally claimed, but the ranges
+overlap heavily and the run-order effect that dominates 016 is far larger than the gap:
+pooled across arms, run 1 scores 0.068 and run 2 scores 1.212, an order of magnitude apart.
+With eight data runs per arm sitting inside that, the difference is not established.
+
+So the default stays `false`, still for the historical reason rather than a measured one.
+Settling this needs the 016 split fixed first -- otherwise most of the variance in any arm
+comparison belongs to run order rather than to the parameter.
