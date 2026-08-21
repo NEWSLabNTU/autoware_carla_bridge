@@ -537,11 +537,30 @@ What matters more is what did not move. Autoware's own pipeline -- localization,
 perception -- runs at the same rates either way, so sub-stepping doubles the raw sensor
 input without destabilising anything downstream.
 
-**The LiDAR rate itself is still not measured directly.** Its topic name is assigned at
-runtime from Autoware's sensor kit, and across several attempts the topic was never present
-in a sampling window -- the ego had either not spawned yet or had already despawned. The IMU
-is a fair proxy for the mechanism but not for the cost, since point clouds are far heavier
-than IMU samples. Treat "point clouds double to 20 Hz" as inferred.
+**The LiDAR rate, measured (2026-08-21).** It was left inferred above; the inference was
+wrong in detail, and the truth is more interesting:
+
+```
+                                            substeps=1   substeps=2
+/sensing/imu/imu_data                          10.00        20.61 Hz
+/sensing/lidar/top/pointcloud_before_sync       4.99        13.71 Hz
+/sensing/lidar/concatenated/pointcloud          5.38         9.92 Hz
+```
+
+Point clouds do not double to 20 Hz. At one substep the LiDAR runs at **half the frame
+rate** -- 4.99 Hz against a 10 Hz frame -- because `rotation_frequency` is 20 Hz and each
+frame therefore sweeps two rotations, some 262k points. That is the mismatch the sensor's
+own config comment warns about: it asks for `rotation_frequency` to equal simulation FPS,
+and at 10 Hz it does not.
+
+At two substeps each scan is exactly one rotation, about 131k points, and the rate rises
+2.75x to 13.7 Hz -- more than doubling, because the cheaper frames are ones the sensor can
+actually deliver. So sub-stepping does not merely cost more here; it repairs a standing
+misconfiguration and roughly doubles the point cloud rate Autoware sees, from 5.4 to 9.9 Hz
+on the concatenated topic.
+
+The IMU doubles exactly, 10.0 to 20.6 Hz, which is the plain per-tick behaviour and confirms
+the mechanism.
 
 Also note `/control/command/control_cmd` publishes at ~10 Hz, not the 20 Hz assumed earlier
 in this issue: Autoware's control loop runs on simulation time, so it tracks the frame rate.
