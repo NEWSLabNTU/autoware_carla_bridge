@@ -861,6 +861,64 @@ in this issue has looked at the bridge, CARLA, or the interfaces between them, b
 is what this repository owns. The constraint now says the carrier survives a despawn and
 respawn and is cleared only by restarting the Autoware nodes, which points inside them.
 
+## The first fault on a failing run is IMU timestamp jitter (2026-08-22)
+
+Diagnostics sampled inside Autoware, first ERROR per node, ordered by time on a failing run:
+
+```
+t+13.3s  (startup transient -- topic monitors before data flows)
+t+13.6s  ekf_localizer: twist topic is delay; cov_ellipse_long_axis ...
+t+22.1s  gyro_odometer: IMU msg is timeout. imu_dt: 0.2208[sec], tolerance 0.2[sec]
+t+22.6s  localization: pose_instability_detector ERROR
+t+51.6s  control_validator: the vehicle yaw has deviated from the trajectory
+t+52.0s  planning_validator: longitudinal distance deviation is too large
+```
+
+The control and planning errors this issue has chased for days arrive **thirty seconds
+after** the first real fault. That fault is an IMU timing complaint, and it is upstream of
+everything else.
+
+Comparing the same stack's passing first run against its failing second:
+
+```
+                     run 1 (PASS)                  run 2 (FAIL)
+wall-clock arrival   max 112.8 ms, 0 over tol      max 211.3 ms,  1 over (0.2%)
+header stamp delta   max 200.5 ms, 1 over (0.6%)   max 597.6 ms, 24 over (5.4%)
+```
+
+Messages *arrive* on time in both. On the failing run their **header stamps** jump.
+
+### Why the stamps jump
+
+`utils::ros_time_now` stamps every sensor message with the node's ROS clock, which under
+`use_sim_time` is driven by `/clock` from SSv2 at the 10 Hz frame rate. Sensor callbacks run
+on CARLA's threads and read "now" from that **stepped** clock, so a stamp is not the time the
+measurement was taken -- it is whatever value `/clock` last published. Several callbacks
+between two `/clock` messages share a stamp, and a late `/clock` message makes the next stamp
+jump by the whole gap. `gyro_odometer` computes `imu_dt` from these stamps and times out at
+0.2 s.
+
+The current design is deliberate and its reasoning is sound: `utils.rs` records that CARLA's
+own `SensorData::timestamp()` is server *uptime*, tens of thousands of seconds against a
+scenario `/clock` near zero, and that mixing the two made NDT reject every scan. Avoiding
+CARLA's epoch was right. Losing sub-tick resolution was the unintended cost.
+
+### What would fix it
+
+Map CARLA's sensor timestamp into the `/clock` epoch rather than choosing between them:
+learn the offset once (`/clock` now minus CARLA `elapsed_seconds` now, both sampled together)
+and stamp each measurement as `carla_timestamp + offset`. That keeps the epoch Autoware
+expects while preserving the true spacing between samples, so `imu_dt` reflects the sensor
+rather than the tick.
+
+### What is not established
+
+That fixing the stamps fixes the split. What is shown is that the IMU timeout is the first
+fault by 30 s, that stamp jitter is far worse on a failing run than a passing one on the same
+stack, and that the jitter is produced by our own stamping. Whether the cascade from there is
+causal or merely correlated needs the fix built and the pass rate re-measured against the
+50% baseline -- which now needs roughly ten later runs per arm to detect an effect.
+
 ## Still unexplained
 
 **Why it depends on run order.** Nothing above explains why a freshly restarted stack
