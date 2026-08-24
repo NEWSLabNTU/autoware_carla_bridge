@@ -3,7 +3,7 @@
 **Severity**: High
 **Component**: lateral control path (`vehicle_control.rs` steer scale, MPC feedback); run-order
 dependence still unexplained
-**Status**: Open. Clearing orphaned interpreters helps but does not cure it -- the split still reproduces
+**Status**: Open. `substeps: 2` gives 10/10 later runs against a 50% baseline; needs an interleaved A/B before the default changes
 
 ## The pattern, as far as it goes
 
@@ -918,6 +918,64 @@ fault by 30 s, that stamp jitter is far worse on a failing run than a passing on
 stack, and that the jitter is produced by our own stamping. Whether the cascade from there is
 causal or merely correlated needs the fix built and the pass rate re-measured against the
 50% baseline -- which now needs roughly ten later runs per arm to detect an effect.
+
+## Sub-stepping removes the split: 10 of 10 later runs (2026-08-24)
+
+The first fault on a failing run is `gyro_odometer` timing out on IMU spacing. The IMU fires
+once per tick, so at the default 10 Hz frame its samples are 100 ms apart against a 0.2 s
+tolerance -- **a margin of exactly one dropped sample**. Any single skipped frame produces a
+200 ms gap and trips the timeout. At `substeps: 2` the IMU runs at ~20 Hz, where a dropped
+sample is 100 ms and stays comfortably inside the tolerance.
+
+Tested against the 50% baseline, two fresh stacks, six runs each, `substeps: 2` the only
+change:
+
+```
+stack  run  verdict   xt_sd
+1      1-6  PASS x6   0.054 0.073 0.067 0.082 0.159 0.082
+2      1-6  PASS x6   0.014 0.117 0.150 0.096 0.108 0.136
+```
+
+```
+substeps=2 : later runs 10/10 = 100%
+baseline   : later runs 13/26 =  50%
+P(10 of 10 | p = 0.5) = 0.001
+```
+
+**The tracking quality is the stronger half of this result.** Verdicts alone could be a
+streak -- this issue has already produced one seven long. But `xt_sd` across all twelve runs
+spans 0.014 to 0.159, while baseline later runs spanned 0.018 to 2.416 with every failure
+between 0.6 and 2.4. The failure regime is not merely avoided; the variance that defined the
+split has collapsed. A lucky streak does not do that.
+
+### Why this is believable as a mechanism
+
+It explains the shape of the whole issue, which nothing else has:
+
+- **Run 1 always passed.** A fresh stack has just initialised its filters; the marginal IMU
+  spacing has not yet had a chance to trip anything.
+- **Nothing downstream was ever wrong.** Every measurement in this issue -- the actuator, the
+  steer scale, the path, localization, the queue, tick sync, the steering report -- came back
+  clean because the fault is a *timing margin*, not a wrong value.
+- **It is stochastic.** Whether a run fails depends on whether a frame happens to drop, which
+  is why the split was ~50% rather than deterministic.
+- **Orphaned interpreters mattered.** Extra load makes frame drops likelier, which is
+  consistent with clearing them raising the rate from 15% to 50% without curing it.
+
+### What is not established
+
+This compares one condition against a historical baseline rather than alternating the two
+across interleaved stacks. The baseline is drawn from many stacks over several sessions, so
+a confound would have to track the whole session, but it is not a randomised A/B and should
+not be reported as one. **Before changing the default**, alternate `substeps` 1 and 2 across
+stacks in a single sitting and confirm the gap holds.
+
+The cost is also real and measured above: perception input roughly doubles, from 5.4 to
+9.9 Hz on the concatenated point cloud, and physics runs at the finer step.
+
+A cheaper alternative worth testing alongside it: relax `gyro_odometer`'s 0.2 s tolerance.
+That treats the symptom rather than the marginal rate, but it costs nothing in compute and
+would confirm the mechanism from the other direction.
 
 ## Still unexplained
 
