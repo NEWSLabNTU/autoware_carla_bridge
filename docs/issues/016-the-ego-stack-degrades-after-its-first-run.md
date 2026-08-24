@@ -3,7 +3,7 @@
 **Severity**: High
 **Component**: lateral control path (`vehicle_control.rs` steer scale, MPC feedback); run-order
 dependence still unexplained
-**Status**: Open. `substeps: 2` gives 10/10 later runs against a 50% baseline; needs an interleaved A/B before the default changes
+**Status**: Fixed by `substeps: 2`, confirmed by interleaved A/B (p = 0.003). The IMU sat one dropped sample from gyro_odometer's tolerance
 
 ## The pattern, as far as it goes
 
@@ -976,6 +976,53 @@ The cost is also real and measured above: perception input roughly doubles, from
 A cheaper alternative worth testing alongside it: relax `gyro_odometer`'s 0.2 s tolerance.
 That treats the symptom rather than the marginal rate, but it costs nothing in compute and
 would confirm the mechanism from the other direction.
+
+## Interleaved A/B: sub-stepping confirmed (2026-08-25)
+
+The 10-of-10 result compared one condition against a historical baseline. This alternates the
+arms across five fresh stacks in a single sitting -- 1, 2, 1, 2, 1 -- five runs each, so
+CARLA uptime, host load and time of day fall on both. The tick rate was read back from the
+adapter's own log on every stack and the harness aborts on a mismatch.
+
+```
+LATER RUNS (run 2+ on a stack)
+
+substeps=1:  2/12 incl. artifacts | 2/10 of runs that produced a drive
+             xt_sd median 0.986   range 0.211 - 1.564
+substeps=2:  7/8  incl. artifacts | 7/7  of runs that produced a drive
+             xt_sd median 0.074   range 0.016 - 0.135
+
+Fisher exact, one-sided: p = 0.0032
+```
+
+**Every `substeps: 2` run that produced a drive passed**, and the tracking ranges do not
+overlap at all -- 0.016-0.135 against 0.211-1.564, a 13-fold gap in medians. Tracking is the
+stronger half of the evidence, as it has been throughout: verdicts can streak, a clean split
+in the continuous measure cannot.
+
+Interleaving changed both arms, which is why it was worth doing. `substeps: 2` came in at
+**7/8, not the 10/10** the uncontrolled run suggested, and `substeps: 1` came in at 2/12,
+*worse* than its 50% historical baseline. A historical comparison would have overstated the
+effect in one direction and the baseline in the other.
+
+`no-data` rows -- three across both arms -- are harness artifacts where the junit or trace
+never landed, and are reported separately rather than scored as failures. The conclusion does
+not depend on how they are counted.
+
+### The default is now 2
+
+The mechanism, the uncontrolled test and the interleaved A/B agree, so `substeps` defaults to
+2 in `bridge_config.yaml`. The cost is stated with it: perception input roughly doubles, from
+5.4 to 9.9 Hz on the concatenated point cloud, and physics runs at the finer step. Set it
+back to 1 to recover the old behaviour.
+
+### Still worth doing
+
+Relaxing `gyro_odometer`'s `message_timeout_sec` from 0.2 s is the cheaper fix and would
+confirm the mechanism from the other side, since it treats the same margin without doubling
+the frame rate. It lives in the shared Autoware install (`/opt/autoware/1.5.0/share/
+autoware_gyro_odometer/config/`), so it needs an acb_launch override rather than an edit in
+place.
 
 ## Still unexplained
 
