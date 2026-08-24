@@ -1636,3 +1636,29 @@ refusing to move. So this measures the off-road variant and leaves the never-mov
 unexplained -- the one where commanded velocity really is +0.000 and the trajectory carried
 0.88 m/s. The same probe needs to catch a never-move run before that variant can be
 attributed, and a run that fails one way cannot be used to explain the other.
+
+## Retraction: three never-engage runs on 2026-08-23/24 were not this issue
+
+Three runs recorded during traffic-light work had the ego spawn and never move, and I read
+them as this issue reproducing. They were caused by a change of mine in play_launch, not by
+stack degradation, and should not be counted as evidence here.
+
+play_launch `0e21ad8` began YAML-encoding parameter values. That also caught strings, and
+`robot_description` is an entire URDF document: quoted and escaped, it reached
+`robot_state_publisher` as an empty document, which aborted with "Error document empty".
+Nothing then published `/robot_description`, so `acb_bridge` never got past its startup
+wait -- 1814 s of "Still waiting for Autoware... Expecting /robot_description topic with
+URDF data" -- and published no sensors at all. Localization stayed UNINITIALIZED, no route
+arrived, no trajectory, no control command, and the ego sat at its spawn point.
+
+Bisected by log across the run history: every run through 2026-08-21 has zero URDF parse
+failures, every run from 2026-08-23 has one. Fixed in play_launch `3edd599`; the next run
+drove the full route.
+
+**The reason it is worth recording here.** The symptom is indistinguishable from this
+issue's never-engage mode from the outside -- ego spawns, ego does not move, stack reports
+itself started -- and the ego stack's own logs do not say "no URDF". The failing node exits,
+play_launch reports one member down out of ninety, and startup completes. What named the
+cause was `acb_bridge`'s wait line, which says what it is waiting **for**. Any future
+never-engage run should have that line read before the run counts as evidence for this
+issue.
