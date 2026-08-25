@@ -1024,6 +1024,44 @@ the frame rate. It lives in the shared Autoware install (`/opt/autoware/1.5.0/sh
 autoware_gyro_odometer/config/`), so it needs an acb_launch override rather than an edit in
 place.
 
+## Confirmed from the diagnostic side: the cascade disappears (2026-08-25)
+
+The A/B shows `substeps: 2` changes the outcome. This shows it removes the fault the outcome
+was traced to. Same probe, same phase of a later run, both arms:
+
+```
+substeps=1, later run (FAIL)             substeps=2, later run (PASS)
+gyro_odometer: IMU msg is timeout        absent
+pose_instability_detector      ERROR=4   absent
+control_validation_max_distance  ERROR=323  absent
+control_validation_yaw_deviation ERROR=238  absent
+aeb_emergency_stop             ERROR=19  absent
+planning_validator trajectory_shift ERROR=5 absent
+15 nodes reporting non-OK                2 nodes reporting non-OK
+```
+
+What is left at `substeps: 2` is a `gyro_bias_scale_validator` warning and
+`/adapi/node/vehicle_door: The door status is unknown` -- the latter a known artifact of
+CARLA having no door API, present on healthy runs all along.
+
+So the IMU timeout is the head of the chain and not a bystander: remove the marginal spacing
+and every downstream error goes with it, including the control and planning validator errors
+this issue spent days chasing.
+
+### On the route not taken
+
+The plan was to confirm from the other direction by relaxing `gyro_odometer`'s
+`message_timeout_sec`. That is not cheaply reachable: `autoware_gyro_odometer`'s launch file
+accepts a `config_file` argument, but `tier4_localization_launch`'s
+`pose_twist_estimator.launch.xml` includes it **passing no arguments**, so the
+`loc_config_path` override this workspace already uses for other localization parameters
+never reaches it. Overriding it would mean editing the shared Autoware install or forking the
+localization launch chain, neither of which is worth it for a confirmation. The diagnostic
+comparison above answers the same question.
+
+If the tolerance is ever wanted as the cheaper fix -- it costs no compute, where sub-stepping
+doubles the perception rate -- that plumbing is the work involved.
+
 ## Still unexplained
 
 **Why it depends on run order.** Nothing above explains why a freshly restarted stack
