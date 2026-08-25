@@ -47,6 +47,72 @@ pub fn ros_time_now_secs(node: &rclrs::Node) -> f64 {
     node.get_clock().now().nsec as f64 / 1e9
 }
 
+/// Maps a CARLA simulation timestamp onto the `/clock` epoch Autoware runs on.
+///
+/// Sensor messages used to be stamped with [`ros_time_now`], read inside the CARLA callback.
+/// That is the *tick*, not the measurement: `/clock` steps at the frame rate, so every
+/// callback between two `/clock` messages shares a stamp and a late `/clock` makes the next
+/// stamp jump by the whole gap. `gyro_odometer` derives `imu_dt` from these stamps and times
+/// out at 0.2 s -- measured at up to 598 ms on a run that then failed, against 200 ms on the
+/// same stack's passing run. See `docs/issues/016-*`.
+///
+/// Using CARLA's timestamp raw is not the answer either, for the reason [`ros_time_now`]
+/// gives: it is server *uptime*, tens of thousands of seconds against a scenario `/clock`
+/// near zero, and mixing the epochs made NDT reject every scan. So carry an offset between
+/// the two and add it, keeping Autoware's epoch and the sensor's true spacing.
+///
+/// The offset is re-learned rather than fixed: `/clock` restarts with each scenario -- a
+/// jump of about 31 s was measured at one run boundary -- so a value learned once would be
+/// wrong for every run after the first.
+#[derive(Clone, Debug)]
+pub struct SimClockOffset {
+    /// `/clock` nanoseconds minus CARLA simulation nanoseconds. `i64::MIN` means unset.
+    offset_nanos: std::sync::Arc<std::sync::atomic::AtomicI64>,
+}
+
+impl Default for SimClockOffset {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SimClockOffset {
+    pub fn new() -> Self {
+        Self {
+            offset_nanos: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(i64::MIN)),
+        }
+    }
+
+    /// Re-learn the offset from a `/clock` reading and a CARLA reading taken together.
+    ///
+    /// Called once per tick from the main loop, which is where both clocks are in hand.
+    pub fn observe(&self, node: &rclrs::Node, carla_elapsed_secs: f64) {
+        if carla_elapsed_secs <= 0.0 {
+            return; // no frame yet; nothing to anchor to
+        }
+        let ros_nanos = node.get_clock().now().nsec;
+        if ros_nanos <= 0 {
+            return; // simulation clock not driven yet
+        }
+        let carla_nanos = (carla_elapsed_secs * 1e9) as i64;
+        self.offset_nanos.store(
+            ros_nanos - carla_nanos,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// Stamp for a CARLA sensor timestamp, or `None` before the offset is known.
+    pub fn stamp(&self, carla_timestamp_secs: f64) -> Option<builtin_interfaces::msg::Time> {
+        let offset = self.offset_nanos.load(std::sync::atomic::Ordering::Relaxed);
+        if offset == i64::MIN {
+            return None;
+        }
+        Some(nanos_to_ros_time(
+            (carla_timestamp_secs * 1e9) as i64 + offset,
+        ))
+    }
+}
+
 /// Build a header stamped from the node's ROS clock. See [`ros_time_now`].
 pub fn create_ros_header_from_node(node: &rclrs::Node) -> std_msgs::msg::Header {
     std_msgs::msg::Header {

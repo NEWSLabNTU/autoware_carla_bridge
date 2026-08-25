@@ -71,6 +71,7 @@ fn create_sensor_bridges(
     node: rclrs::Node,
     carla_vehicle: &CarlaVehicle,
     autoware: &autoware::Autoware,
+    clock_offset: utils::SimClockOffset,
 ) -> Result<Vec<SensorBridge>> {
     let sensor_types = carla_vehicle.get_sensor_types();
     let sensors = carla_vehicle.get_sensors();
@@ -98,7 +99,7 @@ fn create_sensor_bridges(
         let bridge_type = BridgeType::Sensor(mapped_type, link_name.clone());
 
         // Create sensor bridge
-        match SensorBridge::new(node.clone(), sensor, bridge_type, autoware) {
+        match SensorBridge::new(node.clone(), sensor, bridge_type, autoware, clock_offset.clone()) {
             Ok(bridge) => {
                 tracing::info!(
                     "Created sensor bridge for '{}' (type: {:?})",
@@ -719,9 +720,20 @@ fn main() -> Result<()> {
         }
 
         // === Create sensor bridges ===
+        //
+        // The sensor clock is shared with every bridge and re-anchored each frame by the
+        // main loop, so sensor stamps carry the simulation time a measurement was taken
+        // rather than whichever `/clock` tick happened to be current when the CARLA
+        // callback ran. See utils::SimClockOffset and docs/issues/016.
+        let clock_offset = utils::SimClockOffset::new();
         tracing::info!("Creating sensor bridges...");
         let _sensor_bridges =
-            create_sensor_bridges(node.clone(), &carla_vehicle.lock().unwrap(), &autoware)?;
+            create_sensor_bridges(
+                node.clone(),
+                &carla_vehicle.lock().unwrap(),
+                &autoware,
+                clock_offset.clone(),
+            )?;
         tracing::info!("Created {} sensor bridges", _sensor_bridges.len());
 
         // === Listen for release requests from the scenario runner ===
@@ -854,6 +866,13 @@ fn main() -> Result<()> {
                     );
                 }
             };
+
+            // Re-anchor the sensor clock every frame. `/clock` restarts with each
+            // scenario, so an offset learned once would be wrong for every run after the
+            // first. See utils::SimClockOffset and docs/issues/016.
+            if let Ok(snap) = world.snapshot() {
+                clock_offset.observe(&node, snap.timestamp().elapsed_seconds);
+            }
 
             let snapshot = match carla_tick(&world, loop_duration) {
                 Ok(Some(snapshot)) => {

@@ -54,13 +54,14 @@ pub fn create_bridge(
     actor_kind: ActorKind,
     bridge_type: BridgeType,
     autoware: &Autoware,
+    clock_offset: crate::utils::SimClockOffset,
 ) -> Result<Box<dyn ActorBridge>> {
     Ok(match actor_kind {
         ActorKind::Vehicle(vehicle) => {
             Box::new(VehicleBridge::new(node, vehicle, bridge_type, autoware)?)
         }
         ActorKind::Sensor(sensor) => {
-            Box::new(SensorBridge::new(node, sensor, bridge_type, autoware)?)
+            Box::new(SensorBridge::new(node, sensor, bridge_type, autoware, clock_offset)?)
         }
         ActorKind::TrafficLight(_) => {
             return Err(BridgeError::CarlaIssue(

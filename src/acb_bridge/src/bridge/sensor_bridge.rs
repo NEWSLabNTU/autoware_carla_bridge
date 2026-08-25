@@ -3,8 +3,10 @@ use std::{convert::Infallible, mem, str::FromStr, sync::Arc};
 use bytemuck::{Pod, Zeroable};
 use carla::{
     client::{ActorBase, Sensor},
-    // `SensorDataBase` used to be imported here for `SensorData::timestamp()`. Stamps now
-    // come from the node's ROS clock instead -- see utils::ros_time_now.
+    // `SensorDataBase` gives `SensorData::timestamp()`, the simulation time the measurement
+    // was taken. That is mapped onto Autoware's `/clock` epoch by `utils::SimClockOffset`;
+    // reading the node clock inside the callback instead stamps the tick, not the sample.
+    sensor::SensorDataBase,
     sensor::data::{
         Color, GnssMeasurement, Image as CarlaImage, ImuMeasurement, LidarMeasurement,
         SemanticLidarMeasurement,
@@ -152,6 +154,7 @@ impl SensorBridge {
         actor: Sensor,
         bridge_type: BridgeType,
         autoware: &Autoware,
+        clock_offset: utils::SimClockOffset,
     ) -> Result<SensorBridge> {
         let (sensor_type, sensor_name) = match bridge_type {
             BridgeType::Sensor(t, s) => (t, s),
@@ -173,7 +176,7 @@ impl SensorBridge {
                 register_lidar_raycast_semantic(node.clone(), &actor, key_list, &sensor_name)?;
             }
             SensorType::Imu => {
-                register_imu(node.clone(), &actor, key_list, &sensor_name)?;
+                register_imu(node.clone(), &actor, key_list, &sensor_name, clock_offset)?;
             }
             SensorType::Gnss => {
                 register_gnss(node.clone(), &actor, key_list, &sensor_name)?;
@@ -369,6 +372,7 @@ fn register_imu(
     actor: &Sensor,
     key_list: Option<Vec<String>>,
     frame_id: &str,
+    clock_offset: utils::SimClockOffset,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
@@ -380,7 +384,17 @@ fn register_imu(
     let clock_node = node.clone();
 
     actor.listen(move |data| {
-        let mut header = utils::create_ros_header_from_node(&clock_node);
+        // Stamp with the simulation time the measurement was taken, mapped onto `/clock`.
+        // Falling back to the node clock covers the first callbacks, before the main loop
+        // has seen a frame to anchor the offset against.
+        let carla_stamp = data.timestamp();
+        let mut header = match clock_offset.stamp(carla_stamp) {
+            Some(stamp) => std_msgs::msg::Header {
+                stamp,
+                frame_id: String::new(),
+            },
+            None => utils::create_ros_header_from_node(&clock_node),
+        };
         header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
