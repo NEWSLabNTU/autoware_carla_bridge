@@ -18,7 +18,7 @@ Functional gaps that affect simulation fidelity.
 **What to do**:
 - [x] Add a script to extract vehicle params (wheelbase, dimensions, steer limits) from CARLA's `physics_control` API -- `scripts/extract_vehicle_params.py`
 - [x] Populate `vehicle_info.param.yaml` from the selected blueprint (done for `vehicle.tesla.model3`; re-run the script when the blueprint changes)
-- [ ] Add optional steering multiplier to `vehicle_config.yaml` (default 1.0)
+- [x] Add optional steering multiplier (default 1.0) -- `steering_multiplier` ROS parameter, settable via `STEERING_MULTIPLIER` on `just ego-av`
 
 **Priority**: Low. Current params work for Tesla Model 3. Only needed when supporting multiple vehicles.
 
@@ -49,7 +49,7 @@ We have a more sophisticated control module (`src/acb_bridge/src/bridge/vehicle_
 
 - [ ] Evaluate whether to activate `vehicle_bridge.rs` or keep the simpler `vehicle_control.rs`
 - [ ] If activating: switch Autoware's raw_vehicle_cmd_converter to output `ActuationCommandStamped`
-- [ ] Add configurable steering multiplier (useful for calibration without changing code)
+- [x] Add configurable steering multiplier (useful for calibration without changing code) -- see gap 1
 
 **Priority**: Low. Current control is sufficient -- vehicle completes routes successfully.
 

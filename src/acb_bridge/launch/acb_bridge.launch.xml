@@ -26,6 +26,12 @@
        against it; see docs/issues/009. -->
   <arg name="report_measured_steering" default="false"
        description="Report the measured wheel angle (true) or echo the command (false)"/>
+  <!-- Trim on the steering command. 1.0 is correct for the blueprints measured so far; the
+       Ackermann inverse comes from physics_control, so a blueprint whose tyres or steering
+       curve differ from the geometry can still under- or over-steer against it. Calibrate
+       against measured wheel angles, not scenario outcomes. See docs/issues/006. -->
+  <arg name="steering_multiplier" default="1.0"
+       description="Scale factor on the normalized steering command (1.0 = no trim)"/>
   <arg name="publish_clock" default="true"
        description="Publish /clock from CARLA simulation time"/>
 
@@ -39,5 +45,6 @@
     <param name="release_notify_endpoint" value="$(var release_notify_endpoint)"/>
     <param name="release_ack_endpoint" value="$(var release_ack_endpoint)"/>
     <param name="report_measured_steering" value="$(var report_measured_steering)"/>
+    <param name="steering_multiplier" value="$(var steering_multiplier)"/>
   </node>
 </launch>

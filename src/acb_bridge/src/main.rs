@@ -155,6 +155,7 @@ struct BridgeParams {
     /// up against it. Turn this on once the command mapping is calibrated. See
     /// docs/issues/009 and 006.
     pub report_measured_steering: bool,
+    pub steering_multiplier: f64,
 }
 
 impl BridgeParams {
@@ -217,6 +218,12 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        let steering_multiplier = node
+            .declare_parameter("steering_multiplier")
+            .default(1.0)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         // Get parameter values
         let carla_address_val: Arc<str> = carla_address.get();
         let carla_port_val: i64 = carla_port.get();
@@ -227,6 +234,7 @@ impl BridgeParams {
         let release_notify_val: Arc<str> = release_notify_endpoint.get();
         let release_ack_val: Arc<str> = release_ack_endpoint.get();
         let report_measured_steering_val: bool = report_measured_steering.get();
+        let steering_multiplier_val: f64 = steering_multiplier.get();
 
         // Validate required parameters
         if vehicle_config_val.is_empty() {
@@ -245,6 +253,7 @@ impl BridgeParams {
             release_notify_endpoint: release_notify_val.to_string(),
             release_ack_endpoint: release_ack_val.to_string(),
             report_measured_steering: report_measured_steering_val,
+            steering_multiplier: steering_multiplier_val,
         })
     }
 }
@@ -758,6 +767,7 @@ fn main() -> Result<()> {
             node.clone(),
             vehicle_shared.clone(),
             params.report_measured_steering,
+            params.steering_multiplier as f32,
         )?;
         tracing::info!("Vehicle control bridge created");
 

@@ -69,6 +69,22 @@ fn effective_tire_angle(steer_cmd: f32, geometry: &SteerGeometry) -> f32 {
     (0.5 * (inner + outer)).copysign(steer_cmd)
 }
 
+/// Reject a steering trim that would disable or invert steering.
+///
+/// A zero or negative multiplier is always a configuration mistake rather than a tuning
+/// choice: zero means the vehicle cannot steer at all, and negative means it steers the
+/// wrong way, both of which present as a control problem a long way from the config file.
+fn sane_steering_multiplier(value: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        return value;
+    }
+    tracing::warn!(
+        "steering_multiplier {value} is not a positive number; using 1.0. Zero would stop \
+         the vehicle steering and a negative value would invert it."
+    );
+    1.0
+}
+
 /// The normalized steer command that delivers `tire_angle`, in CARLA's sign convention.
 ///
 /// Dividing by the wheel limit -- what this replaced -- asks for the angle the *inner*
@@ -245,6 +261,7 @@ impl VehicleControlBridge {
         node: rclrs::Node,
         vehicle: Arc<Mutex<Option<Vehicle>>>,
         report_measured_steering: bool,
+        steering_multiplier: f32,
     ) -> Result<Self> {
         let steer_geometry = Self::read_steer_geometry(&vehicle);
 
@@ -274,6 +291,13 @@ impl VehicleControlBridge {
         // Create control command subscriber (Autoware 1.5.0 uses Control message)
         let vehicle_for_control = vehicle.clone();
         let state_for_control = state.clone();
+        // Trim on the steering command, applied to the normalized value sent to CARLA.
+        // 1.0 sends exactly what the Ackermann inverse asks for, which is right for the
+        // blueprints measured so far (docs/issues/006). It exists because that inverse is
+        // derived from physics_control, and a blueprint whose tyres or steering curve
+        // differ from its geometry can still under- or over-steer against the model.
+        // Captured by the callback rather than stored: nothing else needs it.
+        let trim = sane_steering_multiplier(steering_multiplier);
         let control_sub = Arc::new(node.create_subscription(
             "/control/command/control_cmd".reliable(),
             move |msg: autoware_control_msgs::msg::Control| {
@@ -281,6 +305,7 @@ impl VehicleControlBridge {
                     &vehicle_for_control,
                     &state_for_control,
                     steer_geometry,
+                    trim,
                     &msg,
                 ) {
                     tracing::error!("Failed to apply control command: {}", e);
@@ -529,6 +554,7 @@ impl VehicleControlBridge {
         vehicle: &Arc<Mutex<Option<Vehicle>>>,
         state: &Arc<Mutex<AppliedState>>,
         geometry: SteerGeometry,
+        steering_multiplier: f32,
         cmd: &autoware_control_msgs::msg::Control,
     ) -> Result<()> {
         let accel = cmd.longitudinal.acceleration;
@@ -565,7 +591,9 @@ impl VehicleControlBridge {
             // Ackermann geometry rather than a straight division by the wheel limit, which
             // asks for the inner wheel's angle and so under-delivers. See docs/issues/006-*.
             // Negate: Autoware positive = left turn (ROS), CARLA positive = right turn.
-            control.steer = -steer_command_for(cmd.lateral.steering_tire_angle, &geometry);
+            control.steer = (-steer_command_for(cmd.lateral.steering_tire_angle, &geometry)
+                * steering_multiplier)
+                .clamp(-1.0, 1.0);
 
             // Longitudinal: acceleration (m/s²) → throttle or brake (0 to 1).
             if accel > 0.01 {
@@ -918,5 +946,32 @@ mod tests {
             track_over_wheelbase: 0.0,
         };
         assert!((steer_command_for(0.61, &g) - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_unit_multiplier_leaves_the_command_alone() {
+        assert_eq!(sane_steering_multiplier(1.0), 1.0);
+        assert_eq!(sane_steering_multiplier(0.85), 0.85);
+        assert_eq!(sane_steering_multiplier(1.3), 1.3);
+    }
+
+    /// Zero cannot steer and a negative value steers backwards; both are config mistakes
+    /// that would present as a control fault far from the config file.
+    #[test]
+    fn a_useless_multiplier_falls_back_to_one() {
+        assert_eq!(sane_steering_multiplier(0.0), 1.0);
+        assert_eq!(sane_steering_multiplier(-1.0), 1.0);
+        assert_eq!(sane_steering_multiplier(f32::NAN), 1.0);
+        assert_eq!(sane_steering_multiplier(f32::INFINITY), 1.0);
+    }
+
+    /// The trim scales the command and the clamp still holds at the rails.
+    #[test]
+    fn the_multiplier_scales_and_still_saturates() {
+        let g = tesla();
+        let base = steer_command_for(0.30, &g);
+        assert!((base * 0.5).abs() < base.abs());
+        assert_eq!((base * 100.0_f32).clamp(-1.0, 1.0), 1.0);
+        assert_eq!((-base * 100.0_f32).clamp(-1.0, 1.0), -1.0);
     }
 }
