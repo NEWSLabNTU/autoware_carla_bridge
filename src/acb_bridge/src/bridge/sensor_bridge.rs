@@ -167,19 +167,19 @@ impl SensorBridge {
 
         match sensor_type {
             SensorType::CameraRgb => {
-                register_camera_rgb(node.clone(), &actor, key_list, &sensor_name)?;
+                register_camera_rgb(node.clone(), &actor, key_list, &sensor_name, clock_offset.clone())?;
             }
             SensorType::LidarRayCast => {
-                register_lidar_raycast(node.clone(), &actor, key_list, &sensor_name)?;
+                register_lidar_raycast(node.clone(), &actor, key_list, &sensor_name, clock_offset.clone())?;
             }
             SensorType::LidarRayCastSemantic => {
-                register_lidar_raycast_semantic(node.clone(), &actor, key_list, &sensor_name)?;
+                register_lidar_raycast_semantic(node.clone(), &actor, key_list, &sensor_name, clock_offset.clone())?;
             }
             SensorType::Imu => {
-                register_imu(node.clone(), &actor, key_list, &sensor_name, clock_offset)?;
+                register_imu(node.clone(), &actor, key_list, &sensor_name, clock_offset.clone())?;
             }
             SensorType::Gnss => {
-                register_gnss(node.clone(), &actor, key_list, &sensor_name)?;
+                register_gnss(node.clone(), &actor, key_list, &sensor_name, clock_offset.clone())?;
             }
             SensorType::Collision => {
                 tracing::warn!("Collision sensor is not supported yet");
@@ -222,6 +222,7 @@ fn register_camera_rgb(
     actor: &Sensor,
     key_list: Option<Vec<String>>,
     frame_id: &str,
+    clock_offset: utils::SimClockOffset,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let raw_topic = key_list[0].clone();
@@ -280,7 +281,16 @@ fn register_camera_rgb(
 
     // Setup CARLA listener
     actor.listen(move |data| {
-        let mut header = utils::create_ros_header_from_node(&clock_node);
+        // Stamp with the simulation time the measurement was taken, mapped onto `/clock`.
+        // Falling back to the node clock covers the first callbacks, before the main loop
+        // has seen a frame to anchor the offset against.
+        let mut header = match clock_offset.stamp(data.timestamp()) {
+            Some(stamp) => std_msgs::msg::Header {
+                stamp,
+                frame_id: String::new(),
+            },
+            None => utils::create_ros_header_from_node(&clock_node),
+        };
         header.frame_id = frame_id.clone();
 
         if let Ok(carla_image) = data.try_into() {
@@ -306,6 +316,7 @@ fn register_lidar_raycast(
     actor: &Sensor,
     key_list: Option<Vec<String>>,
     frame_id: &str,
+    clock_offset: utils::SimClockOffset,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
@@ -319,7 +330,16 @@ fn register_lidar_raycast(
     let clock_node = node.clone();
 
     actor.listen(move |data| {
-        let mut header = utils::create_ros_header_from_node(&clock_node);
+        // Stamp with the simulation time the measurement was taken, mapped onto `/clock`.
+        // Falling back to the node clock covers the first callbacks, before the main loop
+        // has seen a frame to anchor the offset against.
+        let mut header = match clock_offset.stamp(data.timestamp()) {
+            Some(stamp) => std_msgs::msg::Header {
+                stamp,
+                frame_id: String::new(),
+            },
+            None => utils::create_ros_header_from_node(&clock_node),
+        };
         header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
@@ -339,6 +359,7 @@ fn register_lidar_raycast_semantic(
     actor: &Sensor,
     key_list: Option<Vec<String>>,
     frame_id: &str,
+    clock_offset: utils::SimClockOffset,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
@@ -352,7 +373,16 @@ fn register_lidar_raycast_semantic(
     let clock_node = node.clone();
 
     actor.listen(move |data| {
-        let mut header = utils::create_ros_header_from_node(&clock_node);
+        // Stamp with the simulation time the measurement was taken, mapped onto `/clock`.
+        // Falling back to the node clock covers the first callbacks, before the main loop
+        // has seen a frame to anchor the offset against.
+        let mut header = match clock_offset.stamp(data.timestamp()) {
+            Some(stamp) => std_msgs::msg::Header {
+                stamp,
+                frame_id: String::new(),
+            },
+            None => utils::create_ros_header_from_node(&clock_node),
+        };
         header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
@@ -414,6 +444,7 @@ fn register_gnss(
     actor: &Sensor,
     key_list: Option<Vec<String>>,
     frame_id: &str,
+    clock_offset: utils::SimClockOffset,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
@@ -425,7 +456,16 @@ fn register_gnss(
     let clock_node = node.clone();
 
     actor.listen(move |data| {
-        let mut header = utils::create_ros_header_from_node(&clock_node);
+        // Stamp with the simulation time the measurement was taken, mapped onto `/clock`.
+        // Falling back to the node clock covers the first callbacks, before the main loop
+        // has seen a frame to anchor the offset against.
+        let mut header = match clock_offset.stamp(data.timestamp()) {
+            Some(stamp) => std_msgs::msg::Header {
+                stamp,
+                frame_id: String::new(),
+            },
+            None => utils::create_ros_header_from_node(&clock_node),
+        };
         header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
