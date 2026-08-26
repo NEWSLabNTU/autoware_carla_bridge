@@ -6,39 +6,54 @@
     # control, and perception modules. They are loaded once at startup and cached by ~30+
     # Autoware nodes including control, planning, and perception components.
     #
-    # Current values are defaults from awsim_labs_vehicle (Lexus-like vehicle).
-    # For CARLA-specific vehicles, these can be extracted using the CARLA extraction
-    # script (to be implemented in Phase 6).
+    # Measured from `vehicle.tesla.model3` on CARLA 0.9.16 by
+    # `scripts/extract_vehicle_params.py`, which reads wheel geometry from
+    # `physics_control` and the body from the actor's bounding box.
+    #
+    # These were previously defaults from awsim_labs_vehicle, a Lexus-like car, so Autoware
+    # planned and collision-checked for a vehicle it was not driving. The footprint was the
+    # worst of it: 1.896 m wide declared against 2.163 m actual, so every drivable-area
+    # margin and collision check was made for a car 27 cm narrower than the one in the
+    # simulation. Wheelbase was 7.7% short, which biases the Ackermann model every
+    # controller uses, and the height was a 2.5 m van rather than a 1.49 m sedan.
+    #
+    # Re-run the script when changing blueprint in `vehicle_config.yaml`.
     #
     # Reference: autoware_vehicle_info_utils::VehicleInfo
 
     # Wheel dimensions [meters]
     # Used for: dead reckoning, velocity estimation, kinematic models
-    wheel_radius: 0.383    # Radius of wheel (ground to wheel center)
-    wheel_width: 0.235     # Lateral width of tire
+    wheel_radius: 0.370    # Radius of wheel (ground to wheel center)
+    wheel_width: 0.235     # Lateral width of tire (not exposed by physics_control)
 
     # Wheelbase and tread [meters]
     # Used for: vehicle footprint, collision checking, Ackermann steering model
-    wheel_base: 2.79       # Distance between front and rear axle centers
-    wheel_tread: 1.64      # Distance between left and right wheel centers
+    wheel_base: 3.005      # Distance between front and rear axle centers
+    wheel_tread: 1.667     # Distance between left and right wheel centers
 
     # Vehicle overhangs [meters]
     # Used for: vehicle bounding box, obstacle avoidance, parking
-    front_overhang: 1.0    # Distance from front axle to vehicle front edge
-    rear_overhang: 1.1     # Distance from rear axle to vehicle rear edge
-    left_overhang: 0.128   # Distance from left wheels to vehicle left edge
-    right_overhang: 0.128  # Distance from right wheels to vehicle right edge
+    front_overhang: 0.923  # Distance from front axle to vehicle front edge
+    rear_overhang: 0.864   # Distance from rear axle to vehicle rear edge
+    left_overhang: 0.248   # Distance from left wheels to vehicle left edge
+    right_overhang: 0.248  # Distance from right wheels to vehicle right edge
 
-    # Total vehicle dimensions (computed from above):
-    # - Length: wheel_base + front_overhang + rear_overhang = 4.89m
-    # - Width: wheel_tread + left_overhang + right_overhang = 1.896m
-    # - Height: vehicle_height = 2.5m
+    # Total vehicle dimensions (computed from above), matching CARLA's bounding box:
+    # - Length: wheel_base + front_overhang + rear_overhang = 4.792m
+    # - Width: wheel_tread + left_overhang + right_overhang = 2.163m
+    # - Height: vehicle_height = 1.488m
 
     # Vehicle height [meters]
     # Used for: clearance checking, visualization
-    vehicle_height: 2.5
+    vehicle_height: 1.488
 
     # Maximum steering angle [radians]
     # Used for: control limits, path planning, minimum turning radius calculation
-    # 0.70 rad ≈ 40 degrees (tire angle, not steering wheel angle)
+    #
+    # Left at 0.70 rad (40 deg) deliberately, which is a *planning* limit inside the
+    # vehicle's physical capability rather than a measurement of it. CARLA's Tesla reaches
+    # an effective bicycle-model angle of 1.025 rad (58.7 deg) at full lock -- the Ackermann
+    # mean of the two front wheels, not the 70 deg per-wheel limit; see docs/issues/006.
+    # Raising this to the physical value would let the planner ask for tighter turns than
+    # it does today, which is a behaviour change and wants its own testing.
     max_steer_angle: 0.70

@@ -16,8 +16,8 @@ Functional gaps that affect simulation fidelity.
 - Steering conversion: `tire_angle / MAX_STEER_ANGLE` (linear, no per-vehicle multiplier)
 
 **What to do**:
-- [ ] Add a script to extract vehicle params (wheelbase, dimensions, steer limits) from CARLA's `physics_control` API
-- [ ] Auto-populate `vehicle_info.param.yaml` from the selected blueprint
+- [x] Add a script to extract vehicle params (wheelbase, dimensions, steer limits) from CARLA's `physics_control` API -- `scripts/extract_vehicle_params.py`
+- [x] Populate `vehicle_info.param.yaml` from the selected blueprint (done for `vehicle.tesla.model3`; re-run the script when the blueprint changes)
 - [ ] Add optional steering multiplier to `vehicle_config.yaml` (default 1.0)
 
 **Priority**: Low. Current params work for Tesla Model 3. Only needed when supporting multiple vehicles.
