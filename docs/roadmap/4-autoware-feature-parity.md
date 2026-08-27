@@ -187,10 +187,16 @@ vehicles:
 **Objective**: Implement emergency stop functionality
 
 **Tasks**:
-- [ ] Subscribe to emergency stop topic
-- [ ] Immediately apply full brakes on trigger
-- [ ] Override Autoware control commands
-- [ ] Publish emergency state to `/vehicle/status/control_mode`
+- [x] Subscribe to emergency stop topic -- `/control/command/emergency_cmd`, which had one
+      publisher and zero subscribers until 2026-08-28; see docs/issues/021
+- [x] Immediately apply full brakes on trigger -- 2.10 m/s to a standstill inside a second,
+      held with the handbrake so CARLA's idle creep cannot restart it
+- [x] Override Autoware control commands -- decided before any pedal-map work, since the
+      emergency travels on its own topic exactly so it holds when the control command does not
+- [ ] Publish emergency state to `/vehicle/status/control_mode` -- not done deliberately.
+      `ControlModeReport` has no emergency value (NO_COMMAND, AUTONOMOUS, the two partial
+      autonomies, MANUAL, DISENGAGED, NOT_READY), and Autoware's own vehicle interfaces keep
+      reporting AUTONOMOUS through an emergency. Hazard lights carry the state instead.
 
 ---
 

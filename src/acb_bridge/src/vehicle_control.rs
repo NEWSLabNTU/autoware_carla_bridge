@@ -130,6 +130,13 @@ struct AppliedState {
     /// from the sign of the commanded velocity, so a stack with no `vehicle_cmd_gate`
     /// still reverses.
     gear_commanded: bool,
+    /// Whether Autoware has declared an emergency on `/control/command/emergency_cmd`.
+    ///
+    /// `vehicle_cmd_gate` raises this when the stack decides the vehicle must stop now --
+    /// an MRM, an AEB trigger, a failed validator. It is a separate channel from the
+    /// control command precisely so that it still means something when the control command
+    /// cannot be trusted, so it overrides rather than blends with it.
+    emergency: bool,
     /// The light state last pushed to CARLA, so an unchanged one costs no RPC.
     ///
     /// Control commands arrive at 20 Hz and the lights almost never change between them;
@@ -147,6 +154,9 @@ impl Default for AppliedState {
             hazard_lights: autoware_vehicle_msgs::msg::HazardLightsReport::DISABLE,
             braking: false,
             gear_commanded: false,
+            // Not in an emergency until Autoware says so. Defaulting the other way would
+            // hold the vehicle whenever the topic is absent, which is most bench setups.
+            emergency: false,
             last_lights: None,
         }
     }
@@ -204,6 +214,7 @@ impl AppliedState {
 /// - `/control/command/gear_cmd` (autoware_vehicle_msgs/GearCommand)
 /// - `/control/command/turn_indicators_cmd` (autoware_vehicle_msgs/TurnIndicatorsCommand)
 /// - `/control/command/hazard_lights_cmd` (autoware_vehicle_msgs/HazardLightsCommand)
+/// - `/control/command/emergency_cmd` (tier4_vehicle_msgs/VehicleEmergencyStamped)
 ///
 /// Publishes:
 /// - `/vehicle/status/velocity_status` (VelocityReport)
@@ -226,6 +237,7 @@ pub struct VehicleControlBridge {
     // Subscribers stored to keep them alive
     _control_sub: Arc<rclrs::Subscription<autoware_control_msgs::msg::Control>>,
     _gear_sub: Arc<rclrs::Subscription<autoware_vehicle_msgs::msg::GearCommand>>,
+    _emergency_sub: Arc<rclrs::Subscription<tier4_vehicle_msgs::msg::VehicleEmergencyStamped>>,
     _turn_indicators_sub:
         Arc<rclrs::Subscription<autoware_vehicle_msgs::msg::TurnIndicatorsCommand>>,
     _hazard_lights_sub: Arc<rclrs::Subscription<autoware_vehicle_msgs::msg::HazardLightsCommand>>,
@@ -336,6 +348,41 @@ impl VehicleControlBridge {
 
         let vehicle_for_turn = vehicle.clone();
         let state_for_turn = state.clone();
+        // Autoware raised an emergency and, until now, nothing in the vehicle was listening:
+        // `/control/command/emergency_cmd` had one publisher and zero subscribers on a
+        // running stack. Hazard lights come with it, which is what a real vehicle does and
+        // what makes the state visible in the simulation.
+        let vehicle_for_emergency = vehicle.clone();
+        let state_for_emergency = state.clone();
+        let emergency_sub = Arc::new(node.create_subscription(
+            "/control/command/emergency_cmd".reliable(),
+            move |msg: tier4_vehicle_msgs::msg::VehicleEmergencyStamped| {
+                let changed = {
+                    let mut state = state_for_emergency.lock().unwrap();
+                    let changed = state.emergency != msg.emergency;
+                    state.emergency = msg.emergency;
+                    if changed {
+                        state.hazard_lights = if msg.emergency {
+                            autoware_vehicle_msgs::msg::HazardLightsReport::ENABLE
+                        } else {
+                            autoware_vehicle_msgs::msg::HazardLightsReport::DISABLE
+                        };
+                    }
+                    changed
+                };
+                if changed {
+                    if msg.emergency {
+                        tracing::warn!(
+                            "Autoware declared an emergency; braking fully until it clears"
+                        );
+                    } else {
+                        tracing::info!("Emergency cleared; returning to commanded control");
+                    }
+                    Self::apply_lights(&vehicle_for_emergency, &state_for_emergency);
+                }
+            },
+        )?);
+
         let turn_indicators_sub = Arc::new(node.create_subscription(
             "/control/command/turn_indicators_cmd".reliable(),
             move |msg: autoware_vehicle_msgs::msg::TurnIndicatorsCommand| {
@@ -403,6 +450,7 @@ impl VehicleControlBridge {
             actuation_pub,
             _control_sub: control_sub,
             _gear_sub: gear_sub,
+            _emergency_sub: emergency_sub,
             _turn_indicators_sub: turn_indicators_sub,
             _hazard_lights_sub: hazard_lights_sub,
             vehicle,
@@ -609,6 +657,20 @@ impl VehicleControlBridge {
                 .velocity()
                 .map(|vel| (vel.x as f64).hypot(vel.y as f64))
                 .unwrap_or(0.0);
+            // An emergency overrides the control command entirely, so it is decided before
+            // any of the pedal-map work below. Autoware publishes it on its own topic so
+            // that it still holds when the control command does not; blending the two would
+            // defeat the point.
+            if applied.emergency {
+                control.throttle = 0.0;
+                control.brake = 1.0;
+                // Once stopped, hold with the handbrake -- CARLA's automatic transmission
+                // idle-creeps at zero throttle, and an emergency stop that creeps is not one.
+                control.hand_brake = speed < 0.1;
+                v.apply_control(&control);
+                return Ok(());
+            }
+
             let pedals = match longitudinal {
                 Some(cal) => cal.command_for(accel as f64, speed),
                 None => crate::longitudinal_map::PedalCommand {
@@ -616,6 +678,7 @@ impl VehicleControlBridge {
                     brake: (-accel / MAX_ACCEL).clamp(0.0, 1.0),
                 },
             };
+
             // Apply what the maps chose, rather than picking the pedal from the sign of the
             // request. Those are not the same decision: CARLA's drag decelerates the car
             // harder than a mild braking request asks for -- 1.5 m/s^2 at 3 m/s against a
