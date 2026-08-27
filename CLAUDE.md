@@ -61,7 +61,16 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
 
 ### What's Next
 - [ ] Vehicle calibration per CARLA model (steering multiplier, wheelbase)
-- [ ] Vehicle respawn after Autoware reconnection (currently requires bridge restart)
+- [x] Vehicle respawn without a bridge restart -- works, and is exercised on every scenario.
+  `SessionExit::VehicleLost` cleans up the orphaned sensors, reconnects to CARLA to drop the
+  stale streams, and waits for the next spawn; `SessionExit::AutowareRestarted` rebuilds
+  sensors and bridges against the vehicle that exists now while keeping the CARLA connection
+  and its clock. Verified across eight consecutive scenarios on one stack, each despawning
+  and respawning the ego, with the bridge re-attaching every time.
+  The Autoware-restart branch is not exercised in this deployment, where acb_bridge and
+  Autoware are launched together by the same `play_launch` and therefore restart together.
+  An attempt to force it by removing `/robot_description` did not reach the health check,
+  which only runs while a vehicle is attached.
 - [ ] Formal test scripts and performance benchmarks
 - [ ] Map conversion automation (custom maps beyond pre-converted TUMFTM)
 
