@@ -20,7 +20,55 @@ Functional gaps that affect simulation fidelity.
 - [x] Populate `vehicle_info.param.yaml` from the selected blueprint (done for `vehicle.tesla.model3`; re-run the script when the blueprint changes)
 - [x] Add optional steering multiplier (default 1.0) -- `steering_multiplier` ROS parameter, settable via `STEERING_MULTIPLIER` on `just ego-av`
 
-**Priority**: Low. Current params work for Tesla Model 3. Only needed when supporting multiple vehicles.
+**Automated 2026-08-27**: `just vehicle-params [blueprint] [--write]` measures a blueprint and
+rewrites `vehicle_info.param.yaml` in place, so switching vehicles is one command rather than a
+manual transcription.
+
+```
+$ just vehicle-params vehicle.audi.etron --write
+# vehicle.audi.etron on CARLA 0.9.16
+#   bounding box      4.856 x 2.033 x 1.649 m
+#   wheel base        2.900 m
+#   wheel tread       1.593 m
+#   wheel radius      0.370 m
+#   steering          70.0 deg per wheel, 58.8 deg effective (1.026 rad)
+```
+
+Three things the script now gets right that the first version did not:
+
+- **It refuses to run while CARLA is synchronous.** Settling a freshly spawned car needs the
+  simulation to advance, and the original did that by switching on synchronous mode and
+  ticking -- on whatever server it found, then restoring *its* idea of the settings afterwards.
+  Only `carla_scenario_bridge` may tick (invariant 1), so that would have corrupted any run in
+  progress. In asynchronous mode the server free-runs and the car settles on its own, so the
+  script never touches world settings at all.
+- **It writes the file, and the comment that names the blueprint.** Rewriting the numbers while
+  leaving "Measured from `vehicle.tesla.model3`" above them would be worse than not writing.
+- **It leaves `max_steer_angle` alone by default.** The shipped 0.70 rad is a planning limit
+  chosen inside the vehicle's physical capability (1.025 rad effective), not a bad measurement;
+  writing the physical value is a behaviour change and needs `--physical-steer-angle`.
+
+**Verified** across four body types -- sedan, SUV, fire truck and motorcycle:
+
+| blueprint | wheel base | tread | radius | body (L x W x H) |
+|---|---|---|---|---|
+| `vehicle.tesla.model3` | 3.005 | 1.667 | 0.370 | 4.792 x 2.163 x 1.488 |
+| `vehicle.lincoln.mkz_2020` | 2.860 | 1.593 | 0.355 | 4.892 x 1.837 x 1.490 |
+| `vehicle.audi.etron` | 2.900 | 1.593 | 0.370 | 4.856 x 2.033 x 1.649 |
+| `vehicle.carlamotors.firetruck` | 4.995 | 2.383 | 0.570 | 8.468 x 2.891 x 3.827 |
+| `vehicle.harley-davidson.low_rider` | 1.620 | 0.400 | 0.350 | 2.350 x 0.766 x 1.649 |
+
+The wheelbases match the real vehicles (an MKZ is 2.85 m, an e-tron 2.93 m), and writing the
+e-tron's numbers and then the Tesla's again returns the file to a clean git diff -- so the
+script reproduces the hand-written values exactly.
+
+**Caveat for two-wheelers**: CARLA reports four wheels for a motorcycle or bicycle, the left
+and right of each pair 40 cm apart, so the extracted `wheel_tread` is an internal placeholder
+rather than a track width a real motorcycle has. Autoware's vehicle model assumes a car in any
+case.
+
+**Priority**: Closed. The Tesla Model 3 remains the vehicle this project runs; switching is now
+a single command.
 
 ---
 
@@ -157,12 +205,12 @@ implemented".
 
 | Gap | Impact | Status |
 |-----|--------|--------|
-| Vehicle model calibration script | Needed for multi-vehicle support | Open, low priority |
+| Vehicle model calibration script | Needed for multi-vehicle support | Closed (gap 1) |
 | Activate advanced control module | Better steering at speed | Closed (gap 2) |
 | Configurable steering multiplier | Per-vehicle tuning | Closed (gap 2) |
 | Ground-truth object publisher | Debug/fast-iteration mode | Closed (gap 3) |
 | Multi-vehicle documentation | Scalability | Closed (gap 4) |
 
-**Remaining work**: gap 1's vehicle calibration script. Not blocking -- the current parameters
-are correct for the Tesla Model 3 this project runs, and the script only matters when adding a
-second vehicle model.
+**Remaining work**: none. Every gap in this analysis is closed. The parameters shipped are
+correct for the Tesla Model 3 this project runs, and `just vehicle-params` regenerates them for
+any other CARLA blueprint.
