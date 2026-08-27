@@ -57,3 +57,40 @@ minute.
 No attempt to find the cause. The core dumps were not kept, the crash was not reproduced
 deliberately, and no CARLA-side logs beyond the banner were examined. If this becomes worth
 chasing, start by preserving a core and reading `CarlaUE4/Saved/Logs/`.
+
+## A third failure mode: alive, answering, and empty (2026-08-27)
+
+The server does not always die outright. After about 2.5 days of uptime this one kept its
+RPC port open and answered every call, while its world had become empty:
+
+```
+total actors: 0     Counter()
+sync: True   dt: 0.05
+map: Carla/Maps/Town01
+```
+
+Zero actors is not a plausible world. A fresh Town01 carries 173 -- 115 static props, 57
+traffic lights, and the spectator -- and the spectator in particular is created by the server
+itself and never despawned. Spawn requests were accepted and reported success; the vehicles
+simply were not there afterwards, so the scenario ran to completion against a world with
+nothing in it.
+
+This is worse than the segfault, because nothing announces it. A liveness check that connects
+and reads the world will pass. The run produces a full set of logs, a verdict, and no errors.
+
+**The check that catches it** is a census rather than a ping: a healthy world has actors in
+it, and a map's static props are a fixed floor that does not depend on the scenario.
+
+```bash
+python3 -c "
+import carla, sys
+w = carla.Client('localhost', 2000).get_world()
+n = len(w.get_actors())
+print('actors:', n)
+sys.exit(0 if n > 0 else 1)"
+```
+
+Note also that `SIGTERM` did not kill the wedged process -- it had to be `SIGKILL`ed -- and
+that `just carla-stop` reported "CARLA is not running on port 2000" because the wedged
+instance had been started by hand rather than as the systemd user unit. Restarting through
+`just carla-start` (which needs `DISPLAY` set) restored a normal 173-actor world.

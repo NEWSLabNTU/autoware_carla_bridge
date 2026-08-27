@@ -32,6 +32,13 @@
        against measured wheel angles, not scenario outcomes. See docs/issues/006. -->
   <arg name="steering_multiplier" default="1.0"
        description="Scale factor on the normalized steering command (1.0 = no trim)"/>
+  <!-- Report CARLA's actors as perception output instead of deriving them from the LiDAR.
+       Only correct with Autoware's own perception disabled (perception:=false), or two
+       publishers interleave on /perception/object_recognition/objects. -->
+  <arg name="publish_ground_truth_objects" default="false"
+       description="Publish CARLA actors as PredictedObjects, bypassing perception"/>
+  <arg name="ground_truth_range_m" default="100.0"
+       description="Ground-truth objects further than this from the ego are not published"/>
   <arg name="publish_clock" default="true"
        description="Publish /clock from CARLA simulation time"/>
 
@@ -46,5 +53,7 @@
     <param name="release_ack_endpoint" value="$(var release_ack_endpoint)"/>
     <param name="report_measured_steering" value="$(var report_measured_steering)"/>
     <param name="steering_multiplier" value="$(var steering_multiplier)"/>
+    <param name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)"/>
+    <param name="ground_truth_range_m" value="$(var ground_truth_range_m)"/>
   </node>
 </launch>

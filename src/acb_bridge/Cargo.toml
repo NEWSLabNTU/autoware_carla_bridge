@@ -31,6 +31,8 @@ rclrs = "0.7"
 # available through .cargo/config.toml patches. Use wildcards to allow
 # cargo to find them from the generated config.
 std_msgs = "*"
+autoware_perception_msgs = "*"
+unique_identifier_msgs = "*"
 builtin_interfaces = "*"
 geometry_msgs = "*"
 nav_msgs = "*"

@@ -5,6 +5,7 @@ mod carla_vehicle;
 mod clock;
 mod coordinate_conversion;
 mod error;
+mod ground_truth_objects;
 mod sensor_config;
 mod sensor_release;
 mod tf_bridge;
@@ -156,6 +157,8 @@ struct BridgeParams {
     /// docs/issues/009 and 006.
     pub report_measured_steering: bool,
     pub steering_multiplier: f64,
+    pub publish_ground_truth_objects: bool,
+    pub ground_truth_range_m: f64,
 }
 
 impl BridgeParams {
@@ -224,6 +227,18 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        let publish_ground_truth_objects = node
+            .declare_parameter("publish_ground_truth_objects")
+            .default(false)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
+        let ground_truth_range_m = node
+            .declare_parameter("ground_truth_range_m")
+            .default(100.0)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         // Get parameter values
         let carla_address_val: Arc<str> = carla_address.get();
         let carla_port_val: i64 = carla_port.get();
@@ -235,6 +250,8 @@ impl BridgeParams {
         let release_ack_val: Arc<str> = release_ack_endpoint.get();
         let report_measured_steering_val: bool = report_measured_steering.get();
         let steering_multiplier_val: f64 = steering_multiplier.get();
+        let publish_ground_truth_objects_val: bool = publish_ground_truth_objects.get();
+        let ground_truth_range_m_val: f64 = ground_truth_range_m.get();
 
         // Validate required parameters
         if vehicle_config_val.is_empty() {
@@ -254,6 +271,8 @@ impl BridgeParams {
             release_ack_endpoint: release_ack_val.to_string(),
             report_measured_steering: report_measured_steering_val,
             steering_multiplier: steering_multiplier_val,
+            publish_ground_truth_objects: publish_ground_truth_objects_val,
+            ground_truth_range_m: ground_truth_range_m_val,
         })
     }
 }
@@ -735,6 +754,26 @@ fn main() -> Result<()> {
         // rather than whichever `/clock` tick happened to be current when the CARLA
         // callback ran. See utils::SimClockOffset and docs/issues/016.
         let clock_offset = utils::SimClockOffset::new();
+
+        // Optional: report CARLA's actors as perception output instead of deriving them
+        // from the LiDAR. Off unless asked for, and only correct with Autoware's own
+        // perception disabled -- see ground_truth_objects.
+        let ground_truth_objects = if params.publish_ground_truth_objects {
+            match ground_truth_objects::GroundTruthObjectPublisher::new(
+                node.clone(),
+                params.vehicle_name.to_string(),
+                params.ground_truth_range_m,
+            ) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    tracing::error!("Ground-truth object publisher failed to start: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         tracing::info!("Creating sensor bridges...");
         let _sensor_bridges =
             create_sensor_bridges(
@@ -998,6 +1037,12 @@ fn main() -> Result<()> {
             // Main tick: ground truth publishing
             if let Err(e) = autoware.tick(stamp_sec) {
                 tracing::warn!("Autoware tick failed: {}", e);
+            }
+
+            if let Some(ref gt) = ground_truth_objects {
+                if let Err(e) = gt.publish(&world) {
+                    tracing::warn!("Failed to publish ground-truth objects: {e}");
+                }
             }
 
             // Publish vehicle status (velocity, steering, control mode)

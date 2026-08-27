@@ -82,11 +82,41 @@ received a bug fix in July 2026 for a connection-handling problem it could never
 - Faster iteration (no GPU-heavy inference)
 
 **What to do**:
-- [ ] Investigate if Autoware has a standard topic/interface for injecting ground-truth objects
-- [ ] If so, add an optional publisher that reads CARLA actor bounding boxes
-- [ ] Gate behind a config flag (default: off, use real perception)
+- [x] Investigate if Autoware has a standard topic/interface for injecting ground-truth objects
+- [x] If so, add an optional publisher that reads CARLA actor bounding boxes
+- [x] Gate behind a config flag (default: off, use real perception)
 
-**Priority**: Low. Real perception is the default and preferred approach.
+**Done**: `src/acb_bridge/src/ground_truth_objects.rs`, behind the
+`publish_ground_truth_objects` parameter (default `false`), forwarded through
+`acb_bridge.launch.xml`, `ego_av.launch.xml` and the justfile's `GROUND_TRUTH_OBJECTS`
+environment variable.
+
+The topic is `/perception/object_recognition/objects`
+(`autoware_perception_msgs/PredictedObjects`), which is what the perception stack itself
+publishes and what `map_based_prediction` and planning consume. There is no separate
+injection interface in Autoware 1.5.0, so the publisher takes the perception stack's place
+rather than sitting alongside it. That makes it the caller's job to launch with
+`perception:=false` -- `carla_simulator.launch.xml` gates the whole stack on that argument,
+so with it off nothing else writes the topic. Running both would put two publishers on one
+topic, which this repository has already paid for twice.
+
+Each non-ego CARLA actor within `ground_truth_range_m` (default 100 m) becomes one
+`PredictedObject`: the actor id little-endian in the UUID, the bounding box as `shape`,
+`existence_probability` 1.0, and a classification of CAR or PEDESTRIAN by actor type. Poses
+are converted to the ROS frame, and velocity is rotated into the object's body frame so the
+longitudinal and lateral components mean what Autoware expects.
+
+**Verified** against a live scenario: the publisher ran at 14.9 Hz and reported the
+background AV at (230.00, -129.80) where CARLA's own transform put it, a position error of
+0.000 m, with dimensions 4.79 x 2.16 x 1.49 m matching the actor's bounding box exactly. The
+ego was correctly absent from the set.
+
+**Caveat worth remembering**: ground truth is not free of lies. It reports every actor the
+server knows about within range, including ones no sensor could see -- through buildings,
+behind other vehicles. Planning tested against it is tested against an oracle, so results do
+not transfer to a run using real perception.
+
+**Priority**: Closed. Real perception remains the default and preferred approach.
 
 ---
 
@@ -106,12 +136,13 @@ received a bug fix in July 2026 for a connection-handling problem it could never
 
 ## Summary
 
-| Gap | Impact | Priority | Effort |
-|-----|--------|----------|--------|
-| Vehicle model calibration script | Needed for multi-vehicle support | Low | 1-2 days |
-| Activate advanced control module | Better steering at speed | Low | 1 day |
-| Configurable steering multiplier | Per-vehicle tuning | Low | 0.5 day |
-| Ground-truth object publisher | Debug/fast-iteration mode | Low | 1-2 days |
-| Multi-vehicle documentation | Scalability | Low | 0.5 day |
+| Gap | Impact | Status |
+|-----|--------|--------|
+| Vehicle model calibration script | Needed for multi-vehicle support | Open, low priority |
+| Activate advanced control module | Better steering at speed | Closed (gap 2) |
+| Configurable steering multiplier | Per-vehicle tuning | Closed (gap 2) |
+| Ground-truth object publisher | Debug/fast-iteration mode | Closed (gap 3) |
+| Multi-vehicle documentation | Scalability | Open, low priority |
 
-**Total estimated remaining work**: ~5 days of refinement, none blocking.
+**Remaining work**: gap 1's calibration script and gap 4's multi-vehicle documentation and
+two-vehicle test. Neither is blocking.
