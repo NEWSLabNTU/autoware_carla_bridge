@@ -6,6 +6,7 @@ mod clock;
 mod coordinate_conversion;
 mod error;
 mod ground_truth_objects;
+mod longitudinal_map;
 mod sensor_config;
 mod sensor_release;
 mod tf_bridge;
@@ -159,6 +160,8 @@ struct BridgeParams {
     pub steering_multiplier: f64,
     pub publish_ground_truth_objects: bool,
     pub ground_truth_range_m: f64,
+    pub accel_map_path: String,
+    pub brake_map_path: String,
 }
 
 impl BridgeParams {
@@ -239,6 +242,20 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        // Measured pedal response, in the shape Autoware's raw_vehicle_cmd_converter uses.
+        // Empty means fall back to the single-constant conversion this replaced.
+        let accel_map_path = node
+            .declare_parameter("accel_map_path")
+            .default(Arc::from(""))
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
+        let brake_map_path = node
+            .declare_parameter("brake_map_path")
+            .default(Arc::from(""))
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         // Get parameter values
         let carla_address_val: Arc<str> = carla_address.get();
         let carla_port_val: i64 = carla_port.get();
@@ -252,6 +269,8 @@ impl BridgeParams {
         let steering_multiplier_val: f64 = steering_multiplier.get();
         let publish_ground_truth_objects_val: bool = publish_ground_truth_objects.get();
         let ground_truth_range_m_val: f64 = ground_truth_range_m.get();
+        let accel_map_path_val: Arc<str> = accel_map_path.get();
+        let brake_map_path_val: Arc<str> = brake_map_path.get();
 
         // Validate required parameters
         if vehicle_config_val.is_empty() {
@@ -273,6 +292,8 @@ impl BridgeParams {
             steering_multiplier: steering_multiplier_val,
             publish_ground_truth_objects: publish_ground_truth_objects_val,
             ground_truth_range_m: ground_truth_range_m_val,
+            accel_map_path: accel_map_path_val.to_string(),
+            brake_map_path: brake_map_path_val.to_string(),
         })
     }
 }
@@ -802,11 +823,48 @@ fn main() -> Result<()> {
 
         // === Create vehicle control bridge ===
         tracing::info!("Creating vehicle control bridge...");
+        // Measured pedal maps, when both are configured and readable. A missing or broken
+        // map is not fatal: the bridge falls back to the constant conversion and says so,
+        // because refusing to drive at all would be a worse failure than driving coarsely.
+        // "none" as well as empty: a ROS launch argument cannot carry an empty value
+        // (`accel_map_path:=` is rejected as malformed), so there has to be a word for off.
+        let disabled = |p: &str| p.is_empty() || p.eq_ignore_ascii_case("none");
+        let longitudinal = if disabled(&params.accel_map_path) || disabled(&params.brake_map_path) {
+            tracing::info!(
+                "Longitudinal pedal maps not configured; using the single-constant conversion. \
+                 Set accel_map_path and brake_map_path for measured response."
+            );
+            None
+        } else {
+            match longitudinal_map::LongitudinalCalibration::load(
+                std::path::Path::new(&params.accel_map_path),
+                std::path::Path::new(&params.brake_map_path),
+            ) {
+                Ok(cal) => {
+                    tracing::info!(
+                        "Longitudinal pedal maps loaded from {} and {}",
+                        params.accel_map_path,
+                        params.brake_map_path
+                    );
+                    Some(cal)
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Could not load the longitudinal pedal maps ({e}); falling back to the \
+                         single-constant conversion, which is wrong by a factor of two at full \
+                         throttle. Fix the maps or clear the parameters to silence this."
+                    );
+                    None
+                }
+            }
+        };
+
         let vehicle_control = vehicle_control::VehicleControlBridge::new(
             node.clone(),
             vehicle_shared.clone(),
             params.report_measured_steering,
             params.steering_multiplier as f32,
+            longitudinal,
         )?;
         tracing::info!("Vehicle control bridge created");
 

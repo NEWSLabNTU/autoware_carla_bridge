@@ -39,6 +39,14 @@
        description="Publish CARLA actors as PredictedObjects, bypassing perception"/>
   <arg name="ground_truth_range_m" default="100.0"
        description="Ground-truth objects further than this from the ego are not published"/>
+  <!-- Measured pedal response. Empty falls back to a single-constant conversion, which
+       measurement shows to be wrong by a factor of two at full throttle. -->
+  <arg name="accel_map_path"
+       default="$(find-pkg-share acb_vehicle_description)/config/accel_map.csv"
+       description="Throttle response table: pedal x speed -> acceleration"/>
+  <arg name="brake_map_path"
+       default="$(find-pkg-share acb_vehicle_description)/config/brake_map.csv"
+       description="Brake response table: pedal x speed -> acceleration"/>
   <arg name="publish_clock" default="true"
        description="Publish /clock from CARLA simulation time"/>
 
@@ -55,5 +63,7 @@
     <param name="steering_multiplier" value="$(var steering_multiplier)"/>
     <param name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)"/>
     <param name="ground_truth_range_m" value="$(var ground_truth_range_m)"/>
+    <param name="accel_map_path" value="$(var accel_map_path)"/>
+    <param name="brake_map_path" value="$(var brake_map_path)"/>
   </node>
 </launch>

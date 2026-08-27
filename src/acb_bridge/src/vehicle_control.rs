@@ -262,6 +262,7 @@ impl VehicleControlBridge {
         vehicle: Arc<Mutex<Option<Vehicle>>>,
         report_measured_steering: bool,
         steering_multiplier: f32,
+        longitudinal: Option<crate::longitudinal_map::LongitudinalCalibration>,
     ) -> Result<Self> {
         let steer_geometry = Self::read_steer_geometry(&vehicle);
 
@@ -298,6 +299,7 @@ impl VehicleControlBridge {
         // differ from its geometry can still under- or over-steer against the model.
         // Captured by the callback rather than stored: nothing else needs it.
         let trim = sane_steering_multiplier(steering_multiplier);
+        let calibration = longitudinal.clone();
         let control_sub = Arc::new(node.create_subscription(
             "/control/command/control_cmd".reliable(),
             move |msg: autoware_control_msgs::msg::Control| {
@@ -306,6 +308,7 @@ impl VehicleControlBridge {
                     &state_for_control,
                     steer_geometry,
                     trim,
+                    calibration.as_ref(),
                     &msg,
                 ) {
                     tracing::error!("Failed to apply control command: {}", e);
@@ -555,6 +558,7 @@ impl VehicleControlBridge {
         state: &Arc<Mutex<AppliedState>>,
         geometry: SteerGeometry,
         steering_multiplier: f32,
+        longitudinal: Option<&crate::longitudinal_map::LongitudinalCalibration>,
         cmd: &autoware_control_msgs::msg::Control,
     ) -> Result<()> {
         let accel = cmd.longitudinal.acceleration;
@@ -595,18 +599,34 @@ impl VehicleControlBridge {
                 * steering_multiplier)
                 .clamp(-1.0, 1.0);
 
-            // Longitudinal: acceleration (m/s²) → throttle or brake (0 to 1).
+            // Longitudinal: acceleration (m/s²) → throttle or brake (0 to 1), through the
+            // measured pedal maps when they are available. The fallback divides by a single
+            // constant, which measurement shows to be wrong by a factor of two at full
+            // throttle and up to four under braking -- see longitudinal_map.
+            // The pedal maps are indexed by speed, so read it from the actor already
+            // locked here rather than taking the lock again.
+            let speed = v
+                .velocity()
+                .map(|vel| (vel.x as f64).hypot(vel.y as f64))
+                .unwrap_or(0.0);
+            let pedals = match longitudinal {
+                Some(cal) => cal.command_for(accel as f64, speed),
+                None => crate::longitudinal_map::PedalCommand {
+                    throttle: (accel / MAX_ACCEL).clamp(0.0, 1.0),
+                    brake: (-accel / MAX_ACCEL).clamp(0.0, 1.0),
+                },
+            };
             if accel > 0.01 {
                 // Neutral has no drive torque, as in a real gearbox. Braking is never
                 // suppressed: a deceleration command must reach the brakes whatever gear
                 // is selected.
                 if !applied.is_neutral() {
-                    control.throttle = (accel / MAX_ACCEL).clamp(0.0, 1.0);
+                    control.throttle = pedals.throttle;
                 }
-                control.brake = 0.0;
+                control.brake = pedals.brake;
             } else if accel < -0.01 {
                 control.throttle = 0.0;
-                control.brake = (-accel / MAX_ACCEL).clamp(0.0, 1.0);
+                control.brake = pedals.brake;
             }
 
             // Commanded standstill: hold with the handbrake. CARLA's automatic
