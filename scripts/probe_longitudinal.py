@@ -105,10 +105,17 @@ def reset(entry_speed=0.0):
                 break
 
 
-def ramp(kind, pedal, rows):
-    """One uninterrupted ramp at a constant pedal, sampling every tick."""
+def ramp(kind, pedal, rows, from_speed=None):
+    """One uninterrupted ramp at a constant pedal, sampling every tick.
+
+    `from_speed` runs the ramp downward from that speed instead of up from rest. Throttle
+    needs both directions: a low pedal accelerating from rest never reaches high speed, so
+    the only way to learn what it does at 20 m/s is to arrive there and then hold it. Filling
+    those cells by extrapolation instead was wrong in the worst way -- it claimed throttle 0.2
+    produces +0.01 m/s^2 at 24 m/s, where the truth is heavy deceleration.
+    """
     if kind == "throttle":
-        reset(0.0)
+        reset(0.0 if from_speed is None else from_speed)
         floor = V_FLOOR_THROTTLE
     else:
         # Brake ramps start fast and slow down, so they enter at the top of the range.
@@ -131,8 +138,10 @@ def ramp(kind, pedal, rows):
                          "accel": round(a, 4)})
             n += 1
         v_prev = v
-        if kind == "throttle" and v >= V_TOP:
+        if kind == "throttle" and from_speed is None and v >= V_TOP:
             break
+        if kind == "throttle" and from_speed is not None and abs(a) < 0.05 and v < from_speed - 1.0:
+            break                      # settled at this pedal's terminal speed
         if kind == "brake" and v <= floor:
             break
     return n
@@ -141,13 +150,15 @@ def ramp(kind, pedal, rows):
 rows = []
 t0 = time.time()
 try:
-    for kind in ("throttle", "brake"):
+    passes = [("throttle", None), ("throttle", V_TOP), ("brake", None)]
+    for kind, from_speed in passes:
         for pedal in PEDALS:
-            n = ramp(kind, pedal, rows)
+            n = ramp(kind, pedal, rows, from_speed)
             got = [r for r in rows if r["kind"] == kind and r["pedal"] == pedal]
             span = (min(r["v"] for r in got), max(r["v"] for r in got)) if got else (0, 0)
-            print("%-8s pedal=%.2f  %4d samples over v = %5.1f .. %5.1f m/s"
-                  % (kind, pedal, n, span[0], span[1]), flush=True)
+            print("%-8s %-4s pedal=%.2f  %4d samples over v = %5.1f .. %5.1f m/s"
+                  % (kind, "down" if from_speed else "up", pedal, n, span[0], span[1]),
+                  flush=True)
 finally:
     actor.destroy()
     world.apply_settings(orig)
