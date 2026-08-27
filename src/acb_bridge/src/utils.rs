@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+
 
 pub fn is_bigendian() -> bool {
     cfg!(target_endian = "big")
@@ -121,32 +121,6 @@ pub fn create_ros_header_from_node(node: &rclrs::Node) -> std_msgs::msg::Header 
     }
 }
 
-/// Build a header from an explicit epoch-seconds value.
-///
-/// **The caller owns the epoch.** Pass a value already on the same timeline as the
-/// domain's `/clock`. Never pass a raw CARLA timestamp — prefer
-/// [`create_ros_header_from_node`] unless you have a specific reason not to.
-pub fn create_ros_header_from_epoch_seconds(timestamp: Option<f64>) -> std_msgs::msg::Header {
-    let time = if let Some(sec) = timestamp {
-        builtin_interfaces::msg::Time {
-            sec: sec.floor() as i32,
-            nanosec: (sec.fract() * 1_000_000_000_f64) as u32,
-        }
-    } else {
-        // If there is no timestamp, use system time
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Unable to get current time");
-        builtin_interfaces::msg::Time {
-            sec: now.as_secs() as i32,
-            nanosec: now.subsec_nanos(),
-        }
-    };
-    std_msgs::msg::Header {
-        stamp: time,
-        frame_id: "".to_string(),
-    }
-}
 
 /// Converts CARLA server uptime into scenario-relative simulation time.
 ///

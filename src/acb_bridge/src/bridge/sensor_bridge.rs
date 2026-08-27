@@ -123,31 +123,6 @@ pub struct SensorBridge {
 }
 
 impl SensorBridge {
-    pub fn get_bridge_type(actor: Sensor) -> Result<BridgeType> {
-        let sensor_id = actor.id();
-        let sensor_type_id = actor.type_id();
-
-        // Check if sensor has a parent (should have one if attached to vehicle)
-        let _parent = actor
-            .parent()?
-            .ok_or(BridgeError::OwnerlessSensor { sensor_id })?;
-
-        // Get sensor name
-        let sensor_name = actor
-            .attributes()?
-            .iter()
-            .find(|attr| attr.id() == "role_name")
-            .map(|attr| attr.value_string())
-            .unwrap_or_else(|| generate_sensor_name(&actor));
-
-        // Parse sensor type
-        let sensor_type: SensorType = sensor_type_id.parse().or(Err(BridgeError::CarlaIssue(
-            "Unable to recognize sensor type",
-        )))?;
-
-        tracing::info!("Detected sensor '{sensor_name}' (type: {:?})", sensor_type);
-        Ok(BridgeType::Sensor(sensor_type, sensor_name))
-    }
 
     pub fn new(
         node: rclrs::Node,
@@ -805,11 +780,6 @@ fn publish_gnss(
     Ok(())
 }
 
-fn generate_sensor_name(actor: &Sensor) -> String {
-    let id = actor.id();
-    let type_id = actor.type_id();
-    format!("{type_id}_{id}")
-}
 
 #[cfg(test)]
 mod tests {

@@ -28,30 +28,48 @@ Functional gaps that affect simulation fidelity.
 
 ### Current state
 
-Our `vehicle_control.rs` subscribes to `autoware_control_msgs/Control`:
+`vehicle_control.rs` subscribes to `autoware_control_msgs/Control` and converts physical
+units to CARLA's normalized input:
 
 ```
-steering_tire_angle (rad) → steer = -angle / MAX_STEER_ANGLE
-acceleration (m/s²)       → throttle = accel / 3.0, or brake = -accel / 3.0
+steering_tire_angle (rad) -> steer, through CARLA's own Ackermann geometry (issue 006)
+                             with an optional `steering_multiplier` trim
+acceleration (m/s2)       -> throttle = accel / 3.0, or brake = -accel / 3.0
 ```
 
-Simple, direct, works. Publishes velocity, steering, control_mode, gear at ~20 Hz.
+It publishes velocity, steering, control_mode, gear, turn indicators, hazard lights and
+actuation status -- seven topics, at ~20 Hz.
 
-### Dead code: `vehicle_bridge.rs`
+### Resolved: `vehicle_bridge.rs` deleted (2026-08-27)
 
-We have a more sophisticated control module (`src/acb_bridge/src/bridge/vehicle_bridge.rs`, 466 lines, currently `#[allow(dead_code)]`) that:
-- Subscribes to `ActuationCommandStamped` (normalized throttle/brake/steer)
-- Reads CARLA's `physics_control.steering_curve` for speed-dependent steering
-- Applies first-order filter (tau=0.2s) for steering smoothing
-- Publishes 7 status topics (adds actuation_status, turn_indicators, hazard_lights)
+The alternative control module was dead: reachable only through `actor_bridge::create_bridge`,
+which nothing called. It was kept on the argument that it was more sophisticated. That
+argument no longer holds:
 
-### What to do
+- **Topic parity.** Both published the same seven status topics.
+- **Steering.** Its speed-dependent `steering_curve` lookup was the main draw. Measured, the
+  curve's real effect is about 4% at operating speed and does not match the values CARLA
+  declares (issue 016). `vehicle_control.rs` now inverts the actual Ackermann geometry
+  exactly and carries a calibration trim, which is a better answer than interpolating a
+  table that measurement contradicts.
+- **Smoothing.** Its first-order filter (tau = 0.2 s) would add lag on top of CARLA's own
+  steering slew, measured at 2.5 units/s. That is the wrong direction for a loop this issue
+  spent a long time proving is sensitive to delay.
+- **Interface.** Activating it meant switching Autoware's `raw_vehicle_cmd_converter` to emit
+  `ActuationCommandStamped`, trading the physical-unit interface for a normalized one.
 
-- [ ] Evaluate whether to activate `vehicle_bridge.rs` or keep the simpler `vehicle_control.rs`
-- [ ] If activating: switch Autoware's raw_vehicle_cmd_converter to output `ActuationCommandStamped`
+Deleted with it: `other_bridge.rs` and `trafficsign_bridge.rs`, unreachable by the same
+trace and untouched since the March package rename, plus the `create_bridge` and
+`get_bridge_type` dispatchers and the helpers left stranded. 646 lines. `ActorBridge` and
+`BridgeType` stay -- `sensor_bridge` uses both.
+
+Worth noting the cost of having kept it: dead code still attracts maintenance. `vehicle_bridge.rs`
+received a bug fix in July 2026 for a connection-handling problem it could never encounter.
+
+- [x] Evaluate whether to activate `vehicle_bridge.rs` or keep the simpler `vehicle_control.rs` -- deleted, reasoning above
 - [x] Add configurable steering multiplier (useful for calibration without changing code) -- see gap 1
 
-**Priority**: Low. Current control is sufficient -- vehicle completes routes successfully.
+**Priority**: Closed.
 
 ---
 
