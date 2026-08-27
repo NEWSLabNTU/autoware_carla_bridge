@@ -60,7 +60,11 @@ Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
 - ✅ Each with lanelet2_map.osm, pointcloud_map.pcd, map_config.yaml, map_projector_info.yaml
 
 ### What's Next
-- [ ] Vehicle calibration per CARLA model (steering multiplier, wheelbase)
+- [x] Vehicle calibration per CARLA model -- `scripts/extract_vehicle_params.py` reads wheel
+  geometry from `physics_control` and the body from the actor bounding box, and
+  `vehicle_info.param.yaml` now carries the measured Tesla rather than Lexus-like defaults.
+  A `steering_multiplier` parameter trims the command per blueprint. Re-run the script when
+  changing blueprint.
 - [x] Vehicle respawn without a bridge restart -- works, and is exercised on every scenario.
   `SessionExit::VehicleLost` cleans up the orphaned sensors, reconnects to CARLA to drop the
   stale streams, and waits for the next spawn; `SessionExit::AutowareRestarted` rebuilds
