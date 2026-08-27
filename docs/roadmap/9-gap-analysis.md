@@ -127,10 +127,29 @@ not transfer to a run using real perception.
 **Current design**: Use separate `ROS_DOMAIN_ID` for each bridge+Autoware pair.
 
 **What to do**:
-- [ ] Document the multi-vehicle setup with domain IDs
-- [ ] Test with 2+ vehicles simultaneously
+- [x] Document the multi-vehicle setup with domain IDs
+- [x] Test with 2+ vehicles simultaneously
 
-**Priority**: Low. Single-vehicle is the primary use case.
+**Done**: verified on 2026-08-27 with two complete Autoware stacks driving two CARLA vehicles
+at once -- the SSv2 scenario ego in ROS domain 1, and a background AV in domain 2 driven by
+its own Autoware and pilot, outside SSv2's model.
+
+```
+bg_av_1    start (230.0,-129.8) -> end (130.5,-129.4)  travelled 99.5 m  peak 5.03 m/s
+hero       start (190.8,-130.1) -> end (124.7,-129.7)  travelled 66.2 m  peak 3.99 m/s
+```
+
+Exactly one `/clock` publisher and one `acb_bridge` in each domain, SSv2's interpreter present
+in domain 1 and absent from domain 2, and each vehicle's status published by its own bridge.
+Two stacks plus CARLA used about 42 GB of RAM and 391 nodes between them.
+
+The setup, the measured invariants and three operational constraints the run established --
+per-stack `--log-dir`, restarting `just bg-av` between scenarios, and detaching the bridge with
+`setsid --fork` -- are written up in the parent repository's
+`docs/design/multi-instance-architecture.md`, whose status line had been stale at "not yet
+implemented".
+
+**Priority**: Closed. Single-vehicle remains the primary use case.
 
 ---
 
@@ -142,7 +161,8 @@ not transfer to a run using real perception.
 | Activate advanced control module | Better steering at speed | Closed (gap 2) |
 | Configurable steering multiplier | Per-vehicle tuning | Closed (gap 2) |
 | Ground-truth object publisher | Debug/fast-iteration mode | Closed (gap 3) |
-| Multi-vehicle documentation | Scalability | Open, low priority |
+| Multi-vehicle documentation | Scalability | Closed (gap 4) |
 
-**Remaining work**: gap 1's calibration script and gap 4's multi-vehicle documentation and
-two-vehicle test. Neither is blocking.
+**Remaining work**: gap 1's vehicle calibration script. Not blocking -- the current parameters
+are correct for the Tesla Model 3 this project runs, and the script only matters when adding a
+second vehicle model.

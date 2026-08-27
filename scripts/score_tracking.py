@@ -55,7 +55,7 @@ if len(rows) < 5:
 # asynchronously -- the sampling skew swamps the difference between echoing the command and
 # reporting the measured wheel. Measured runs came out at 0.007 and commanded ones at 0.036,
 # i.e. backwards. Verify the arm from play_launch's own
-# play_log/<dir>/node/acb_bridge/params_files/overrides.yaml instead, which is written at
+# play_log/ego/<dir>/node/acb_bridge/params_files/overrides.yaml instead, which is written at
 # launch and is unambiguous. Kept only as a diagnostic of steering activity.
 gap = statistics.median(arm_gaps)
 arm = f"gap={gap:.4f}"

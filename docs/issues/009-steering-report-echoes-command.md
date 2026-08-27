@@ -99,7 +99,7 @@ ego's cross-track error, plus its deviation from the lane centre, scored by
 **Design.** Arms alternated across freshly restarted stacks, each stack contributing a run 1
 and a run 2, so stack age is balanced across arms rather than confounded with them. The arm
 actually launched is confirmed per stack from play_launch's own
-`play_log/<dir>/node/acb_bridge/params_files/overrides.yaml`.
+`play_log/ego/<dir>/node/acb_bridge/params_files/overrides.yaml`.
 
 **Result**, cross-track standard deviation in metres, 13 usable trials:
 
