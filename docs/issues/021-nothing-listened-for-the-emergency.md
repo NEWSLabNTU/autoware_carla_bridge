@@ -1,10 +1,11 @@
-# 021 — Autoware declares an emergency and the vehicle never hears it
+# 021 — The emergency topic has no subscriber, and should not have one yet
 
-**Severity**: High
+**Severity**: Medium
 **Component**: `src/acb_bridge/src/vehicle_control.rs`
-**Status**: Fixed; verified by declaring one mid-drive
+**Status**: Handler implemented and verified, but **off by default** — on this stack the flag
+is not an actionable emergency
 
-## Symptom
+## What was observed
 
 On a running stack, with the ego driving:
 
@@ -15,58 +16,65 @@ Publisher count: 1
 Subscription count: 0
 ```
 
-`vehicle_cmd_gate` publishes the emergency state and **nothing consumes it**. Autoware can
-decide the vehicle must stop immediately -- an MRM, an autonomous-emergency-braking trigger, a
-failed validator -- and the vehicle carries on with whatever the ordinary control command last
-said.
+`vehicle_cmd_gate` publishes an emergency state and nothing consumes it. That looks like a
+plain safety gap: Autoware decides the vehicle must stop, and the vehicle never hears.
 
-Nothing reports this. The topic exists, it is published, and the count of subscribers is the
-only place the gap is visible.
+A handler was written on that reading. It works, and `scripts/test_emergency.py` demonstrates
+it: declared mid-drive, the ego went from 2.10 m/s to a standstill inside a second, held with
+the handbrake for eight, then released cleanly and drove away at 4.18 m/s.
 
-## Why the ordinary control command is not enough
+## Why it is off anyway
 
-The emergency travels on its own topic precisely so that it still means something when the
-control command cannot be trusted. Deriving the emergency from the control command -- treating
-a large deceleration request as one -- would reinstate exactly the coupling the separate
-channel exists to avoid.
-
-## Fix
-
-`VehicleControlBridge` subscribes to `/control/command/emergency_cmd`. While the flag is set
-the control command is overridden: full brake, no throttle, the handbrake once stopped, since
-CARLA's automatic transmission idle-creeps at zero throttle and an emergency stop that creeps
-is not one. Hazard lights come on with it, which is what a real vehicle does and what makes the
-state visible in the simulation.
-
-The decision is taken before any pedal-map work, and the flag defaults to false so that a bench
-setup without the topic is not held stationary.
-
-## Verified
-
-Declared mid-drive on a live scenario, reading the applied control back from CARLA:
+Before leaving it enabled, how often the flag is actually raised was measured. It is raised
+constantly:
 
 ```
-before: speed 2.02 m/s
-  t=0.0s speed  2.10  throttle 0.27 brake 0.00 handbrake False
-  t=1.0s speed  0.00  throttle 0.00 brake 1.00 handbrake True
-  ...
-  t=8.0s speed  0.00  throttle 0.00 brake 1.00 handbrake True
+  stopped (<0.3 m/s)   n=1814  emergency true 1605 (88.5%)
+  creeping             n=  45  emergency true   28 (62.2%)
+  driving (>1 m/s)     n=  69  emergency true   20 (29.0%)
 ```
 
-Stopped inside a second and held for the duration. Releasing it returns control:
+And what Autoware commands while the flag is set settles it. Pairing each control command with
+the emergency state current at the time:
 
 ```
-Autoware declared an emergency; braking fully until it clears
-Emergency cleared; returning to commanded control
+  emergency=True   n= 46  accel median +0.430  min -0.444  max +1.177
+  emergency=False  n=347  accel median +0.444  min -1.666  max +1.906
 ```
 
-after which the ego drove away at 4.18 m/s. `scripts/test_emergency.py` reproduces it.
+**While the emergency flag is set, Autoware is commanding acceleration**, and commanding it no
+differently from when the flag is clear. This is not a stack asking the vehicle to stop. Acting
+on the flag means slamming full brakes against a normal control command in 29% of driving
+samples, which is a worse behaviour than ignoring it — and it is what shipping this handler
+enabled did, briefly, before this measurement was taken.
+
+`vehicle_cmd_gate` is configured with `use_emergency_handling: true` and
+`emergency_acceleration: -2.4`. A stack in a genuine emergency would therefore be commanding
+about -2.4 m/s^2 on `control_cmd`, not +0.43. Whatever this flag is tracking here -- a missing
+system-emergency heartbeat, an unengaged operation mode -- it is not that.
+
+## What is in the tree
+
+The subscription and the override stay, behind `honor_emergency_cmd`, default `false`. The
+bridge logs at startup that it is not acting on the topic, and why. When set:
+
+- full brake, no throttle, handbrake once stopped (CARLA's automatic transmission idle-creeps
+  at zero throttle, and an emergency stop that creeps is not one)
+- hazard lights on, which is what a real vehicle does and what makes the state visible
+- decided before any pedal-map work, since the emergency travels on its own topic precisely so
+  that it holds when the control command cannot be trusted
+
+## What would justify turning it on
+
+A stack where the flag correlates with an actual emergency: `control_cmd` carrying roughly
+`emergency_acceleration` while it is set, and the flag clear during ordinary driving. The two
+measurements above are the test — re-run them before enabling it, rather than assuming the
+topic means what its name says.
 
 ## Not done: control mode switching
 
-`/vehicle/status/control_mode` is still reported as a constant `AUTONOMOUS`, and there is no
-handler for a mode-change request. `autoware_vehicle_msgs/srv/ControlModeCommand` exists and
-`autoware_command_mode_switcher` and `autoware_operation_mode_transition_manager` reference it,
-but no such service appears in this stack's graph -- nothing is calling one, so serving one
-would be writing an interface against a caller that does not exist here. It should be built
-when something asks for it, against that caller.
+`/vehicle/status/control_mode` is reported as a constant `AUTONOMOUS`.
+`autoware_vehicle_msgs/srv/ControlModeCommand` exists, and `autoware_command_mode_switcher` and
+`autoware_operation_mode_transition_manager` reference it, but no such service appears in this
+stack's graph. Nothing is calling one, so serving one would be writing an interface against a
+caller that does not exist here.

@@ -160,6 +160,7 @@ struct BridgeParams {
     pub steering_multiplier: f64,
     pub publish_ground_truth_objects: bool,
     pub ground_truth_range_m: f64,
+    pub honor_emergency_cmd: bool,
     pub accel_map_path: String,
     pub brake_map_path: String,
 }
@@ -236,6 +237,15 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        // Off by default: measured on this stack, the flag is true in 29% of samples while
+        // driving while Autoware commands acceleration, so acting on it brakes against a
+        // normal control command. See docs/issues/021.
+        let honor_emergency_cmd = node
+            .declare_parameter("honor_emergency_cmd")
+            .default(false)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         let ground_truth_range_m = node
             .declare_parameter("ground_truth_range_m")
             .default(100.0)
@@ -269,6 +279,7 @@ impl BridgeParams {
         let steering_multiplier_val: f64 = steering_multiplier.get();
         let publish_ground_truth_objects_val: bool = publish_ground_truth_objects.get();
         let ground_truth_range_m_val: f64 = ground_truth_range_m.get();
+        let honor_emergency_cmd_val: bool = honor_emergency_cmd.get();
         let accel_map_path_val: Arc<str> = accel_map_path.get();
         let brake_map_path_val: Arc<str> = brake_map_path.get();
 
@@ -292,6 +303,7 @@ impl BridgeParams {
             steering_multiplier: steering_multiplier_val,
             publish_ground_truth_objects: publish_ground_truth_objects_val,
             ground_truth_range_m: ground_truth_range_m_val,
+            honor_emergency_cmd: honor_emergency_cmd_val,
             accel_map_path: accel_map_path_val.to_string(),
             brake_map_path: brake_map_path_val.to_string(),
         })
@@ -865,6 +877,7 @@ fn main() -> Result<()> {
             params.report_measured_steering,
             params.steering_multiplier as f32,
             longitudinal,
+            params.honor_emergency_cmd,
         )?;
         tracing::info!("Vehicle control bridge created");
 

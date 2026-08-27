@@ -275,6 +275,7 @@ impl VehicleControlBridge {
         report_measured_steering: bool,
         steering_multiplier: f32,
         longitudinal: Option<crate::longitudinal_map::LongitudinalCalibration>,
+        honor_emergency_cmd: bool,
     ) -> Result<Self> {
         let steer_geometry = Self::read_steer_geometry(&vehicle);
 
@@ -354,9 +355,20 @@ impl VehicleControlBridge {
         // what makes the state visible in the simulation.
         let vehicle_for_emergency = vehicle.clone();
         let state_for_emergency = state.clone();
+        if !honor_emergency_cmd {
+            tracing::info!(
+                "Not acting on /control/command/emergency_cmd: on this stack the flag does \
+                 not carry an actionable emergency (measured true in 29% of samples while \
+                 driving, with Autoware commanding +0.43 m/s^2 acceleration at the same \
+                 time). Set honor_emergency_cmd:=true where it does. See docs/issues/021."
+            );
+        }
         let emergency_sub = Arc::new(node.create_subscription(
             "/control/command/emergency_cmd".reliable(),
             move |msg: tier4_vehicle_msgs::msg::VehicleEmergencyStamped| {
+                if !honor_emergency_cmd {
+                    return;
+                }
                 let changed = {
                     let mut state = state_for_emergency.lock().unwrap();
                     let changed = state.emergency != msg.emergency;

@@ -188,7 +188,9 @@ vehicles:
 
 **Tasks**:
 - [x] Subscribe to emergency stop topic -- `/control/command/emergency_cmd`, which had one
-      publisher and zero subscribers until 2026-08-28; see docs/issues/021
+      publisher and zero subscribers. Implemented but **off by default**: measured, the flag
+      is set in 29% of driving samples while Autoware commands +0.43 m/s^2 of acceleration,
+      so it is not an actionable emergency on this stack. See docs/issues/021
 - [x] Immediately apply full brakes on trigger -- 2.10 m/s to a standstill inside a second,
       held with the handbrake so CARLA's idle creep cannot restart it
 - [x] Override Autoware control commands -- decided before any pedal-map work, since the
