@@ -616,18 +616,25 @@ impl VehicleControlBridge {
                     brake: (-accel / MAX_ACCEL).clamp(0.0, 1.0),
                 },
             };
-            if accel > 0.01 {
-                // Neutral has no drive torque, as in a real gearbox. Braking is never
-                // suppressed: a deceleration command must reach the brakes whatever gear
-                // is selected.
-                if !applied.is_neutral() {
-                    control.throttle = pedals.throttle;
-                }
-                control.brake = pedals.brake;
-            } else if accel < -0.01 {
-                control.throttle = 0.0;
-                control.brake = pedals.brake;
+            // Apply what the maps chose, rather than picking the pedal from the sign of the
+            // request. Those are not the same decision: CARLA's drag decelerates the car
+            // harder than a mild braking request asks for -- 1.5 m/s^2 at 3 m/s against a
+            // requested 0.9 -- so *holding* a gentle deceleration takes a little throttle,
+            // not none. Gating on `accel < 0` zeroed that throttle and left the car
+            // coasting, and measurement found it: of 39 samples where deceleration was
+            // requested while moving, 35 had neither pedal applied, and the car decelerated
+            // about 60% harder than asked. Braking tracked its request with a gain of 0.04.
+            //
+            // The two fields are mutually exclusive by construction, so this applies at
+            // most one of them.
+            //
+            // Neutral has no drive torque, as in a real gearbox. Braking is never
+            // suppressed: a deceleration command must reach the brakes whatever gear is
+            // selected.
+            if !applied.is_neutral() {
+                control.throttle = pedals.throttle;
             }
+            control.brake = pedals.brake;
 
             // Commanded standstill: hold with the handbrake. CARLA's automatic
             // transmission idle-creeps at zero throttle/brake, so a stopped vehicle

@@ -123,14 +123,77 @@ CARLA's own acceleration, three runs each:
 do not separate, so the honest claim is the gain, plus the fact that the corrected cells are
 right where the old ones were wrong by 6.5 m/s^2.
 
+## The sign of the request was still choosing the pedal (fixed 2026-08-28)
+
+With the maps measured, gain still sat near 1.8. Slicing by regime rather than averaging found
+it immediately -- `scripts/diagnose_gain.py` records the control CARLA actually has applied,
+alongside the request and the delivered acceleration, and sweeps the assumed lag instead of
+fixing it:
+
+```
+  moving, request > 0   gain 0.937   median |err| 0.092   n=131
+  moving, request < 0   gain 0.038   median |err| 0.661   n= 39
+  hand brake on         gain 0.000   median |err| 1.500   n=106
+```
+
+Acceleration tracked almost perfectly. **Braking did not track at all**, and a third of every
+sample sat under the handbrake.
+
+The braking rows say why. Of 39 samples where deceleration was requested while moving, **35 had
+neither pedal applied**:
+
+```
+ req      got     speed   throttle  brake
+ -0.97    -1.44    3.21    0.000    0.000
+ -0.90    -1.63    3.79    0.000    0.000
+ -0.76    -1.21    2.61    0.000    0.000
+```
+
+The car was coasting, and coasting at 3 m/s sheds about 1.5 m/s^2 against a request for 0.9 --
+60% harder than asked. The map had chosen correctly: *holding* a gentle deceleration takes a
+little throttle, because drag alone overshoots it. But the conversion still sat behind the
+original branch on the sign of the request,
+
+```rust
+} else if accel < -0.01 {
+    control.throttle = 0.0;      // discards what the map chose
+    control.brake = pedals.brake;
+}
+```
+
+which zeroed that throttle and applied a brake the map had not asked for. Choosing the pedal
+from the sign of the request and choosing it from a measured map are different decisions, and
+the first was overriding the second.
+
+The fix is to apply what the map returned. Its two fields are mutually exclusive by
+construction, so at most one is ever non-zero, and the neutral-gear guard is kept.
+
+### Result
+
+```
+                            gain          median |err|
+  before          all      0.224             0.449
+                  braking  0.038             0.661
+  after   run 1   all      0.905             0.090
+          run 2   all      1.021             0.111
+          run 1   braking  0.610             0.084
+          run 2   braking  0.807             0.119
+```
+
+Gain moves from 0.22 to about 0.96 -- close to the 1.0 that means the vehicle does what it is
+told -- and median error falls by a factor of four. The handbrake did not engage at all in
+either run, where it had held a third of the samples before.
+
 ### Still open
 
-Gain remains near 1.8, so the ego still delivers close to twice the acceleration *variation*
-Autoware asks for, and worst-case error is unchanged around 1.4 m/s^2 at p90. The pedal maps
-are no longer the explanation -- they are measured, and the delivered acceleration follows them.
-What remains points at the standstill and gear boundaries, where the handbrake logic overrides
-the maps entirely, and at whatever lag sits between command and delivery. That wants its own
-investigation.
+A third run was degenerate: the ego stalled, the handbrake held it for 109 samples, and the
+run scored 0.280 with 1037 commands issued. That failure appeared in both arms of the earlier
+A/B too, at roughly one run in three or four, and it is not longitudinal control -- it is
+whatever stops the ego from driving on some runs. Worth its own investigation.
+
+Standstill samples are excluded from the moving slices deliberately. When a stopped car is
+asked for -1 m/s^2 and delivers 0, that is the vehicle being stopped, not a tracking failure,
+and counting it as error measures the metric rather than the bridge.
 
 ## Measuring it again
 
