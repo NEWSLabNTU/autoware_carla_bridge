@@ -58,39 +58,60 @@ No attempt to find the cause. The core dumps were not kept, the crash was not re
 deliberately, and no CARLA-side logs beyond the banner were examined. If this becomes worth
 chasing, start by preserving a core and reading `CarlaUE4/Saved/Logs/`.
 
-## A third failure mode: alive, answering, and empty (2026-08-27)
+## The "third failure mode" was a measurement error (2026-08-27)
 
-The server does not always die outright. After about 2.5 days of uptime this one kept its
-RPC port open and answered every call, while its world had become empty:
+An earlier version of this section claimed a third way for the server to fail: alive,
+answering RPC, and holding an empty world. The evidence was a census that read
 
 ```
 total actors: 0     Counter()
 sync: True   dt: 0.05
-map: Carla/Maps/Town01
 ```
 
-Zero actors is not a plausible world. A fresh Town01 carries 173 -- 115 static props, 57
-traffic lights, and the spectator -- and the spectator in particular is created by the server
-itself and never despawned. Spawn requests were accepted and reported success; the vehicles
-simply were not there afterwards, so the scenario ran to completion against a world with
-nothing in it.
+on a server that had been up about 2.5 days, where a fresh Town01 carries 173. It was written
+up as the worst mode yet, because nothing announces it.
 
-This is worse than the segfault, because nothing announces it. A liveness check that connects
-and reads the world will pass. The run produces a full set of logs, a verdict, and no errors.
+**It was not a server fault. It was the census.** In synchronous mode a client's actor list
+comes from the episode snapshot, and a client that has never observed a tick has no snapshot.
+It reports zero actors and frame zero, on a server that is perfectly healthy. Measured
+directly -- one server, one instant, both clients in sync mode:
 
-**The check that catches it** is a census rather than a ping: a healthy world has actors in
-it, and a map's static props are a fixed floor that does not depend on the scenario.
-
-```bash
-python3 -c "
-import carla, sys
-w = carla.Client('localhost', 2000).get_world()
-n = len(w.get_actors())
-print('actors:', n)
-sys.exit(0 if n > 0 else 1)"
+```
+sync, no ticker:
+   old client (has seen ticks): 174 actors, snapshot frame 4345539
+   new client (never ticked)  : 0 actors, snapshot frame 0
 ```
 
-Note also that `SIGTERM` did not kill the wedged process -- it had to be `SIGKILL`ed -- and
-that `just carla-stop` reported "CARLA is not running on port 2000" because the wedged
-instance had been started by hand rather than as the systemd user unit. Restarting through
-`just carla-start` (which needs `DISPLAY` set) restored a normal 173-actor world.
+The census script was a fresh client every time, and the bridge that would normally have been
+ticking had been killed, so the server sat in the sync mode the bridge left behind. The
+`sync: True` in the original output said so; it was printed and not read.
+
+Two CARLA restarts were performed on the strength of that reading, and neither was needed.
+
+### What this costs, and what to do instead
+
+`get_settings()`, `get_map()` and `get_server_version()` are direct RPCs and answer correctly
+for any client, tick or no tick. Only the snapshot-derived views -- the actor list, the frame
+number -- need a tick the client has seen.
+
+So a health check must read the mode first:
+
+- **Asynchronous**: the actor count is meaningful. Zero actors is a genuine fault, since a
+  loaded map has static props and a spectator the server creates itself.
+- **Synchronous**: the actor count from a fresh client means nothing. Liveness is whether the
+  direct RPCs answer. Do not tick to find out -- the ticker belongs to whoever put the server
+  in this mode, and a second ticker corrupts their run.
+
+`scripts/carla_health.py` implements exactly that, and `just scenario` refuses to start
+without it.
+
+### The genuine incidents in this issue are unaffected
+
+The two crashes documented above were real: the process died and left a core. A third real
+death followed on 2026-08-27, where the bridge itself -- not a passive probe -- reported
+`CARLA connection looks dead at Initialize` and the systemd unit showed the server had
+restarted underneath a running batch. Those remain the subject of this issue.
+
+Note also that a wedged server may ignore `SIGTERM` and need `SIGKILL`, and that
+`just carla-stop` reports "CARLA is not running on port 2000" for an instance started by hand
+rather than as the systemd user unit.

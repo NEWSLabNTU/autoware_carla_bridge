@@ -47,11 +47,16 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 printf "stack\trun\tverdict\tn\tlat_sd\tlat_p95\tlat_max\txt_sd\txt_max\tdiag\tnote\n" > "$OUT"
 
-carla_alive() { pgrep -f CarlaUE4-Linux >/dev/null 2>&1; }
+# A process check is not a health check. The server can hold its port open, answer RPC and
+# still be wedged, and -- the trap that cost two unnecessary restarts -- a healthy server in
+# synchronous mode reports zero actors to a client that has seen no tick. carla_health.py
+# reads the mode before it trusts any census. See docs/issues/017.
+carla_alive() { python3 "$HERE/carla_health.py" >/dev/null 2>&1; }
 
 for stack in $(seq 1 "$STACKS"); do
     if ! carla_alive; then
-        echo "[run] CARLA is not running; stopping rather than leaving this batch short"
+        python3 "$HERE/carla_health.py" || true
+        echo "[run] CARLA is not fit to run against; stopping rather than leaving this batch short"
         echo "[run] of data in a way that reads as a result. See docs/issues/017."
         exit 1
     fi
