@@ -279,3 +279,54 @@ Integration testing and performance validation for the project.
 [] Performance benchmarks
 [] Memory leak test (1+ hour run)
 ```
+
+## Acceptance harness (2026-08-29)
+
+`scripts/acceptance.py`, or `just acceptance [scenario] [runs]`, runs a scenario against a
+live stack and judges it. It does not build a stack: `just run` and `just ego-av` come first.
+
+What it checks, and the failure each one is for:
+
+| check | the failure it catches |
+|---|---|
+| the scenario's own `result.junit.xml` | what SSv2 says happened |
+| the ego reached a peak speed and travelled a distance | a run that passes while the ego barely moves |
+| no node's stderr holds a fatal error | `traffic_light_multi_camera_fusion` aborting at startup in every run for a fortnight |
+| CARLA answers a real RPC before starting | a server that is alive, listening, and serving nobody (issue 017) |
+| non-OK diagnostics are reported | the fifteen-node cascade behind issue 016 |
+
+Diagnostics are reported but do not fail a run. A healthy stack carries one or two permanently
+(`vehicle_door: The door status is unknown`), and a check that cries wolf gets switched off.
+
+### Validated against a real regression
+
+The dead-node check was run against the play_log of a run from before the play_launch quoting
+fix, and against one from after:
+
+```
+current run,  dead nodes: 0
+pre-fix run,  dead nodes: 1
+   traffic_light_multi_camera_fusion: terminate called after throwing an instance of
+     'rclcpp::exceptions::InvalidTopicNameError'
+```
+
+So it would have caught the bug that hid for two weeks, in the run where it first appeared.
+
+### Traps it avoids, each having produced a wrong answer already
+
+- **A despawned CARLA actor keeps reporting `is_alive`** and then returns garbage: position
+  (0, 0), steering 5.7e28, handbrake true. That reads exactly like a stalled ego, and completed
+  runs were scored as stalls because of it. Nothing here holds an actor handle across ticks.
+- **A fresh CARLA client cannot read a synchronous world.** Its first `GetWorld()` waits for a
+  snapshot that only a tick delivers. Everything that can come from ROS does.
+- **`DiagnosticStatus.level` is a byte** in Humble's Python bindings, not an int. Formatting it
+  with `%d` raises, after the run.
+
+### What it does not do yet
+
+- Lateral and longitudinal tracking quality are measured by `score_tracking.py` and
+  `diagnose_gain.py`, and are not folded in. They need a baseline before they can be a
+  threshold, and inventing one would make the suite fail on noise.
+- It judges one stack configuration. The unmanaged ego (phase 013) needs its own domain and
+  goal file, which the `--domain` flag allows but nothing exercises automatically.
+- Nothing runs it on a schedule. It is a command, not CI.
