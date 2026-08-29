@@ -63,9 +63,10 @@ MIN_DISTANCE = 20.0      # m; and it has to have gone somewhere
 # so this is well under the thing it exists to catch -- a limit of 0.60, set from the healthy
 # runs alone, would have let that regression pass by eight thousandths.
 MAX_LONGITUDINAL_ERROR = 0.35   # m/s^2, median |commanded - delivered|
-# Healthy runs measured 0.029 to 0.289. No lateral regression has been characterised yet, so
-# this is deliberately loose: there is nothing to bracket it against, and a limit invented
-# without one would only fail on noise.
+# Bracketed at both ends, like the longitudinal limit. Healthy runs measured 0.029 to 0.289.
+# A characterised lateral fault -- `REPORT_MEASURED_STEERING=true`, which issue 009 settled as
+# destabilising -- measured 2.187 to 13.277 over six runs. So 1.00 sits three times above the
+# worst good day and twice below the mildest bad one, with nothing in between observed.
 MAX_CROSS_TRACK = 1.00          # m, median distance from the planned trajectory
 LONGITUDINAL_LAG_S = 0.30       # command to delivery; swept once, flat between 0.1 and 0.5
 MIN_TRACKING_SAMPLES = 30       # below this the numbers are not worth judging

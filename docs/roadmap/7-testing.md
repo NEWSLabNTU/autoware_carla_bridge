@@ -357,9 +357,11 @@ verdict: FAIL   peak 4.81 m/s   travelled 20.9 m   longitudinal 0.521 m/s^2
 The ego drove its full route both times, at ordinary speed. Everything except this check said
 the run was fine.
 
-The cross-track limit is deliberately loose at 1.00 m. No lateral regression has been
-characterised, so there is nothing to bracket it against, and a limit invented without one
-would only fail on noise.
+The cross-track limit is 1.00 m, and it is bracketed at both ends too. Issue 009's A/B
+characterised a lateral fault: `REPORT_MEASURED_STEERING=true` measured 2.187 to 13.277 m over
+six runs against 0.036 to 0.134 for the default, a 67x separation with no overlap. So the limit
+sits three times above the worst healthy run and twice below the mildest faulty one, with
+nothing observed in between.
 
 ### What it does not do yet
 - It judges one stack configuration. The unmanaged ego (phase 013) needs its own domain and

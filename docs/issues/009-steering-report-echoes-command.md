@@ -2,7 +2,7 @@
 
 **Severity**: Low
 **Component**: `src/acb_bridge/src/vehicle_control.rs`, `publish_status`
-**Status**: Available behind a flag, default off. A/B on lateral tracking quality is a null (2026-08-20)
+**Status**: Available behind a flag, default off — and the default is now measured, not historical: enabling it degrades lateral tracking by 67x (2026-08-30)
 
 ## What is wrong
 
@@ -165,3 +165,67 @@ With eight data runs per arm sitting inside that, the difference is not establis
 So the default stays `false`, still for the historical reason rather than a measured one.
 Settling this needs the 016 split fixed first -- otherwise most of the variance in any arm
 comparison belongs to run order rather than to the parameter.
+
+## Settled: measured feedback destabilises lateral control (2026-08-30)
+
+Two earlier attempts at this comparison were void, and this issue's own text set the conditions for a
+third: fix the run-order effect first, hold run index fixed, and raise n. All three are now
+possible. `substeps: 2` closed issue 016, the bridge no longer strands itself between
+scenarios, and `scripts/acceptance.py` reports a cross-track number per run, so the outcome is
+measured rather than eyeballed.
+
+**Design.** Four freshly restarted ego stacks, arms alternating across them
+(measured, commanded, measured, commanded), three consecutive scenario runs each. Every run
+index appears in both arms, so the run-order effect that voided the first attempt cannot be
+confused with the parameter. The arm was read back from play_launch's own
+`params_files/overrides.yaml` on every stack, never inferred from behaviour; all four matched
+what was requested.
+
+**Result**, median distance from the planned trajectory:
+
+```
+arm          n   passed   cross-track (m)                  longitudinal (m/s^2)
+measured     6    0/6     median 4.037   range 2.187-13.277   median 0.370
+commanded    6    5/6     median 0.060   range 0.036- 0.134   median 0.057
+```
+
+**The arms separate by 67x in the median and do not overlap at all** -- the best measured run,
+2.187 m, is sixteen times worse than the worst commanded run, 0.134 m. And the separation holds
+at every run index, which is the check the earlier attempts failed:
+
+```
+         measured   commanded
+  run 1    3.522      0.038
+  run 2    8.743      0.095
+  run 3    3.608      0.077
+```
+
+Peak speed was 4.17 to 5.40 m/s in both arms, so this is not a stack that failed to drive. The
+ego drives; it wanders. One measured run reached **13.3 m** from its trajectory.
+
+The single commanded-arm failure was an unrelated `pose_instability_detector` crash, caught by
+a different check; its cross-track was 0.090 m. On tracking quality the arms are 6/6 against
+6/6.
+
+### What this means for the issue
+
+The original claim here -- that feeding back the measured wheel angle destabilises the lateral
+loop -- **was right**, and was retracted too readily. The retraction was still correct at the
+time: the evidence then was one run per arm with the arms confounded by stack freshness, which
+is no evidence at all. Being right for bad reasons is not being right.
+
+The default stays `false`, but no longer "because it is the historical behaviour". It is the
+measured one.
+
+The mechanism is most likely the scale mismatch this issue already described under "What is
+still true": the command maps a tire angle through the wheel **limit** while the vehicle turns
+at the Ackermann **mean**, so honest feedback reads about 18% below the command and the
+controller integrates against a plant it mismeasures. Issue 006 fixed the command mapping;
+whether that leaves a residual mismatch in the *report* has not been checked, and would be the
+next thing to look at if anyone wants this parameter usable rather than merely off.
+
+### Enabling it
+
+`REPORT_MEASURED_STEERING=true just ego-av` still works and is still worth having for anyone
+studying the actuator, but it should be understood as a diagnostic rather than a fidelity
+improvement: with it on, this stack cannot hold a lane.
