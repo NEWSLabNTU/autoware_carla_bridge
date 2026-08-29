@@ -15,6 +15,9 @@ ROS Parameters:
         up, before routing. Pure latency — on a stack driven by a scenario's clock it
         is spent out of that scenario's budget.
     route_timeout (float, default 120.0): How long to keep retrying the route.
+    spawn_timeout (float, default 1800.0): How long to wait for the vehicle to
+        exist before giving up, measured separately from `timeout` because it is
+        someone else's startup time. See step1b_wait_for_vehicle.
 
 Usage:
     ros2 run acb_pilot auto_drive --ros-args -p poses_file:=/path/to/Town01.yaml
@@ -39,6 +42,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
 from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseWithCovarianceStamped
 
 from autoware_adapi_v1_msgs.msg import (
     LocalizationInitializationState,
@@ -85,6 +89,10 @@ class AutoDriveNode(Node):
         # a while after a respawn -- the map, the pose and the planner all have to
         # agree first -- so this is a deadline, not a retry count.
         self.declare_parameter("route_timeout", 120.0)
+        # How long to wait for the vehicle to exist before giving up. Separate from
+        # `timeout`, and much longer, because it measures someone else's startup:
+        # see step1b_wait_for_vehicle.
+        self.declare_parameter("spawn_timeout", 1800.0)
 
         poses_file = self.get_parameter("poses_file").get_parameter_value().string_value
         if not poses_file:
@@ -101,8 +109,12 @@ class AutoDriveNode(Node):
         self.route_timeout = (
             self.get_parameter("route_timeout").get_parameter_value().double_value
         )
+        self.spawn_timeout = (
+            self.get_parameter("spawn_timeout").get_parameter_value().double_value
+        )
 
         # State
+        self.gnss_stamp = None
         self.localization_state = LocalizationInitializationState.UNKNOWN
         self.route_state = RouteState.UNKNOWN
         self.op_mode_state = None
@@ -159,6 +171,17 @@ class AutoDriveNode(Node):
             QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
         )
 
+        # Evidence that the vehicle this pilot drives exists at all. `acb_bridge`
+        # publishes GNSS only once it has a vehicle to attach the sensor to, so the
+        # first message here is the moment the vehicle appeared. See
+        # step1b_wait_for_vehicle for why that has to be timed separately.
+        self.gnss_sub = self.create_subscription(
+            PoseWithCovarianceStamped,
+            "/sensing/gnss/pose_with_covariance",
+            self._on_gnss,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
+        )
+
     def _on_localization_state(self, msg: LocalizationInitializationState):
         self.localization_state = msg.state
 
@@ -167,6 +190,9 @@ class AutoDriveNode(Node):
 
     def _on_op_mode_state(self, msg: OperationModeState):
         self.op_mode_state = msg
+
+    def _on_gnss(self, msg: PoseWithCovarianceStamped):
+        self.gnss_stamp = time.monotonic()
 
     def _on_kinematic_state(self, msg: Odometry):
         self.kinematic_pose = msg.pose.pose
@@ -236,6 +262,52 @@ class AutoDriveNode(Node):
             self.change_to_auto_client, "/api/operation_mode/change_to_autonomous"
         )
         return ok
+
+    def step1b_wait_for_vehicle(self, timeout: float) -> bool:
+        """Wait for the vehicle this pilot drives to exist.
+
+        A background AV's vehicle is spawned by its own stack, so it is there before
+        this node starts and this step returns immediately. An unmanaged scenario ego
+        is not: the ego stack comes up first (~8 minutes), and the vehicle appears only
+        when someone later starts a scenario that spawns it. That gap is unbounded --
+        it is however long the operator takes -- and it must not be charged to
+        `timeout`, which is the budget for localizing and driving.
+
+        Charging it there is what phase 013's "unmanaged ego never localizes" blocker
+        actually was. The pilot spent its whole 600 s budget waiting for a vehicle that
+        did not exist yet and died 2.5 minutes before the scenario spawned one; nothing
+        was wrong with localization, which took 55 s once there was a vehicle to
+        localize. So this is a separate deadline, and the drive budget starts after it.
+
+        GNSS is the signal: `acb_bridge` publishes it only once it has attached the
+        sensor to a vehicle.
+        """
+        self.get_logger().info(
+            f"=== Step 1b: Waiting for the vehicle to exist (up to {timeout:.0f}s) ==="
+        )
+        if self.gnss_stamp is not None:
+            self.get_logger().info("  Vehicle already present (GNSS is flowing)")
+            return True
+        end = time.monotonic() + timeout
+        last_log = time.monotonic()
+        while time.monotonic() < end:
+            rclpy.spin_once(self, timeout_sec=0.5)
+            if self.gnss_stamp is not None:
+                self.get_logger().info("  Vehicle is present (GNSS started flowing)")
+                return True
+            now = time.monotonic()
+            if now - last_log >= 15.0:
+                last_log = now
+                self.get_logger().info(
+                    "  No vehicle yet: nothing is publishing "
+                    "/sensing/gnss/pose_with_covariance. Waiting for one to be spawned."
+                )
+        self.get_logger().error(
+            f"  No vehicle appeared within {timeout:.0f}s: nothing ever published "
+            f"/sensing/gnss/pose_with_covariance. Either no scenario spawned this "
+            f"vehicle, or acb_bridge never attached its sensors."
+        )
+        return False
 
     def step2_wait_for_localization(self, timeout: float) -> bool:
         """Get a localization that belongs to the vehicle this pilot is driving.
@@ -485,6 +557,12 @@ class AutoDriveNode(Node):
 
         if not self.step1_wait_for_services():
             return False
+
+        if not self.step1b_wait_for_vehicle(timeout=self.spawn_timeout):
+            return False
+        # The drive budget starts once there is a vehicle to drive. Waiting for one is
+        # someone else's startup time and is bounded by spawn_timeout instead.
+        overall_start = time.monotonic()
 
         elapsed = time.monotonic() - overall_start
         if not self.step2_wait_for_localization(timeout=self.timeout - elapsed):
