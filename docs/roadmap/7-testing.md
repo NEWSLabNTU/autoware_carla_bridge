@@ -322,11 +322,46 @@ So it would have caught the bug that hid for two weeks, in the run where it firs
 - **`DiagnosticStatus.level` is a byte** in Humble's Python bindings, not an int. Formatting it
   with `%d` raises, after the run.
 
-### What it does not do yet
+### Tracking quality, with the thresholds measured rather than guessed
 
-- Lateral and longitudinal tracking quality are measured by `score_tracking.py` and
-  `diagnose_gain.py`, and are not folded in. They need a baseline before they can be a
-  threshold, and inventing one would make the suite fail on noise.
+The harness now judges how well the ego tracked, not only whether it moved. This is the point
+of it: issue 019 was a factor-of-two error in the acceleration-to-pedal conversion that lived in
+the bridge for as long as the bridge did, and no pass/fail verdict ever showed it.
+
+Delivered acceleration is differentiated from the bridge's own velocity report rather than read
+from CARLA. That was checked against the server first: the report matches CARLA's speed to a
+median of 0.0000 m/s and its derivative matches CARLA's acceleration to 0.067 m/s^2. Using ROS
+also avoids a fresh CARLA client, which cannot read a synchronous world at all.
+
+Baselines, five healthy runs:
+
+```
+longitudinal median |error|   0.064  0.065  0.083  0.090  0.142   m/s^2
+cross-track median            0.029  0.036  0.074  0.242  0.289   m
+```
+
+**The longitudinal limit is 0.35, and the first number chosen was wrong.** Set from the healthy
+runs alone, 0.60 looked reasonable at four times the worst good day. But issue 019's defect
+measured 0.592, so that limit would have let the exact regression it exists to catch pass by
+eight thousandths. A threshold needs both ends: the good runs *and* the magnitude of the fault.
+
+Validated by reintroducing the fault -- `ACCEL_MAP_PATH=none BRAKE_MAP_PATH=none` restores the
+single-constant conversion:
+
+```
+verdict: FAIL   peak 4.40 m/s   travelled 66.4 m   longitudinal 0.535 m/s^2
+    - longitudinal tracking 0.535 m/s^2 above the 0.35 limit
+verdict: FAIL   peak 4.81 m/s   travelled 20.9 m   longitudinal 0.521 m/s^2
+```
+
+The ego drove its full route both times, at ordinary speed. Everything except this check said
+the run was fine.
+
+The cross-track limit is deliberately loose at 1.00 m. No lateral regression has been
+characterised, so there is nothing to bracket it against, and a limit invented without one
+would only fail on noise.
+
+### What it does not do yet
 - It judges one stack configuration. The unmanaged ego (phase 013) needs its own domain and
   goal file, which the `--domain` flag allows but nothing exercises automatically.
 - Nothing runs it on a schedule. It is a command, not CI.

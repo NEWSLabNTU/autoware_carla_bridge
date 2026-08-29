@@ -42,6 +42,8 @@ import time
 from pathlib import Path
 
 import rclpy
+from autoware_control_msgs.msg import Control
+from autoware_planning_msgs.msg import Trajectory
 from autoware_vehicle_msgs.msg import VelocityReport
 from diagnostic_msgs.msg import DiagnosticArray
 from nav_msgs.msg import Odometry
@@ -50,6 +52,24 @@ JUNIT = Path("/tmp/scenario_test_runner/result.junit.xml")
 MIN_PEAK_SPEED = 1.0     # m/s; below this the ego never really drove
 MIN_DISTANCE = 20.0      # m; and it has to have gone somewhere
 
+# Tracking-quality limits. These are the point of the harness rather than an extra: issue 019
+# was a factor-of-two error in the acceleration-to-pedal conversion that no pass/fail verdict
+# ever showed, and it lived in the bridge for as long as the bridge did.
+#
+# The numbers are set from measured runs on a healthy stack, widened so noise cannot fail a
+# run. A threshold that fires on a good day gets switched off, and then catches nothing.
+# 0.35 is chosen against both ends. Five healthy runs measured 0.064 to 0.142, so this is two
+# and a half times the worst good day. Issue 019's defect measured 0.592 before it was fixed,
+# so this is well under the thing it exists to catch -- a limit of 0.60, set from the healthy
+# runs alone, would have let that regression pass by eight thousandths.
+MAX_LONGITUDINAL_ERROR = 0.35   # m/s^2, median |commanded - delivered|
+# Healthy runs measured 0.029 to 0.289. No lateral regression has been characterised yet, so
+# this is deliberately loose: there is nothing to bracket it against, and a limit invented
+# without one would only fail on noise.
+MAX_CROSS_TRACK = 1.00          # m, median distance from the planned trajectory
+LONGITUDINAL_LAG_S = 0.30       # command to delivery; swept once, flat between 0.1 and 0.5
+MIN_TRACKING_SAMPLES = 30       # below this the numbers are not worth judging
+
 
 def diag_level(status) -> int:
     """DiagnosticStatus.level is a byte in Humble, an int elsewhere."""
@@ -57,8 +77,14 @@ def diag_level(status) -> int:
     return lvl if isinstance(lvl, int) else int.from_bytes(lvl, "little")
 
 
-def observe(domain: int, duration: float) -> dict:
-    """Watch one run from ROS alone and return what it did."""
+def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
+    """Watch one run from ROS alone and return what it did.
+
+    Waits for the ego to exist before the measurement window opens. A fixed sleep does not
+    work: a scenario takes anywhere from twenty seconds to over a minute to reach the point
+    of spawning one, and a window that opens too early scores an empty run as a failure --
+    which it did, and the run under it was fine.
+    """
     os.environ["ROS_DOMAIN_ID"] = str(domain)
     rclpy.init()
     node = rclpy.create_node("acceptance_%d" % os.getpid())
@@ -83,9 +109,50 @@ def observe(domain: int, duration: float) -> dict:
             else:
                 diags.pop(s.name, None)
 
+    # Longitudinal: what was asked for, and what the vehicle then did. Delivered acceleration
+    # is differentiated from the bridge's own velocity report rather than read from CARLA --
+    # checked against the server, the report matches its speed to a median of 0.0000 m/s and
+    # the derivative matches its acceleration to 0.067 m/s^2, and using ROS avoids a fresh
+    # CARLA client, which cannot read a synchronous world at all.
+    commands: list[tuple[float, float]] = []
+    speeds: list[tuple[float, float]] = []
+    cross_track: list[float] = []
+    traj: dict = {"points": []}
+
+    def on_command(m):
+        commands.append((time.time(), m.longitudinal.acceleration))
+
+    def on_speed(m):
+        speeds.append((time.time(), m.longitudinal_velocity))
+
+    def on_trajectory(m):
+        traj["points"] = [(p.pose.position.x, p.pose.position.y) for p in m.points]
+
+    def on_odom_cross_track(m):
+        pts = traj["points"]
+        if len(pts) >= 2:
+            p = m.pose.pose.position
+            cross_track.append(min(math.dist((p.x, p.y), q) for q in pts))
+
     node.create_subscription(VelocityReport, "/vehicle/status/velocity_status", on_velocity, 10)
+    node.create_subscription(VelocityReport, "/vehicle/status/velocity_status", on_speed, 10)
     node.create_subscription(Odometry, "/localization/kinematic_state", on_odom, 10)
+    node.create_subscription(Odometry, "/localization/kinematic_state", on_odom_cross_track, 10)
     node.create_subscription(DiagnosticArray, "/diagnostics", on_diag, 50)
+    node.create_subscription(Control, "/control/command/control_cmd", on_command, 20)
+    node.create_subscription(
+        Trajectory, "/planning/scenario_planning/trajectory", on_trajectory, 1)
+
+    waiting = time.time()
+    while seen["samples"] == 0 and time.time() - waiting < settle:
+        rclpy.spin_once(node, timeout_sec=0.2)
+    if seen["samples"] == 0:
+        rclpy.shutdown()
+        return {
+            "peak_speed": 0.0, "distance": 0.0, "status_samples": 0,
+            "diagnostics": diags, "longitudinal": {"samples": 0, "median_error": None},
+            "cross_track": None,
+        }
 
     start = time.time()
     while time.time() - start < duration:
@@ -100,7 +167,42 @@ def observe(domain: int, duration: float) -> dict:
         "distance": distance,
         "status_samples": seen["samples"],
         "diagnostics": diags,
+        "longitudinal": longitudinal_error(commands, speeds),
+        "cross_track": median(cross_track) if cross_track else None,
     }
+
+
+def median(values: list[float]) -> float:
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return 0.5 * (ordered[mid - 1] + ordered[mid])
+
+
+def longitudinal_error(commands, speeds) -> dict:
+    """Median |commanded - delivered| acceleration, over samples where the ego was moving.
+
+    Standstill is excluded on purpose. A stopped car asked for -1 m/s^2 delivers 0, and that is
+    the car being stopped rather than a tracking failure; counting it measures the metric.
+    """
+    derived = []
+    for i in range(4, len(speeds)):
+        (t0, v0), (t1, v1) = speeds[i - 4], speeds[i]
+        if t1 - t0 > 1e-3:
+            derived.append((0.5 * (t0 + t1), (v1 - v0) / (t1 - t0), v1))
+    errors = []
+    for t_cmd, requested in commands:
+        target = t_cmd + LONGITUDINAL_LAG_S
+        near = [(abs(t - target), a, v) for t, a, v in derived if abs(t - target) < 0.10]
+        if not near:
+            continue
+        _, delivered, speed = min(near)
+        if speed > 1.0:
+            errors.append(abs(delivered - requested))
+    if len(errors) < MIN_TRACKING_SAMPLES:
+        return {"samples": len(errors), "median_error": None}
+    return {"samples": len(errors), "median_error": median(errors)}
 
 
 def junit_verdict() -> tuple[bool, str]:
@@ -141,7 +243,10 @@ def main() -> int:
     ap.add_argument("--scenario", required=True)
     ap.add_argument("--domain", type=int, default=1)
     ap.add_argument("--runs", type=int, default=1)
-    ap.add_argument("--timeout", type=float, default=150.0)
+    ap.add_argument("--timeout", type=float, default=150.0,
+                    help="how long to watch once the ego exists")
+    ap.add_argument("--settle", type=float, default=120.0,
+                    help="how long to wait for the ego to exist before giving up")
     ap.add_argument("--play-log", default="play_log/ego")
     ap.add_argument("--json", help="write the full result here")
     args = ap.parse_args()
@@ -163,9 +268,7 @@ def main() -> int:
             ["setsid", "--fork", "just", "scenario", args.scenario],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         launched.wait()
-        time.sleep(20)          # the interpreter has to reach Initialize before anything moves
-
-        seen = observe(args.domain, args.timeout)
+        seen = observe(args.domain, args.timeout, settle=args.settle)
         passed, why_verdict = junit_verdict()
         dead = dead_nodes(Path(args.play_log))
         errors = {n: m for n, (lvl, m) in seen["diagnostics"].items() if lvl >= 2}
@@ -183,13 +286,30 @@ def main() -> int:
         for d in dead:
             why.append("node died -- %s" % d)
 
+        lon = seen["longitudinal"]
+        if lon["median_error"] is None:
+            print("    (tracking) too few longitudinal samples (%d) to judge" % lon["samples"])
+        elif lon["median_error"] > MAX_LONGITUDINAL_ERROR:
+            why.append("longitudinal tracking %.3f m/s^2 above the %.2f limit"
+                       % (lon["median_error"], MAX_LONGITUDINAL_ERROR))
+        if seen["cross_track"] is not None and seen["cross_track"] > MAX_CROSS_TRACK:
+            why.append("cross-track %.3f m above the %.2f limit"
+                       % (seen["cross_track"], MAX_CROSS_TRACK))
+
         ok = not why
         results.append({"run": run, "ok": ok, "why": why,
                         "peak_speed": round(seen["peak_speed"], 2),
                         "distance": round(seen["distance"], 1),
+                        "longitudinal": seen["longitudinal"],
+                        "cross_track": seen["cross_track"],
                         "diagnostic_errors": errors})
-        print("  verdict: %s   peak %.2f m/s   travelled %.1f m"
-              % ("PASS" if ok else "FAIL", seen["peak_speed"], seen["distance"]))
+        lon_txt = ("%.3f" % seen["longitudinal"]["median_error"]
+                   if seen["longitudinal"]["median_error"] is not None else "n/a")
+        xt_txt = "%.3f" % seen["cross_track"] if seen["cross_track"] is not None else "n/a"
+        print("  verdict: %s   peak %.2f m/s   travelled %.1f m   longitudinal %s m/s^2   "
+              "cross-track %s m"
+              % ("PASS" if ok else "FAIL", seen["peak_speed"], seen["distance"],
+                 lon_txt, xt_txt))
         for w in why:
             print("    - %s" % w)
         # Reported but not failed: these are noisy on a healthy stack, and a check that cries

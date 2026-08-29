@@ -452,27 +452,67 @@ enum WaitOutcome {
     Stale,
 }
 
-/// Reconnect after this much fruitless waiting. Between scenarios a long empty wait
-/// is normal, so this fires repeatedly there — reconnecting with nothing attached
-/// is free, and it is the only way to notice a silently replaced server.
+/// Consider reconnecting after this much fruitless waiting — but only after checking that
+/// the connection is actually dead. See `connection_is_dead`.
 const WAIT_RECONNECT_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Whether this client has genuinely lost the server, as opposed to merely having nothing to
+/// look at yet.
+///
+/// This distinction is the whole point. An earlier version reconnected on the timer alone,
+/// reasoning that "reconnecting with nothing attached is free". It is not free: a *fresh*
+/// CARLA client's first `world()` waits for a world snapshot, and a snapshot only arrives on a
+/// tick. Between scenarios the bridge holds CARLA in synchronous mode and stops ticking, so a
+/// reconnect there can never complete — every attempt times out at 30 s, forever, and the
+/// bridge that was merely waiting is now permanently unable to serve:
+///
+/// ```text
+/// Still waiting for vehicle (role_name=hero)... (59s elapsed)
+/// No vehicle after 60s; refreshing the CARLA connection in case the server was replaced
+/// CARLA not ready: Simulation error: time-out of 30000ms while waiting for the simulator
+/// ```
+///
+/// Waiting more than 60 s is ordinary: a scenario takes that long to reach the point of
+/// spawning an ego. So the timer alone cannot mean the server was replaced.
+///
+/// An *established* client has no such problem, because it already has an episode. Asking it
+/// for the world settings is a direct RPC that needs no tick, so it answers on a live server
+/// and fails on a dead one, which is exactly the question being asked.
+fn connection_is_dead(client: &Client) -> bool {
+    match client.world().and_then(|world| world.settings()) {
+        Ok(_) => false,
+        Err(e) => {
+            tracing::warn!("CARLA stopped answering an established connection: {e}");
+            true
+        }
+    }
+}
 
 fn wait_for_vehicle(client: &Client, vehicle_name: &str, running: &AtomicBool) -> WaitOutcome {
     use carla::client::ActorBase;
     tracing::info!("Waiting for vehicle (role_name={vehicle_name}) in CARLA...");
-    let start = std::time::Instant::now();
+    let mut start = std::time::Instant::now();
     let mut last_log = std::time::Instant::now();
     loop {
         if !running.load(Ordering::SeqCst) {
             return WaitOutcome::Shutdown;
         }
         if start.elapsed() > WAIT_RECONNECT_INTERVAL {
+            if connection_is_dead(client) {
+                tracing::info!(
+                    "No vehicle after {}s and CARLA is not answering; refreshing the \
+                     connection in case the server was replaced",
+                    WAIT_RECONNECT_INTERVAL.as_secs()
+                );
+                return WaitOutcome::Stale;
+            }
+            // Alive, just nothing spawned yet. Keep the connection and keep waiting: throwing
+            // it away here is what used to strand the bridge for the rest of the session.
             tracing::info!(
-                "No vehicle after {}s; refreshing the CARLA connection in case the \
-                 server was replaced",
+                "No vehicle after {}s, but CARLA is still answering; keeping the connection",
                 WAIT_RECONNECT_INTERVAL.as_secs()
             );
-            return WaitOutcome::Stale;
+            start = std::time::Instant::now();
         }
         // Re-fetch the world every poll: a scenario runner may load a different map
         // between spawns, which starts a NEW episode. A world handle from before the
