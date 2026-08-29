@@ -217,12 +217,54 @@ is no evidence at all. Being right for bad reasons is not being right.
 The default stays `false`, but no longer "because it is the historical behaviour". It is the
 measured one.
 
-The mechanism is most likely the scale mismatch this issue already described under "What is
-still true": the command maps a tire angle through the wheel **limit** while the vehicle turns
-at the Ackermann **mean**, so honest feedback reads about 18% below the command and the
-controller integrates against a plant it mismeasures. Issue 006 fixed the command mapping;
-whether that leaves a residual mismatch in the *report* has not been checked, and would be the
-next thing to look at if anyone wants this parameter usable rather than merely off.
+### The mechanism: not scale, delay
+
+This issue guessed the cause was the scale mismatch described under "What is still true" -- the
+command mapping through the wheel limit while the vehicle turns at the Ackermann mean, so
+honest feedback would read about 18% low. **That guess is wrong, and so was a second one.**
+
+*Averaging the wheels.* `measured_steering_angle` reports the arithmetic mean of the two front
+wheel angles, where the bicycle-equivalent angle is strictly the mean of their cotangents. The
+difference is real and negligible here: 0.0% at 2 degrees of steer, 0.2% at 10, and only 2.5%
+at full lock, against scenarios that steer a few degrees. It cannot produce a 67x effect, and
+changing it would be churn.
+
+*Scale.* Measured live over 1296 paired samples on a driving ego:
+
+```
+mean |command|        0.0714 rad
+mean |reported|       0.0733 rad
+mean |CARLA wheels|   0.0733 rad
+reported / command    median 1.000
+sign agreement        report vs -CARLA mean   1296/1296
+```
+
+The report is faithful. It reproduces CARLA's wheels exactly and tracks the command at unity,
+so there is no 18% error left to find -- issue 006's fix to the command mapping appears to have
+closed it.
+
+*Delay.* What is left is timing, and it is large. Cross-correlating the command against the
+report over a full run peaks at about **1 second**:
+
+```
+lag(s)   0.00    0.20    0.50    1.00    1.50    2.00    3.00
+corr    0.9785  0.9867  0.9953  0.9972  0.9826  0.9609  0.8880
+```
+
+Treat that number as an order of magnitude, not a measurement. The steering signal is smooth
+enough that zero lag already correlates at 0.978, so the peak is shallow, and a run earlier the
+same afternoon peaked at the same place from a much lower base. What the shape does establish is
+that a delay of roughly a second exists, and that is consistent with the ~478 ms command-to-wheel
+lag measured separately in this project.
+
+A controller closing a lateral loop on a measurement delayed by that much has no chance, which
+matches what the A/B measured. Echoing the command hides the delay by removing the plant from
+the loop entirely -- which is the dishonesty this issue was opened about, and is also why it is
+stable.
+
+So making this parameter usable is not a matter of correcting the report. It would need the
+lateral controller to know the delay, or the delay itself to come down.
+
 
 ### Enabling it
 
