@@ -46,6 +46,8 @@ systemd-run --user \
     -p RestartSec=10 \
     -p StartLimitBurst=5 \
     -p StartLimitIntervalSec=300 \
+    -p TimeoutStartSec=300 \
+    -p ExecStartPost="/usr/bin/env bash $SCRIPT_DIR/carla_wait_ready.sh" \
     bash "$RUN_SCRIPT"
 
 echo "CARLA started on port $PORT"

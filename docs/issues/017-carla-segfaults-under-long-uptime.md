@@ -2,7 +2,7 @@
 
 **Severity**: Medium
 **Component**: CARLA 0.9.16 server (`CarlaUE4-Linux-Shipping`), not `acb_bridge`
-**Status**: Open — observed and characterised, cause not investigated
+**Status**: Open — the crash is now captured and the bad restart is fixed; the segfault's own cause is still uninvestigated
 
 ## What happens
 
@@ -115,3 +115,80 @@ restarted underneath a running batch. Those remain the subject of this issue.
 Note also that a wedged server may ignore `SIGTERM` and need `SIGKILL`, and that
 `just carla-stop` reports "CARLA is not running on port 2000" for an instance started by hand
 rather than as the systemd user unit.
+
+## Caught in the act: the crash, and the restart that made it worse (2026-08-29)
+
+This issue has said since it was written that no crash was ever captured -- no core kept, no
+server log read. One was finally caught, and the journal had it all along:
+
+```
+13:51:42  Signal 11 caught.
+13:51:43  CommonUnixCrashHandler: Signal=11
+13:51:43  Engine crash handling finished; re-raising signal 11 for the default handler.
+13:51:43  Segmentation fault (core dumped)
+13:51:43  carla-run-2000.service: Main process exited, code=exited, status=139/n/a
+13:51:43  carla-run-2000.service: Consumed 4d 15h 16min 6.717s CPU time.
+13:51:53  carla-run-2000.service: Scheduled restart job, restart counter is at 1.
+13:51:56  No protocol specified
+```
+
+So the segfault is real, UE4's own crash handler runs, and `journalctl --user -u
+carla-run-2000` is where to look. That is a better source than the core, which the kernel did
+not keep -- `coredumpctl` is empty and `/var/lib/systemd/coredump` has nothing, so whatever
+"(core dumped)" wrote went somewhere the default limits discarded.
+
+Note the CPU time: **4 days 15 hours** consumed by that instance. The uptime correlation this
+issue is named for now has a third data point.
+
+### The restart is worse than the crash
+
+`Restart=on-failure` brought CARLA back ten seconds later, and the replacement never served a
+single RPC. Twenty-six minutes after it started:
+
+```
+process   alive, 158 threads, 2.4 GB RSS, 121% CPU, one thread R and the rest sleeping
+port      LISTEN 36  -- thirty-six connections completed by the kernel, never accepted
+clients   both carla_scenario_bridge and acb_bridge timing out at 30 s, forever
+```
+
+The bridges' logs are worth reading together, because separately each looks like its own bug:
+
+```
+acb  WARN CARLA not ready: Simulation error: time-out of 30000ms while waiting for the simulator
+csb  WARN Returning error: Failed to enable sync mode: get settings
+```
+
+An hour was spent treating the acb line as a reconnect defect -- a fresh CARLA client's first
+`GetWorld()` waits for a world snapshot, so it genuinely cannot connect to a server nobody is
+ticking, and that was a plausible story. It was wrong. csb was failing at the same instants on
+a call that needs no tick at all, which is what rules the theory out: the server was serving
+nobody.
+
+A deliberate `just carla-stop && just carla-start` produced a working server immediately, so
+the environment was fine. Only the automatic restart produced the zombie.
+
+That is the part worth fixing. A crash leaves a state anything can detect. This restart
+converts it into "process up, port listening, RPC dead", which passes every check except a real
+client call -- and it is the state a long unattended batch will meet.
+
+### Fix: the unit is not "up" until it serves
+
+`scripts/carla_wait_ready.sh` runs as the unit's `ExecStartPost` and polls `carla_health.py`
+until CARLA answers, failing after `CARLA_READY_TIMEOUT` (180 s default, with
+`TimeoutStartSec=300` above it). A unit whose `ExecStartPost` fails is stopped by systemd, so a
+restart that produces a server nobody can talk to ends as "down" -- which `just carla-health`
+reports plainly and which `just scenario`, `just ego-av` and `just bg-av` already refuse to run
+against.
+
+Verified both ways: a healthy start reaches `active` only after the server answers
+(`Result=success`), and the gate against a port with nothing behind it exits non-zero with the
+reason.
+
+`Restart=on-failure` is kept. A restart that works is still worth having; this only stops a
+restart that does not from pretending otherwise.
+
+### Still not done
+
+The cause of the segfault itself. The journal names the signal and nothing more, and the core
+was not retained. Raising `ulimit -c` for the unit, or pointing `kernel.core_pattern` at
+systemd-coredump, would keep the next one -- and there will be a next one.
