@@ -57,4 +57,15 @@ case "$RENDER" in
     *) echo "Unknown CARLA_RENDER='$RENDER' (want offscreen or window)" >&2; exit 1 ;;
 esac
 
+# Anything else to hand the engine, space separated. Deliberately unquoted so it splits.
+#
+# The reason this exists: Unreal lowers its own core limit at startup and logs "Disabling core
+# dumps.", so a segfault leaves nothing to read even when the unit's soft limit is infinity --
+# which is why docs/issues/017 has three crashes and no core. The engine takes switches for
+# that, and this is where to pass one without editing the launcher.
+if [ -n "${CARLA_EXTRA_ARGS:-}" ]; then
+    # shellcheck disable=SC2206
+    args+=($CARLA_EXTRA_ARGS)
+fi
+
 exec ./CarlaUE4.sh "${args[@]}"

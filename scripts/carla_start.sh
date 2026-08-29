@@ -32,6 +32,18 @@ systemctl --user stop "$UNIT_NAME" 2>/dev/null || true
 systemctl --user reset-failed "$UNIT_NAME" 2>/dev/null || true
 sleep 0.5
 
+# LimitCORE=infinity below is what makes a segfault leave evidence. The server has crashed
+# repeatedly under long uptime (docs/issues/017) and no core was ever kept: the unit inherited a
+# soft core limit of 0, so "(core dumped)" in the journal wrote nothing. The hard limit was
+# already infinity; only the soft one was in the way.
+#
+# core_pattern on this host pipes to apport, which is enabled and demonstrably writing reports
+# for other binaries into /var/crash. So with the soft limit raised the next CARLA segfault
+# lands there as a .crash carrying the core and a stack, without needing root -- changing
+# core_pattern would.
+#
+# The cost is disk: the server runs at about 2.4 GB resident, so expect a report of that order.
+# apport keeps one report per executable until it is cleared, so this does not grow per crash.
 echo "Starting CARLA on port $PORT (map=${CARLA_MAP:-package default}, quality=$CARLA_QUALITY, render=$CARLA_RENDER, DISPLAY=${DISPLAY:-none})..."
 
 systemd-run --user \
@@ -42,11 +54,13 @@ systemd-run --user \
     --setenv=CARLA_QUALITY="$CARLA_QUALITY" \
     --setenv=CARLA_RENDER="$CARLA_RENDER" \
     ${CARLA_DIR:+--setenv=CARLA_DIR="$CARLA_DIR"} \
+    ${CARLA_EXTRA_ARGS:+--setenv=CARLA_EXTRA_ARGS="$CARLA_EXTRA_ARGS"} \
     -p Restart=on-failure \
     -p RestartSec=10 \
     -p StartLimitBurst=5 \
     -p StartLimitIntervalSec=300 \
     -p TimeoutStartSec=300 \
+    -p LimitCORE=infinity \
     -p ExecStartPost="/usr/bin/env bash $SCRIPT_DIR/carla_wait_ready.sh" \
     bash "$RUN_SCRIPT"
 

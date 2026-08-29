@@ -187,8 +187,41 @@ reason.
 `Restart=on-failure` is kept. A restart that works is still worth having; this only stops a
 restart that does not from pretending otherwise.
 
+### Keeping a core: attempted, and it cannot be done this way
+
+The obvious next step was to keep the next core and read it. It does not work, and the reason
+is worth writing down so nobody spends the afternoon again.
+
+Three things were checked, and two of them were fixed:
+
+1. **The unit's soft core limit was 0** (hard was already infinity), so nothing would have been
+   written whatever else was true. `carla_start.sh` now passes `LimitCORE=infinity`, and the
+   unit reports `LimitCORESoft=infinity`.
+2. **`core_pattern` pipes to apport**, not systemd-coredump, which is not installed here.
+   apport is enabled and demonstrably working -- `/var/crash` holds recent reports for `ros2`,
+   `rviz2` and `python3`. So the pipeline is live and needs no root.
+3. **Unreal disables core dumps for itself.** This is the blocker. The running process reports
+
+   ```
+   Max core file size        0                    unlimited
+   ```
+
+   while its parent shell has `unlimited`, so the engine lowers it after exec. The binary
+   contains the strings `Disabling core dumps.` and `Alternatively, pass -nocore if you are
+   unable or unwilling to do that.`, which implies a switch. There is one, and it does not
+   help: started with `-core` present in `/proc/<pid>/cmdline`, the process still comes up with
+   a soft limit of 0. This Shipping build disables cores unconditionally.
+
+So a kernel core is unavailable without patching the engine. `CARLA_EXTRA_ARGS` was added to
+`run.sh` while testing this and is kept -- it is the place to pass an engine switch without
+editing the launcher.
+
+**What is left if the cause is ever worth chasing**: run the server under a debugger that
+outlives it (`gdb --batch -ex run -ex bt --args ...`), or attach a ptrace-based dumper to the
+live process. Both change how the server runs, so neither belongs in the default path. The
+journal already gives the signal, the timing and the CPU time consumed, which is what the three
+data points in this issue rest on.
+
 ### Still not done
 
-The cause of the segfault itself. The journal names the signal and nothing more, and the core
-was not retained. Raising `ulimit -c` for the unit, or pointing `kernel.core_pattern` at
-systemd-coredump, would keep the next one -- and there will be a next one.
+The cause of the segfault itself.
