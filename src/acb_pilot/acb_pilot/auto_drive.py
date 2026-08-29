@@ -15,9 +15,11 @@ ROS Parameters:
         up, before routing. Pure latency — on a stack driven by a scenario's clock it
         is spent out of that scenario's budget.
     route_timeout (float, default 120.0): How long to keep retrying the route.
-    spawn_timeout (float, default 1800.0): How long to wait for the vehicle to
-        exist before giving up, measured separately from `timeout` because it is
-        someone else's startup time. See step1b_wait_for_vehicle.
+    spawn_timeout (float, default 1800.0): How long to wait for a vehicle to drive
+        before giving up, measured separately from `timeout` because it is someone
+        else's startup time. Bounds re-acquisition too: if the vehicle is despawned
+        mid-sequence the pilot starts over, and this is the budget for all attempts.
+        See step1b_wait_for_vehicle and run().
 
 Usage:
     ros2 run acb_pilot auto_drive --ros-args -p poses_file:=/path/to/Town01.yaml
@@ -33,6 +35,7 @@ Poses file format:
       qw: 0.789
 """
 
+import math
 import sys
 import time
 
@@ -55,6 +58,19 @@ from autoware_adapi_v1_msgs.srv import (
     ClearRoute,
     InitializeLocalization,
 )
+
+
+# How long GNSS may be quiet before the pilot concludes its vehicle is gone.
+VEHICLE_GONE_AFTER = 5.0
+
+# Losing the ego this close to the goal counts as arriving. Wider than the scenario's own
+# ReachPositionCondition (6 m in town01_unmanaged.xosc), because the EKF pose the pilot
+# last saw lags the CARLA pose the scenario scored.
+ARRIVED_IF_LOST_WITHIN = 15.0
+
+
+class VehicleGone(Exception):
+    """The vehicle being driven was despawned; re-acquire and start over."""
 
 
 _LOC_STATE_NAMES = {
@@ -263,6 +279,40 @@ class AutoDriveNode(Node):
         )
         return ok
 
+    def _vehicle_is_present(self) -> bool:
+        """Is the vehicle this pilot is driving still there?
+
+        `acb_bridge` publishes GNSS only while it has a vehicle attached, so GNSS going
+        quiet means the vehicle was despawned. VEHICLE_GONE_AFTER is generous because the
+        topic is not fast and a busy machine can stretch the gap.
+        """
+        return (
+            self.gnss_stamp is not None
+            and time.monotonic() - self.gnss_stamp < VEHICLE_GONE_AFTER
+        )
+
+    def _distance_to_goal(self) -> float | None:
+        """How far the last known EKF pose was from the goal, or None if never seen."""
+        if self.kinematic_pose is None:
+            return None
+        p = self.kinematic_pose.position
+        return math.hypot(p.x - self.goal_pose["x"], p.y - self.goal_pose["y"])
+
+    def _abort_if_vehicle_gone(self) -> None:
+        """Raise if the vehicle disappeared mid-sequence.
+
+        A scenario ego is despawned and respawned freely -- SSv2 does it at the start of
+        every run -- and a pilot that does not notice keeps steering a vehicle that no
+        longer exists. That is not hypothetical: an ego stack started while a PREVIOUS
+        run's ego was still in the world had its pilot localize to that stale vehicle at
+        (104.5, -55.4) instead of the spawn point, route it, engage it, and spend its
+        whole 564 s budget on it. The scenario then started, despawned the stale ego and
+        spawned the real one, which nothing was left to drive. From outside it looked
+        like an ego that drove for ten minutes and never arrived.
+        """
+        if not self._vehicle_is_present():
+            raise VehicleGone()
+
     def step1b_wait_for_vehicle(self, timeout: float) -> bool:
         """Wait for the vehicle this pilot drives to exist.
 
@@ -349,6 +399,7 @@ class AutoDriveNode(Node):
         last_log = time.monotonic()
         while time.monotonic() < end:
             rclpy.spin_once(self, timeout_sec=0.5)
+            self._abort_if_vehicle_gone()
             initialized = (
                 self.localization_state == LocalizationInitializationState.INITIALIZED
             )
@@ -534,6 +585,7 @@ class AutoDriveNode(Node):
         last_log = start
         while time.monotonic() < end:
             rclpy.spin_once(self, timeout_sec=0.5)
+            self._abort_if_vehicle_gone()
             now = time.monotonic()
             if self.route_state == RouteState.ARRIVED:
                 self.get_logger().info(
@@ -551,40 +603,87 @@ class AutoDriveNode(Node):
         return False
 
     def run(self) -> bool:
-        """Execute the full autonomous driving sequence."""
+        """Execute the full autonomous driving sequence.
+
+        The sequence restarts if the vehicle is despawned under it. A scenario ego comes
+        and goes -- SSv2 despawns and respawns one at the start of every run -- so
+        "the vehicle I was driving is gone" is a normal event to recover from, not a
+        failure. Without this the pilot drives whatever vehicle happened to exist when it
+        started, including one left behind by a previous run, and never notices that the
+        real ego arrived later. Bounded by spawn_timeout, so a vehicle that never comes
+        back still ends the run rather than looping forever.
+        """
         self.get_logger().info(f"Auto-drive starting (timeout={self.timeout}s)")
-        overall_start = time.monotonic()
 
         if not self.step1_wait_for_services():
             return False
 
-        if not self.step1b_wait_for_vehicle(timeout=self.spawn_timeout):
-            return False
-        # The drive budget starts once there is a vehicle to drive. Waiting for one is
-        # someone else's startup time and is bounded by spawn_timeout instead.
-        overall_start = time.monotonic()
+        deadline = time.monotonic() + self.spawn_timeout
+        attempt = 0
+        while True:
+            attempt += 1
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.get_logger().error(
+                    f"  No vehicle stayed around long enough to drive, within "
+                    f"{self.spawn_timeout:.0f}s"
+                )
+                return False
+            if attempt > 1:
+                self.get_logger().info(f"=== Re-acquiring (attempt {attempt}) ===")
+                self.kinematic_pose = None
+                self.kinematic_stamp = None
+                self.gnss_stamp = None
 
-        elapsed = time.monotonic() - overall_start
-        if not self.step2_wait_for_localization(timeout=self.timeout - elapsed):
-            return False
+            if not self.step1b_wait_for_vehicle(timeout=remaining):
+                return False
+            # The drive budget starts once there is a vehicle to drive. Waiting for one
+            # is someone else's startup time and is bounded by spawn_timeout instead.
+            overall_start = time.monotonic()
 
-        if not self.step3_set_route():
-            return False
+            try:
+                elapsed = time.monotonic() - overall_start
+                if not self.step2_wait_for_localization(timeout=self.timeout - elapsed):
+                    return False
 
-        if not self.step4_wait_for_route(timeout=15.0):
-            return False
+                if not self.step3_set_route():
+                    return False
 
-        if not self.step5_engage_autonomous():
-            return False
+                if not self.step4_wait_for_route(timeout=15.0):
+                    return False
 
-        elapsed = time.monotonic() - overall_start
-        arrived = self.step6_wait_for_arrival(timeout=max(self.timeout - elapsed, 30.0))
+                if not self.step5_engage_autonomous():
+                    return False
 
-        total = time.monotonic() - overall_start
-        self.get_logger().info(
-            f"Auto-drive {'completed' if arrived else 'timed out'} in {total:.1f}s"
-        )
-        return arrived
+                elapsed = time.monotonic() - overall_start
+                arrived = self.step6_wait_for_arrival(
+                    timeout=max(self.timeout - elapsed, 30.0)
+                )
+            except VehicleGone:
+                # A scenario despawns its ego the moment it scores the run, which is
+                # BEFORE the pilot can observe route_state=ARRIVED. Losing the vehicle
+                # within arriving distance of the goal is that success, not a wrong
+                # vehicle -- treating it as the latter left the pilot waiting out its
+                # whole spawn_timeout after a run it had just completed.
+                gap = self._distance_to_goal()
+                if gap is not None and gap <= ARRIVED_IF_LOST_WITHIN:
+                    self.get_logger().info(
+                        f"  The ego was despawned {gap:.1f} m from the goal: the "
+                        "scenario ended the run on arrival."
+                    )
+                    return True
+                where = "unknown position" if gap is None else f"{gap:.1f} m from the goal"
+                self.get_logger().warn(
+                    f"  The vehicle being driven was despawned at {where}. It was most "
+                    "likely not the one this run is about -- waiting for the next one."
+                )
+                continue
+
+            total = time.monotonic() - overall_start
+            self.get_logger().info(
+                f"Auto-drive {'completed' if arrived else 'timed out'} in {total:.1f}s"
+            )
+            return arrived
 
 
 def main():
