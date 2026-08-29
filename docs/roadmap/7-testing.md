@@ -364,6 +364,38 @@ sits three times above the worst healthy run and twice below the mildest faulty 
 nothing observed in between.
 
 ### What it does not do yet
-- It judges one stack configuration. The unmanaged ego (phase 013) needs its own domain and
-  goal file, which the `--domain` flag allows but nothing exercises automatically.
+### The unmanaged ego (phase 013)
+
+`--unmanaged` judges an unmanaged stack: it watches domain 3 by default and launches the
+scenario with `EGO_MANAGED=false`, so the scenario is run the same way the stack was. The
+stack itself is still the caller's:
+
+```
+EGO_MANAGED=false EGO_GOAL_POSES_FILE=$PWD/scenarios/ego_poses.yaml just ego-av
+EGO_MANAGED=false just acceptance $PWD/scenarios/town01_unmanaged.xosc
+```
+
+Two things this exercise established, both worth knowing before relying on the path:
+
+**It drives well.** On a freshly started stack the ego covered 216.2 m at 4.94 m/s with a
+cross-track of 0.013 m and longitudinal error of 0.196 -- a better drive than the managed
+scenario, which is a third the distance.
+
+**It needs a fresh stack for every run.** Consecutive runs on one unmanaged stack degrade to
+nothing: 216 m on the first, then 10 m, then an ego that never moves. This is the constraint
+the justfile already documents for background AVs -- SSv2 restarts simulation time near zero
+each run and a stack that has seen a later clock stalls on the backward jump -- and an
+unmanaged ego is architecturally a background AV: its own domain, its own clock, its own
+pilot. A managed ego is exempt because SSv2 respawns it. So `--runs N` is a managed-only
+convenience; for unmanaged, restart the stack between runs.
+
+**Its verdict is unresolved, and the harness says so rather than guessing.** Phase 013's own
+notes record the interpreter writing a junit and logging `Passed` on a successful run. Runs
+here have not produced one at `/tmp/scenario_test_runner/result.junit.xml`, or anywhere else
+inside two hours of searching. With `--unmanaged` a missing junit is therefore reported as
+unverified instead of failing the run, and every other check -- the ego drove, it travelled, no
+node died, tracking within limits -- stays strict. Inventing a pass from the remaining evidence
+would be worse than admitting the verdict is missing.
+
+### What it does not do yet
 - Nothing runs it on a schedule. It is a command, not CI.
