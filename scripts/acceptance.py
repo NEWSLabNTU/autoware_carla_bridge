@@ -15,6 +15,11 @@ What it judges, and why each is here:
 * **Diagnostics that are not OK.** The cascade behind issue 016 was fifteen non-OK nodes.
 * **Longitudinal tracking.** Issue 019 was a factor-of-two error in the pedal conversion that
   no pass/fail verdict ever showed.
+* **Localization against ground truth.** Not the same question as cross-track: cross-track
+  asks whether the vehicle is on the trajectory it planned, and that stays small when
+  localization is confidently wrong, because the trajectory is planned from the same wrong
+  pose. A run scored 0.019 m cross-track while its EKF sat 170 m from where the vehicle
+  actually was, and planning held for an obstacle near the phantom.
 
 Traps this deliberately avoids, each one having produced a confident wrong answer already:
 
@@ -46,6 +51,7 @@ from autoware_control_msgs.msg import Control
 from autoware_planning_msgs.msg import Trajectory
 from autoware_vehicle_msgs.msg import VelocityReport
 from diagnostic_msgs.msg import DiagnosticArray
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 
 JUNIT = Path("/tmp/scenario_test_runner/result.junit.xml")
@@ -68,6 +74,16 @@ MAX_LONGITUDINAL_ERROR = 0.35   # m/s^2, median |commanded - delivered|
 # destabilising -- measured 2.187 to 13.277 over six runs. So 1.00 sits three times above the
 # worst good day and twice below the mildest bad one, with nothing in between observed.
 MAX_CROSS_TRACK = 1.00          # m, median distance from the planned trajectory
+# Localization against ground truth, bracketed the same way. Healthy runs measured medians
+# of 0.62, 1.27 and 1.53 m; a run in the same batch that had mis-localized measured 32.19,
+# and the run this check was written for sat 170 m behind GNSS for its whole duration. So
+# 10.0 is six times the worst good day and three times under the mildest bad one.
+#
+# MEDIAN, not max, and that is the whole point: the two healthy runs above peaked at 214 m
+# while converging, so a max-based limit fails every run on the initial transient and gets
+# switched off. A mis-localized run is wrong steadily -- run 3's median 32.19 sat against a
+# max of 34.28 -- so the median is what tells the two apart.
+MAX_LOCALIZATION_GAP = 10.0     # m, median |EKF pose - GNSS pose|
 LONGITUDINAL_LAG_S = 0.30       # command to delivery; swept once, flat between 0.1 and 0.5
 MIN_TRACKING_SAMPLES = 30       # below this the numbers are not worth judging
 
@@ -129,6 +145,27 @@ def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
     def on_trajectory(m):
         traj["points"] = [(p.pose.position.x, p.pose.position.y) for p in m.points]
 
+    # Localization against ground truth. Not a refinement of cross-track: cross-track asks
+    # "is the vehicle on the trajectory it planned", and that stays small when localization
+    # is confidently wrong, because the trajectory is planned from the same wrong pose. On
+    # 2026-08-30 an unmanaged run stopped 193 m short with cross-track healthy, the EKF at
+    # (105.07, -55.13), GNSS at (274.2, -53.6) and CARLA at (275.8, -54.0): planning was
+    # holding for a `route-obstacle` 9 m ahead of a position the vehicle was nowhere near.
+    # GNSS is the truth reference here because acb_bridge publishes it straight from the
+    # CARLA actor, and it needs no second CARLA client -- one cannot read a synchronous
+    # world anyway (see the traps above).
+    gnss = {"last": None}
+    localization_gap: list[float] = []
+
+    def on_gnss(m):
+        p = m.pose.pose.position
+        gnss["last"] = (p.x, p.y)
+
+    def on_odom_localization(m):
+        if gnss["last"] is not None:
+            p = m.pose.pose.position
+            localization_gap.append(math.dist((p.x, p.y), gnss["last"]))
+
     def on_odom_cross_track(m):
         pts = traj["points"]
         if len(pts) >= 2:
@@ -139,6 +176,9 @@ def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
     node.create_subscription(VelocityReport, "/vehicle/status/velocity_status", on_speed, 10)
     node.create_subscription(Odometry, "/localization/kinematic_state", on_odom, 10)
     node.create_subscription(Odometry, "/localization/kinematic_state", on_odom_cross_track, 10)
+    node.create_subscription(Odometry, "/localization/kinematic_state", on_odom_localization, 10)
+    node.create_subscription(
+        PoseWithCovarianceStamped, "/sensing/gnss/pose_with_covariance", on_gnss, 10)
     node.create_subscription(DiagnosticArray, "/diagnostics", on_diag, 50)
     node.create_subscription(Control, "/control/command/control_cmd", on_command, 20)
     node.create_subscription(
@@ -152,7 +192,7 @@ def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
         return {
             "peak_speed": 0.0, "distance": 0.0, "status_samples": 0,
             "diagnostics": diags, "longitudinal": {"samples": 0, "median_error": None},
-            "cross_track": None,
+            "cross_track": None, "localization_gap": None, "localization_gap_max": None,
         }
 
     start = time.time()
@@ -170,6 +210,10 @@ def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
         "diagnostics": diags,
         "longitudinal": longitudinal_error(commands, speeds),
         "cross_track": median(cross_track) if cross_track else None,
+        # Median, not max: the estimate is legitimately far from GNSS for the moment before
+        # it converges, and a max would fail every run on that alone.
+        "localization_gap": median(localization_gap) if localization_gap else None,
+        "localization_gap_max": max(localization_gap) if localization_gap else None,
     }
 
 
@@ -346,6 +390,14 @@ def main() -> int:
         if seen["cross_track"] is not None and seen["cross_track"] > MAX_CROSS_TRACK:
             why.append("cross-track %.3f m above the %.2f limit"
                        % (seen["cross_track"], MAX_CROSS_TRACK))
+        if (seen["localization_gap"] is not None
+                and seen["localization_gap"] > MAX_LOCALIZATION_GAP):
+            # Said as "believes it is somewhere it is not", because that is what goes wrong
+            # next: planning stops for an obstacle near the pose it thinks it has, and the
+            # run reads as an ego that drove and then gave up for no reason.
+            why.append("localization is %.1f m from GNSS (median, limit %.1f): the ego "
+                       "believes it is somewhere it is not"
+                       % (seen["localization_gap"], MAX_LOCALIZATION_GAP))
 
         ok = not why
         results.append({"run": run, "ok": ok, "why": why,
@@ -353,16 +405,23 @@ def main() -> int:
                         "distance": round(seen["distance"], 1),
                         "longitudinal": seen["longitudinal"],
                         "cross_track": seen["cross_track"],
+                        "localization_gap": seen["localization_gap"],
+                        "localization_gap_max": seen["localization_gap_max"],
                         "diagnostic_errors": errors})
         lon_txt = ("%.3f" % seen["longitudinal"]["median_error"]
                    if seen["longitudinal"]["median_error"] is not None else "n/a")
         xt_txt = "%.3f" % seen["cross_track"] if seen["cross_track"] is not None else "n/a"
+        loc_txt = ("%.2f" % seen["localization_gap"]
+                   if seen["localization_gap"] is not None else "n/a")
         print("  verdict: %s   peak %.2f m/s   travelled %.1f m   longitudinal %s m/s^2   "
-              "cross-track %s m"
+              "cross-track %s m   localization %s m"
               % ("PASS" if ok else "FAIL", seen["peak_speed"], seen["distance"],
-                 lon_txt, xt_txt))
+                 lon_txt, xt_txt, loc_txt))
         for w in why:
             print("    - %s" % w)
+        if seen["localization_gap"] is not None:
+            print("    (localization) EKF is %.2f m from GNSS (median), %.2f m at worst"
+                  % (seen["localization_gap"], seen["localization_gap_max"]))
         # Reported but not failed: these are noisy on a healthy stack, and a check that cries
         # wolf gets switched off. They are here to be read when something else fails.
         for name, msg in sorted(errors.items())[:5]:
