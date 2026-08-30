@@ -315,6 +315,9 @@ impl VehicleControlBridge {
         let trim = sane_steering_multiplier(steering_multiplier);
         let calibration = longitudinal.clone();
         let trace = control_trace.clone();
+        // The node's own ROS clock, read inside the callback: /clock is simulation time, and
+        // the command's stamp is too, so the two are comparable.
+        let node_for_clock = node.clone();
         let control_sub = Arc::new(node.create_subscription(
             "/control/command/control_cmd".reliable(),
             move |msg: autoware_control_msgs::msg::Control| {
@@ -329,6 +332,7 @@ impl VehicleControlBridge {
                     calibration.as_ref(),
                     trace.as_deref(),
                     received,
+                    crate::utils::ros_time_now_secs(&node_for_clock),
                     &msg,
                 ) {
                     tracing::error!("Failed to apply control command: {}", e);
@@ -628,6 +632,7 @@ impl VehicleControlBridge {
         longitudinal: Option<&crate::longitudinal_map::LongitudinalCalibration>,
         trace: Option<&crate::control_trace::ControlTrace>,
         received: std::time::Instant,
+        now_sim_s: f64,
         cmd: &autoware_control_msgs::msg::Control,
     ) -> Result<()> {
         let accel = cmd.longitudinal.acceleration;
@@ -740,7 +745,10 @@ impl VehicleControlBridge {
             v.apply_control(&control)?;
             if let Some(t) = trace {
                 let stamp = cmd.stamp.sec as f64 + cmd.stamp.nanosec as f64 * 1e-9;
-                t.record(stamp, received, converted, std::time::Instant::now());
+                // Both in simulation time, so the difference is the command's real staleness
+                // when the bridge finally acted on it -- queueing included.
+                let age_ms = (now_sim_s - stamp) * 1e3;
+                t.record(stamp, received, converted, std::time::Instant::now(), age_ms);
             }
 
             tracing::debug!(

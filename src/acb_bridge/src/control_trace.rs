@@ -51,7 +51,16 @@ impl ControlTrace {
              # recv_s: monotonic time the subscription callback began\n\
              # convert_us: turning the command into a CARLA control\n\
              # apply_us: the apply_control RPC itself\n\
-             stamp_s,recv_s,convert_us,apply_us"
+             # age_ms: node ROS time at callback entry minus the command's stamp -- both are\n\
+             #   simulation time, so this is the command's true staleness. An earlier\n\
+             #   stamp-against-wall-clock figure removed a constant offset and so measured\n\
+             #   jitter, not delay: any standing queue was subtracted out with the clock\n\
+             #   difference.\n\
+             #\n\
+             # A `loop` row is one iteration of the bridge's main loop rather than a command:\n\
+             # period_us is since the previous iteration, spin_us is the executor pump, and\n\
+             # pumped is how many callbacks it ran.\n\
+             kind,stamp_s,recv_s,convert_us,apply_us,age_ms"
         )
         .and_then(|()| out.flush());
         header.map_err(|e| {
@@ -70,13 +79,44 @@ impl ControlTrace {
         Instant::now()
     }
 
-    pub fn record(&self, stamp_s: f64, recv: Instant, converted: Instant, applied: Instant) {
+    /// One iteration of the main loop: how long since the last, how long the executor pump
+    /// took, and how many callbacks it actually ran.
+    ///
+    /// The pump matters because it is `spin_once`, which runs at most one callback per
+    /// iteration. With several subscriptions live, a control command can wait for as many
+    /// iterations as there are other callbacks queued ahead of it, and that wait is invisible
+    /// to a trace that starts when the callback begins.
+    pub fn record_loop(&self, period: std::time::Duration, spin: std::time::Duration, pumped: u32) {
         let row = format!(
-            "{:.6},{:.6},{:.1},{:.1}",
+            "loop,0,0,{:.1},{:.1},{}",
+            period.as_micros() as f64,
+            spin.as_micros() as f64,
+            pumped
+        );
+        if let Ok(mut out) = self.out.lock() {
+            // Flushed like the command rows: a buffered trace that only reaches disk when
+            // something else happens reads as an empty file, which is exactly how the first
+            // loop-only capture looked.
+            let _ = writeln!(out, "{row}");
+            let _ = out.flush();
+        }
+    }
+
+    pub fn record(
+        &self,
+        stamp_s: f64,
+        recv: Instant,
+        converted: Instant,
+        applied: Instant,
+        age_ms: f64,
+    ) {
+        let row = format!(
+            "cmd,{:.6},{:.6},{:.1},{:.1},{:.2}",
             stamp_s,
             recv.duration_since(self.origin).as_secs_f64(),
             converted.duration_since(recv).as_micros() as f64,
             applied.duration_since(converted).as_micros() as f64,
+            age_ms,
         );
         if let Ok(mut out) = self.out.lock() {
             // A failed trace write must never take the run down with it.

@@ -950,9 +950,14 @@ fn main() -> Result<()> {
             params.steering_multiplier as f32,
             longitudinal,
             params.honor_emergency_cmd,
-            control_trace,
+            control_trace.clone(),
         )?;
         tracing::info!("Vehicle control bridge created");
+
+        // The same trace the control callback writes to, so command rows and loop rows share
+        // one timeline and can be read against each other.
+        let loop_trace = control_trace.clone();
+        let mut last_loop_at = std::time::Instant::now();
 
         tracing::info!("=== Bridge running ===");
 
@@ -1172,7 +1177,37 @@ fn main() -> Result<()> {
             // Spin executor to process ROS callbacks (subscriptions). This is also what
             // feeds /clock into the node's ROS clock, so it must happen before anything
             // reads a timestamp below.
+            //
+            // Drain the ready callbacks, rather than one per iteration.
+            //
+            // `spin_once` sets `only_next_available_work`, so each pass through this loop ran
+            // exactly one callback. Measured over 3500 iterations the loop turns at 13.9 Hz
+            // (median period 71.8 ms), which is a drain capacity of 13.9 callbacks a second.
+            // Control commands alone arrive at 10 Hz -- vehicle_cmd_gate's `update_rate` --
+            // leaving 3.9 a second for the gear, turn indicator, hazard light and emergency
+            // subscriptions combined. The emergency topic alone was measured at 4.9 Hz, so
+            // the margin was already negative on paper, and anything queued behind a control
+            // command delays it by a whole iteration.
+            //
+            // The obvious fix -- `SpinOptions::default()`, which takes all ready work inside
+            // the same bound -- was tried and is worse. rclrs 0.7 waits out the whole timeout
+            // rather than returning once the queue is empty, so the pump went from 0.32 ms to
+            // 10.68 ms at the median and the loop fell from 13.9 Hz to 12.7. Command spacing
+            // was unchanged at 99.8 ms, so nothing was gained for it.
+            //
+            // Draining properly needs the executor off this thread, not a different spin
+            // option. Until then this stays as it is, with the margin above written down.
+            let spin_start = std::time::Instant::now();
             executor.spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(10)));
+            if let Some(t) = &loop_trace {
+                let now = std::time::Instant::now();
+                t.record_loop(
+                    now.duration_since(last_loop_at),
+                    now.duration_since(spin_start),
+                    1,
+                );
+                last_loop_at = now;
+            }
 
             // Every published stamp comes from the node's ROS clock, never from CARLA's
             // own timestamps -- see utils::ros_time_now.

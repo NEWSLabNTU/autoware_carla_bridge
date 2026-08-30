@@ -1848,3 +1848,45 @@ So the honest end of this thread: there is no missing 200 ms in the bridge. What
 attempts measured as a transport delay is the loop's own sampling structure, and the estimator
 they used could not have separated the two. Anything wanting a faster lateral loop should raise
 `update_rate`, not look for a slow stage.
+
+### Inside the bridge: where the time goes, and the one thin margin (2026-08-30)
+
+The per-stage table above measures the bridge's work at 17 microseconds and stops there. That
+covers callback entry to the RPC returning, and deliberately not what a message does before the
+callback runs. Instrumenting the main loop as well (`control_trace.rs` now writes a `loop` row
+per iteration) fills that in, over 3500 iterations across two runs:
+
+```
+main loop period   median 71.8 ms   p90 102.4 ms   p99 111.3 ms   -> 13.9 Hz
+executor spin      median  0.32 ms  p90   2.02 ms  p99   5.16 ms  -> 0.4% of the loop
+```
+
+The loop is not spending its time in ROS. It spends it on the CARLA snapshot, ground-truth
+publishing and status publishing; the executor pump is four tenths of one percent of it.
+
+**The thin margin is the pump's shape, not its cost.** The executor is spun with `spin_once`,
+which runs at most one callback per iteration. At 13.9 Hz that is a drain capacity of 13.9
+callbacks a second, and the node subscribes to five topics. Control commands alone arrive at 10
+Hz -- `vehicle_cmd_gate`'s `update_rate: 10.0` -- leaving 3.9 a second for the gear, turn
+indicator, hazard light and emergency subscriptions combined. The emergency topic alone was
+measured at 4.9 Hz.
+
+On paper that margin is already negative, and anything queued ahead of a control command costs
+it a whole iteration, which is 72 ms.
+
+**The obvious fix is worse, measured.** `SpinOptions::default()` takes all ready work within the
+same 10 ms bound. rclrs 0.7 waits out the whole timeout rather than returning when the queue
+empties: the pump went from 0.32 ms to **10.68 ms** at the median, the loop fell from 13.9 Hz to
+12.7, and the command spacing was unchanged at 99.8 ms. It costs a tenth of the loop and buys
+nothing, so it was reverted.
+
+**What is not established.** Whether a standing backlog actually exists. Processed command
+spacing matches the publisher exactly (99.8 to 100.1 ms across every capture), which shows the
+queue is not *growing*, but a constant backlog would look identical. The measurement that would
+settle it -- the command's age when the callback sees it -- cannot be taken this way: the stamp
+and the node's ROS clock both come from `/clock`, which this loop republishes at about 14 Hz, so
+the difference quantises to the clock period and reads 0.00 ms.
+
+Settling it needs either a clock the bridge does not publish, or the executor moved onto its own
+thread so the question stops mattering. The latter is the real fix and is a structural change,
+not a spin option.
