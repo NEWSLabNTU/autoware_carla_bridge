@@ -276,6 +276,7 @@ impl VehicleControlBridge {
         steering_multiplier: f32,
         longitudinal: Option<crate::longitudinal_map::LongitudinalCalibration>,
         honor_emergency_cmd: bool,
+        control_trace: Option<Arc<crate::control_trace::ControlTrace>>,
     ) -> Result<Self> {
         let steer_geometry = Self::read_steer_geometry(&vehicle);
 
@@ -313,15 +314,21 @@ impl VehicleControlBridge {
         // Captured by the callback rather than stored: nothing else needs it.
         let trim = sane_steering_multiplier(steering_multiplier);
         let calibration = longitudinal.clone();
+        let trace = control_trace.clone();
         let control_sub = Arc::new(node.create_subscription(
             "/control/command/control_cmd".reliable(),
             move |msg: autoware_control_msgs::msg::Control| {
+                // Taken before anything else in the callback, so the row covers the whole of
+                // the bridge's share of the path rather than a convenient part of it.
+                let received = std::time::Instant::now();
                 if let Err(e) = Self::apply_control_command(
                     &vehicle_for_control,
                     &state_for_control,
                     steer_geometry,
                     trim,
                     calibration.as_ref(),
+                    trace.as_deref(),
+                    received,
                     &msg,
                 ) {
                     tracing::error!("Failed to apply control command: {}", e);
@@ -619,6 +626,8 @@ impl VehicleControlBridge {
         geometry: SteerGeometry,
         steering_multiplier: f32,
         longitudinal: Option<&crate::longitudinal_map::LongitudinalCalibration>,
+        trace: Option<&crate::control_trace::ControlTrace>,
+        received: std::time::Instant,
         cmd: &autoware_control_msgs::msg::Control,
     ) -> Result<()> {
         let accel = cmd.longitudinal.acceleration;
@@ -725,7 +734,14 @@ impl VehicleControlBridge {
                 }
             }
 
+            // The two stages the bridge owns: turning the command into a CARLA control, and
+            // the RPC that delivers it. Recorded rather than inferred -- see control_trace.
+            let converted = std::time::Instant::now();
             v.apply_control(&control)?;
+            if let Some(t) = trace {
+                let stamp = cmd.stamp.sec as f64 + cmd.stamp.nanosec as f64 * 1e-9;
+                t.record(stamp, received, converted, std::time::Instant::now());
+            }
 
             tracing::debug!(
                 "Applied control: steer={:.3}, throttle={:.3}, brake={:.3}, accel={:.2} m/s², \

@@ -1803,3 +1803,48 @@ a direct comparison, not an inference from a delay estimate. But the mechanism r
 unexplained rather than established. A first-order actuator response of about one tick, combined
 with controller gain, remains a candidate, as does noise in the reported angle; neither has been
 measured.
+
+### Per-stage latency, instrumented (2026-08-30)
+
+The section above concluded that the delay figures came from an estimator the command signal
+cannot sustain, and that a future attempt should stop inferring. So the bridge now records the
+stages as they happen (`control_trace.rs`, enabled with `control_trace_path`), and each command
+writes a row: its own header stamp, when the callback saw it, how long the conversion took, and
+how long CARLA's `apply_control` RPC took.
+
+Over 220 consecutive commands on a driving ego:
+
+| stage | how it was measured | median | p90 | max |
+|---|---|---|---|---|
+| command cadence | interval between arrivals | **100.1 ms** | 106.8 ms | 174.7 ms |
+| ROS transport | header stamp to callback | **11 ms** | 18 ms | 32 ms |
+| convert to a CARLA control | inside the callback | **5 µs** | 6 µs | 39 µs |
+| `apply_control` RPC | around the call | **12 µs** | 15 µs | 196 µs |
+| **bridge total** | | **17 µs** | 21 µs | 202 µs |
+
+**The bridge contributes seventeen microseconds.** That is four orders of magnitude below every
+figure this issue has carried, and it settles what the bridge's apply path costs.
+
+The 100 ms cadence is the dominant term, and it is by design: `vehicle_cmd_gate.param.yaml`
+carries `update_rate: 10.0`, which the measured 100.1 ms interval matches exactly. A command is
+therefore between 0 and 100 ms old when it is applied, 50 ms on average, before anything else
+happens to it.
+
+Adding the sampling terms:
+
+```
+  mean age of the command at application    ~50 ms   (10 Hz cadence)
+  ROS transport                             ~11 ms   (measured)
+  bridge                                     0.02 ms (measured)
+  wait for the next CARLA tick              ~25 ms   (dt = 0.05 with substeps: 2)
+                                            -------
+                                            ~86 ms typical, ~160 ms worst case
+```
+
+which is the same size as the ~200 ms the careful re-measurement found, and accounts for it
+**without any component being slow**. The delay is cadence and quantisation, not latency.
+
+So the honest end of this thread: there is no missing 200 ms in the bridge. What earlier
+attempts measured as a transport delay is the loop's own sampling structure, and the estimator
+they used could not have separated the two. Anything wanting a faster lateral loop should raise
+`update_rate`, not look for a slow stage.

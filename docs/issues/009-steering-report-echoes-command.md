@@ -251,7 +251,10 @@ lag(s)   0.00    0.20    0.50    1.00    1.50    2.00    3.00
 corr    0.9785  0.9867  0.9953  0.9972  0.9826  0.9609  0.8880
 ```
 
-**Treat that number as unexplained rather than measured.** A later decomposition
+**Treat that number as unexplained rather than measured**, and see issue
+[016](016-the-ego-stack-degrades-after-its-first-run.md) for what instrumentation later found:
+the bridge contributes 17 microseconds, and the delay around it is the loop's own 10 Hz command
+cadence rather than a slow stage. A later decomposition
 (issue [016](016-the-ego-stack-degrades-after-its-first-run.md)) found that the steering
 command has essentially no edges -- median change 0.00028 rad per message, no step above
 0.02 rad in a run -- so cross-correlation cannot localise a delay in it at all, and ROS

@@ -5,6 +5,7 @@ mod carla_vehicle;
 mod clock;
 mod coordinate_conversion;
 mod error;
+mod control_trace;
 mod ground_truth_objects;
 mod longitudinal_map;
 mod sensor_config;
@@ -161,6 +162,7 @@ struct BridgeParams {
     pub publish_ground_truth_objects: bool,
     pub ground_truth_range_m: f64,
     pub honor_emergency_cmd: bool,
+    pub control_trace_path: String,
     pub accel_map_path: String,
     pub brake_map_path: String,
 }
@@ -240,6 +242,13 @@ impl BridgeParams {
         // Off by default: measured on this stack, the flag is true in 29% of samples while
         // driving while Autoware commands acceleration, so acting on it brakes against a
         // normal control command. See docs/issues/021.
+        // Where to write per-stage control latency, empty for off. See control_trace.
+        let control_trace_path = node
+            .declare_parameter("control_trace_path")
+            .default(Arc::from(""))
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         let honor_emergency_cmd = node
             .declare_parameter("honor_emergency_cmd")
             .default(false)
@@ -280,6 +289,7 @@ impl BridgeParams {
         let publish_ground_truth_objects_val: bool = publish_ground_truth_objects.get();
         let ground_truth_range_m_val: f64 = ground_truth_range_m.get();
         let honor_emergency_cmd_val: bool = honor_emergency_cmd.get();
+        let control_trace_path_val: Arc<str> = control_trace_path.get();
         let accel_map_path_val: Arc<str> = accel_map_path.get();
         let brake_map_path_val: Arc<str> = brake_map_path.get();
 
@@ -304,6 +314,7 @@ impl BridgeParams {
             publish_ground_truth_objects: publish_ground_truth_objects_val,
             ground_truth_range_m: ground_truth_range_m_val,
             honor_emergency_cmd: honor_emergency_cmd_val,
+            control_trace_path: control_trace_path_val.to_string(),
             accel_map_path: accel_map_path_val.to_string(),
             brake_map_path: brake_map_path_val.to_string(),
         })
@@ -911,6 +922,27 @@ fn main() -> Result<()> {
             }
         };
 
+        // Per-stage control latency, off unless a path is given.
+        let control_trace = if params.control_trace_path.is_empty() {
+            None
+        } else {
+            match control_trace::ControlTrace::create(
+                std::path::Path::new(&params.control_trace_path),
+            ) {
+                Ok(t) => {
+                    tracing::info!("Control latency trace -> {}", params.control_trace_path);
+                    Some(std::sync::Arc::new(t))
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Cannot open the control trace at {}: {e}; continuing without it",
+                        params.control_trace_path
+                    );
+                    None
+                }
+            }
+        };
+
         let vehicle_control = vehicle_control::VehicleControlBridge::new(
             node.clone(),
             vehicle_shared.clone(),
@@ -918,6 +950,7 @@ fn main() -> Result<()> {
             params.steering_multiplier as f32,
             longitudinal,
             params.honor_emergency_cmd,
+            control_trace,
         )?;
         tracing::info!("Vehicle control bridge created");
 

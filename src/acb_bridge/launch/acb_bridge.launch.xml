@@ -41,6 +41,8 @@
        description="Ground-truth objects further than this from the ego are not published"/>
   <!-- Measured pedal response. Empty falls back to a single-constant conversion, which
        measurement shows to be wrong by a factor of two at full throttle. -->
+  <arg name="control_trace_path" default=""
+       description="Write per-stage control latency here as CSV; empty disables it"/>
   <arg name="accel_map_path"
        default="$(find-pkg-share acb_vehicle_description)/config/accel_map.csv"
        description="Throttle response table: pedal x speed -> acceleration"/>
@@ -63,6 +65,7 @@
     <param name="steering_multiplier" value="$(var steering_multiplier)"/>
     <param name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)"/>
     <param name="ground_truth_range_m" value="$(var ground_truth_range_m)"/>
+    <param name="control_trace_path" value="$(var control_trace_path)"/>
     <param name="accel_map_path" value="$(var accel_map_path)"/>
     <param name="brake_map_path" value="$(var brake_map_path)"/>
   </node>
