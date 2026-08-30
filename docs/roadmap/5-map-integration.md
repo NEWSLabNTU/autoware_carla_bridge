@@ -13,7 +13,9 @@ Track progress for CARLA map integration with Autoware, including Lanelet2 conve
 - `odr2lanelet2/` - Direct xodr→osm with traffic light support (Jul 2024)
 - `autoware_lanelet2_map_validator/` - Validates maps for Autoware compliance (v1.6.0, Jan 2026)
 
-**Current Status**: ✅ **Both generators implemented and validated end to end.** Autoware localizes and drives on a point cloud produced by `carla_pcd_gen` (2026-08-30).
+**Current Status**: 🟡 **Point cloud generation works end to end; lanelet2 generation does not.**
+Autoware localizes and drives on a `carla_pcd_gen` cloud. A `carla_map_gen` lanelet2 is
+structurally close to the shipped map but the ego will not drive on it (2026-08-30).
 
 ---
 
@@ -98,7 +100,7 @@ Download script: `scripts/download_carla_maps_for_autoware.sh`
 
 **Objective**: Provide standalone tools that create Autoware-compatible maps from a running CARLA server. Implement, compare against TUMFTM references, and use the better map source per town.
 
-**Status**: ✅ **COMPLETE** — both generators implemented; `carla_pcd_gen` validated by driving on its output
+**Status**: 🟡 `carla_pcd_gen` validated by driving on its output; `carla_map_gen` runs but its output is not drivable
 
 **Priority**: 🟡 **MEDIUM** — Needed for maps beyond TUMFTM coverage, and to validate our pipeline against known-good references
 
@@ -893,3 +895,53 @@ Town01 map, which is what isolates the point cloud as the only thing under test.
 The PCD carries `FIELDS x y z` with no intensity, which the design sketch above asks for. That
 is correct: the shipped TUM map has no intensity either, and Autoware's `map_loader` accepts
 both. The sketch was aspirational rather than a requirement.
+
+
+## `carla_map_gen`: runs, but its output is not drivable yet (2026-08-30)
+
+This document has described the lanelet2 generator as complete and validated. Two things are
+wrong with that.
+
+**It cannot run as the repository stands.** `carla_map_gen` imports `crdesigner`, which is not
+in its `setup.py` (`install_requires=['setuptools']`), not in `just install-deps`, and not
+installed here. Running it fails immediately with `ModuleNotFoundError: No module named
+'crdesigner'`.
+
+Installing it system-wide is not safe on this host. `pip install commonroad-scenario-designer`
+wants about fifty packages including **numpy 2.2.6**, which would shadow the system numpy that
+ROS 2 Humble and Autoware's Python nodes are built against, for every Python process on the
+machine. The generator imports no ROS packages, so a virtual environment is enough:
+
+```bash
+python3 -m venv /tmp/crd-venv
+/tmp/crd-venv/bin/pip install commonroad-scenario-designer
+# export the OpenDRIVE with the system python, which has the carla module
+python3 -c "import carla; open('Town01.xodr','w').write(
+    carla.Client('localhost',2000).get_world().get_map().to_opendrive())"
+PYTHONPATH=src/carla_map_gen /tmp/crd-venv/bin/python -m carla_map_gen.generate \
+    --xodr Town01.xodr --output-dir /tmp/genmap
+```
+
+That works: 13.7 MB of lanelet2 plus `map_config.yaml` and `map_projector_info.yaml`, with the
+post-processing repairing 36 traffic light subtypes and reclassifying 64 shoulder lanelets.
+
+**The output is not drivable.** Holding the point cloud fixed and changing only the lanelet2
+file:
+
+```
+  generated PCD + shipped lanelet2      2/2 passed, localization 1.04 and 1.09 m
+  generated PCD + generated lanelet2    0/2, the ego attaches and never drives
+```
+
+Same stack, same scenario, same cloud, two runs each. The bridge finds the ego and the bridge
+attaches, so this is not a spawn or connection failure; the vehicle simply does not move.
+
+The generated map is structurally very close to the shipped one -- 494 ways, 336 relations and
+43,082 `local_x` tags in both -- differing by 72 nodes and 19 road lanelets. So the fault is
+likely to be specific rather than gross, and worth finding: it is the last thing standing
+between this project and a map generated entirely from CARLA.
+
+Note for whoever picks it up: the shipped `Town01` map is *not* this tool's output. It ships
+with a `lanelet2_map.osm.orig` beside it that differs by under a kilobyte, which is the
+traffic-light subtype repair; both are the pre-converted TUM map. So the shipped map is not a
+worked example of this generator's output, and cannot be diffed against one as if it were.
