@@ -251,7 +251,12 @@ lag(s)   0.00    0.20    0.50    1.00    1.50    2.00    3.00
 corr    0.9785  0.9867  0.9953  0.9972  0.9826  0.9609  0.8880
 ```
 
-Treat that number as an order of magnitude, not a measurement. The steering signal is smooth
+**Treat that number as unexplained rather than measured.** A later decomposition
+(issue [016](016-the-ego-stack-degrades-after-its-first-run.md)) found that the steering
+command has essentially no edges -- median change 0.00028 rad per message, no step above
+0.02 rad in a run -- so cross-correlation cannot localise a delay in it at all, and ROS
+transport measures 11 ms directly. The lag this section describes may not exist in the form
+stated; what the A/B above establishes is the effect, not its mechanism. The steering signal is smooth
 enough that zero lag already correlates at 0.978, so the peak is shallow, and a run earlier the
 same afternoon peaked at the same place from a much lower base. What the shape does establish is
 that a delay of roughly a second exists, and that is consistent with the ~478 ms command-to-wheel

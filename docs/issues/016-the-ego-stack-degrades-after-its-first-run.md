@@ -1747,3 +1747,59 @@ play_launch reports one member down out of ninety, and startup completes. What n
 cause was `acb_bridge`'s wait line, which says what it is waiting **for**. Any future
 never-engage run should have that line read before the run counts as evidence for this
 issue.
+
+## The command-to-wheel lag: the measurement is the remaining candidate (2026-08-30)
+
+This issue left the ~478 ms figure -- re-measured at ~200 ms -- unexplained, with the actuator,
+the subscription queue and tick synchronisation excluded, and "ROS transport, the bridge's own
+apply path, or the measurement itself" as what remained. Those three were separated by measuring
+the segments instead of the whole path.
+
+**ROS transport is 11 to 12 ms.** Measured directly, by subtracting each command's own header
+stamp from its arrival, so no correlation is involved:
+
+```
+median 11.0 ms   p90 17.8 ms   max 32.1 ms
+```
+
+That excludes transport. It is an order of magnitude too small.
+
+**The command carries almost no timing information, which excludes the measurements.** Every
+estimate of this delay -- the original 478 ms, the 200 ms re-measurement, and a 1-second figure
+from a cross-correlation attempted for issue 009 -- was taken from the steering command during a
+driving scenario. That signal has no edges:
+
+```
+per-message change in commanded tire angle
+  median 0.00028 rad   p90 0.00524   p99 0.01579   max 0.01672
+  steps > 0.010 rad:  3 of 146 (2.1%)
+  steps > 0.020 rad:  0 of 146
+full command range over the run: 0.0669 rad
+```
+
+The command moves in increments of about three ten-thousandths of a radian across a total
+excursion of seven hundredths. Cross-correlating two such signals peaks almost anywhere -- one
+sweep for issue 009 rose monotonically to the edge of its range and would have been read as a
+one-second lag had it not been extended -- and value-matching matches on the first sample every
+time, which is why a first attempt at the segments here returned medians of 2.0 ms and 0.6 ms
+that meant nothing. Restricting to genuine steps left **two usable events in an entire run**.
+
+**So the three surviving candidates are now one.** Transport is measured and small. The bridge's
+apply path was already measured with a synthetic square wave and came out at a deterministic
+one tick. What is left is the measurement itself, and the evidence above is that it could not
+have supported any of the figures taken from it.
+
+This does not prove the delay is absent. It says the numbers that described it were produced by
+estimators the signal cannot sustain, and that everything measurable by other means has been
+small. Anyone resuming should **inject a step** -- drive the command with a square wave through
+the real path and time the response -- rather than infer timing from a scenario, which is the
+one thing all three previous attempts had in common.
+
+### What this leaves for issue 009
+
+The A/B there is unaffected: measured feedback destabilises lateral control by 67x, and that is
+a direct comparison, not an inference from a delay estimate. But the mechanism recorded there --
+"a delay of roughly a second" -- rests on the weakest of these estimators and should be read as
+unexplained rather than established. A first-order actuator response of about one tick, combined
+with controller gain, remains a candidate, as does noise in the reported angle; neither has been
+measured.
