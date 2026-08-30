@@ -1961,3 +1961,45 @@ Note the interaction with the callback margin measured above: at 20 Hz the contr
 needs 20 callbacks a second against the 13.9 the main loop drains, so it would create the
 backlog that does not currently exist. Moving the executor off the main thread becomes a
 prerequisite rather than optional hardening.
+
+### The control rate is not `update_rate` (2026-08-30)
+
+The cadence conclusion suggested raising `vehicle_cmd_gate`'s `update_rate` to shorten the
+loop. It was made reachable and then tested, and **it is not the lever**.
+
+Reaching it took a launch change, because upstream hardcodes the path with `value=`:
+`acb_launch` now carries a copy of `tier4_control_component.launch.xml`
+(`carla_control_component.launch.xml`) that differs in exactly one line, pointing
+`vehicle_cmd_gate_param_path` at a config in this repository. `carla_simulator.launch.xml`
+disables control inside `autoware.launch.xml` and includes the copy instead, gated on the same
+`control` argument as before. Verified to load: `ros2 param get /control/vehicle_cmd_gate
+update_rate` returns whatever the repository's file says.
+
+With `update_rate: 20.0` loaded and confirmed on the node, the command stream did not change:
+
+```
+bridge control trace   99.7 ms between commands   10.0 Hz
+independent subscriber 101.0 ms between messages   9.9 Hz
+```
+
+Both measured while the ego was driving. The second matters: it rules out the bridge sampling
+the topic down, which was the alternative explanation. The publisher genuinely emits at 10 Hz
+with the parameter set to 20.
+
+So whatever paces `/control/command/control_cmd` in Autoware 1.5.0, it is not this parameter.
+The trajectory follower upstream runs at `ctrl_period: 0.03`, i.e. 33 Hz, so the 10 Hz is
+imposed somewhere between it and the topic -- `control_command_gate`, which the same component
+launches with its own param file, is the obvious next place to look.
+
+Two things were still worth the trip. The launch shadow is now in place, so any control
+parameter can be changed without touching the shared install, which is what the next attempt
+needs. And a run with it in place passes unchanged: 2/2 acceptance runs at the default,
+cross-track 0.055 and 0.085 m against a historical range of 0.029 to 0.289.
+
+Two mistakes are recorded rather than tidied away. `launch_control` was already being set
+further down the same include, so the first attempt was silently overridden and control came up
+twice -- visible only as `control_container-2` in the play_log and two `vehicle_cmd_gate` nodes.
+And a teardown helper that skipped any process whose command line contained `claude` was
+skipping every launcher, because the log path it was started with lives under such a directory;
+`pgrep -x` on the executable is the right match, and killing launchers before nodes matters
+because play_launch respawns what it owns.
