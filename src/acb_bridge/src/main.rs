@@ -537,6 +537,39 @@ fn wait_for_vehicle(client: &Client, vehicle_name: &str, running: &AtomicBool) -
                 continue;
             }
         };
+        // Observe a tick before reading the actor list.
+        //
+        // A CARLA client's actor list comes from the episode snapshot, and a client that has
+        // never seen a tick has no snapshot: in synchronous mode it reports zero actors on a
+        // perfectly healthy server. Measured directly, one server, one instant:
+        //
+        //     old client (has seen ticks): 174 actors, snapshot frame 4345539
+        //     new client (never ticked)  :   0 actors, snapshot frame 0
+        //
+        // This loop used to poll `actors()` and sleep, never observing anything. That works
+        // while CARLA is asynchronous, which is how it is before a scenario starts -- and
+        // fails completely when this bridge connects *after* the simulation bridge has taken
+        // the world synchronous. The ego then exists, and this loop waits for it forever:
+        //
+        //     Still waiting for vehicle (role_name=hero)... (45s elapsed)
+        //
+        // Measured against a live server with another client ticking: a fresh client reports
+        // 0 vehicles immediately and for the first ~2 s of polling, then catches up; with a
+        // tick observed first it sees them at once. So the blind window is real but short
+        // while something is ticking, and unbounded when nothing is.
+        //
+        // Whether this is what produced the intermittent "the bridge never found the ego"
+        // failures is NOT established -- those lasted far longer than two seconds, and the
+        // logs of them are equally consistent with the ego simply not existing yet. This is
+        // fixed because a poll that cannot see a populated world is wrong on its own terms,
+        // not because it is known to be that bug.
+        //
+        // `wait_for_tick_or_timeout` observes without driving: it never calls `tick()`, so the
+        // rule that only the simulation bridge ticks (invariant 1) still holds. A timeout is
+        // not an error here -- between scenarios nobody ticks at all, and the poll below still
+        // works in asynchronous mode.
+        let _ = world.wait_for_tick_or_timeout(Duration::from_millis(500));
+
         match world.actors() {
             Ok(actors) => match actors.filter("vehicle.*") {
                 Ok(vehicles) => {
