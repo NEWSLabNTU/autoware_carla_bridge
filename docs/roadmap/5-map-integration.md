@@ -13,9 +13,11 @@ Track progress for CARLA map integration with Autoware, including Lanelet2 conve
 - `odr2lanelet2/` - Direct xodr→osm with traffic light support (Jul 2024)
 - `autoware_lanelet2_map_validator/` - Validates maps for Autoware compliance (v1.6.0, Jan 2026)
 
-**Current Status**: 🟡 **Point cloud generation works end to end; lanelet2 generation does not.**
-Autoware localizes and drives on a `carla_pcd_gen` cloud. A `carla_map_gen` lanelet2 is
-structurally close to the shipped map but the ego will not drive on it (2026-08-30).
+**Current Status**: 🟡 **Point cloud generation works end to end; lanelet2 generation is
+unverified.** Autoware localizes and drives on a `carla_pcd_gen` cloud. `carla_map_gen` runs
+only from a virtualenv (its dependency is undeclared) and produces a map that is structurally
+indistinguishable from the shipped one; whether the ego drives on it is not yet established
+(2026-08-30).
 
 ---
 
@@ -925,21 +927,34 @@ PYTHONPATH=src/carla_map_gen /tmp/crd-venv/bin/python -m carla_map_gen.generate 
 That works: 13.7 MB of lanelet2 plus `map_config.yaml` and `map_projector_info.yaml`, with the
 post-processing repairing 36 traffic light subtypes and reclassifying 64 shoulder lanelets.
 
-**The output is not drivable.** Holding the point cloud fixed and changing only the lanelet2
-file:
+**Whether the output is drivable is still unknown, and an earlier version of this section
+claimed otherwise on evidence that does not support it.** That claim is withdrawn here.
+
+What was seen: holding the point cloud fixed and changing only the lanelet2 file, runs on the
+generated lanelet2 failed while the shipped one passed. What that turned out to rest on is
+weaker than it looked. Every captured failure on the generated map was the *ego never attached*
+mode -- `no vehicle status in domain 1: the bridge never found the ego` -- which happens on the
+shipped map too, and the control itself then went 1/2 in the same sitting, its failure being an
+unrelated 3.85 m cross-track excursion. A trajectory check that appeared to show planning
+producing nothing was taken between runs, when nothing publishes a trajectory anyway.
+
+Against that, the two maps are hard to tell apart where it matters:
 
 ```
-  generated PCD + shipped lanelet2      2/2 passed, localization 1.04 and 1.09 m
-  generated PCD + generated lanelet2    0/2, the ego attaches and never drives
+                     nodes    ways   relations   local_x tags   nearest node to the ego start
+  generated          43154     494         336         43082                          1.80 m
+  shipped            43082     494         336         43082                          1.80 m
 ```
 
-Same stack, same scenario, same cloud, two runs each. The bridge finds the ego and the bridge
-attaches, so this is not a spawn or connection failure; the vehicle simply does not move.
+Lanelet tags are identical (`type=lanelet`, `subtype=road`, `location=urban`), the coordinate
+extents are identical to a tenth of a metre, and swapping the shipped `map_projector_info.yaml`
+in changed nothing. The only structural differences found are 72 nodes and 19 road lanelets,
+the latter plausibly from the post-processing that reclassifies shoulder lanelets.
 
-The generated map is structurally very close to the shipped one -- 494 ways, 336 relations and
-43,082 `local_x` tags in both -- differing by 72 nodes and 19 road lanelets. So the fault is
-likely to be specific rather than gross, and worth finding: it is the last thing standing
-between this project and a map generated entirely from CARLA.
+So the honest position is that this is **untested, not broken**. Settling it needs a stack that
+attaches reliably -- the flaky mode above has to be understood first, or runs have to be
+repeated until enough of them attach on both arms to compare. Anyone resuming should start by
+confirming the ego attaches, and only then compare maps.
 
 Note for whoever picks it up: the shipped `Town01` map is *not* this tool's output. It ships
 with a `lanelet2_map.osm.orig` beside it that differs by under a kilobyte, which is the
