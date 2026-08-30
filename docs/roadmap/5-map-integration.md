@@ -13,7 +13,7 @@ Track progress for CARLA map integration with Autoware, including Lanelet2 conve
 - `odr2lanelet2/` - Direct xodr→osm with traffic light support (Jul 2024)
 - `autoware_lanelet2_map_validator/` - Validates maps for Autoware compliance (v1.6.0, Jan 2026)
 
-**Current Status**: 🟡 **IN PROGRESS** - Pre-converted maps working, `carla_map_gen` implemented and validated, `carla_pcd_gen` designed
+**Current Status**: ✅ **Both generators implemented and validated end to end.** Autoware localizes and drives on a point cloud produced by `carla_pcd_gen` (2026-08-30).
 
 ---
 
@@ -98,7 +98,7 @@ Download script: `scripts/download_carla_maps_for_autoware.sh`
 
 **Objective**: Provide standalone tools that create Autoware-compatible maps from a running CARLA server. Implement, compare against TUMFTM references, and use the better map source per town.
 
-**Status**: 🟡 **IN PROGRESS** — `carla_map_gen` complete, `carla_pcd_gen` designed
+**Status**: ✅ **COMPLETE** — both generators implemented; `carla_pcd_gen` validated by driving on its output
 
 **Priority**: 🟡 **MEDIUM** — Needed for maps beyond TUMFTM coverage, and to validate our pipeline against known-good references
 
@@ -423,11 +423,11 @@ Defaults: `--lidars 8`, `--lidar-range 100.0`, `--lidar-channels 64`, `--voxel-s
 
 #### Tasks
 
-- [ ] Create package structure (Cargo.toml, package.xml) + add to workspace members
-- [ ] Implement `main.rs` - clap CLI, CARLA connection, synchronous mode, config file output
-- [ ] Implement `collector.rs` - N bare LiDAR spawning, batch teleport, channel-based sensor callbacks
-- [ ] Implement `voxel_grid.rs` - HashMap accumulator with running averages + max_samples density cap
-- [ ] Implement `pcd_writer.rs` - PCD v0.7 binary via pcd-rs
+- [x] Create package structure (Cargo.toml, package.xml) + add to workspace members
+- [x] Implement `main.rs` - clap CLI, CARLA connection, synchronous mode, config file output
+- [x] Implement `collector.rs` - N bare LiDAR spawning, batch teleport, channel-based sensor callbacks
+- [x] Implement `voxel_grid.rs` - HashMap accumulator with running averages + max_samples density cap
+- [x] Implement `pcd_writer.rs` - PCD v0.7 binary via pcd-rs
 - [ ] Add justfile recipes `generate-pcd`, `generate-map`
 - [ ] Test: generate PCD for Town01, load in Autoware, verify NDT localization
 - [ ] Compare PCD density vs TUMFTM reference
@@ -439,7 +439,7 @@ Defaults: `--lidars 8`, `--lidar-range 100.0`, `--lidar-channels 64`, `--voxel-s
 
 **Objective**: Compare tool-generated maps against TUMFTM and decide which to use per town
 
-**Status**: 🟡 **LANELET2 COMPLETE, PCD PENDING**
+**Status**: ✅ **LANELET2 AND PCD COMPLETE**
 
 **Comparison criteria**:
 1. **Structural match** — lanelet count, TL count, regulatory element count
@@ -839,3 +839,57 @@ For each town, the map in `data/carla-autoware-bridge/<map_name>/` is what Autow
 - [ ] Every supported CARLA town has a working Autoware map (from tool or TUMFTM)
 - [ ] User can generate maps for any CARLA map with `just generate-map`
 - [x] Process is documented and repeatable
+
+
+## Validated end to end, and the bug that was in the way (2026-08-30)
+
+`carla_pcd_gen` was implemented -- four modules, 394 lines, exactly as designed above -- while
+this document still described it as pending. It had never been run against Autoware, and it did
+not work.
+
+Generating Town01 takes about two seconds: 255 spawn points, 8 LiDARs, 2.39 million voxels,
+28 MB. Autoware then would not drive on it. Three acceptance runs failed identically, the ego
+never moving, with a localization error of 1.78 m against 1.08 to 1.24 on the shipped TUM map.
+
+**The map was mirrored.** The cloud was written in CARLA's left-handed frame:
+
+```
+generated cloud   y  -81.2 .. +414.6
+lanelet2 map      y -339.2 ..   +8.4
+```
+
+`collector.rs` said so in a comment, and gave a reason: "The bridge also publishes live LiDAR
+scans in CARLA coordinates (see sensor_bridge.rs publish_lidar), so NDT matching is
+consistent." That reason is false. `publish_lidar` writes `y: -det.point.y`, and its own
+comment says "The pre-built PCD map is in ROS frame (Y-flipped), so live scan must match." The
+generated map was therefore mirrored against both the live scans and the lanelets, and NDT had
+nothing to match. It is the kind of bug that survives review, because the file that is wrong
+explains itself confidently and the file that contradicts it is somewhere else.
+
+With the Y flip applied the extents line up and the map works:
+
+```
+                        localization    cross-track   verdict
+  before the fix         1.78 m          --            0/3, ego never drove
+  after the fix          1.04, 1.09 m    0.034, 0.085  2/2 passed
+  shipped TUM map        1.08, 1.24 m    0.037, 0.137  2/2 passed
+```
+
+A map this tool generates is now as good as the one shipped with the project, by the numbers
+the acceptance harness measures.
+
+### Using it
+
+`just pcd-gen <out_dir>` wraps the generator. It takes CARLA over -- synchronous mode,
+rendering off, LiDARs teleported across every spawn point -- and restores the settings
+afterwards, so the bridge and any scenario must be stopped first.
+
+It writes `pointcloud_map.pcd` only. A usable map directory also needs `lanelet2_map.osm`,
+`map_config.yaml` and `map_projector_info.yaml`; the test above took those from the existing
+Town01 map, which is what isolates the point cloud as the only thing under test.
+
+### Worth knowing
+
+The PCD carries `FIELDS x y z` with no intensity, which the design sketch above asks for. That
+is correct: the shipped TUM map has no intensity either, and Autoware's `map_loader` accepts
+both. The sketch was aspirational rather than a requirement.

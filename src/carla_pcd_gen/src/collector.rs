@@ -93,10 +93,18 @@ pub fn collect(
                 for det in measure.as_slice() {
                     let local_pt = Point3::new(det.point.x, det.point.y, det.point.z);
                     let world_pt = sensor_tf * local_pt;
-                    // Points are stored in CARLA's native coordinate system (no Y-flip).
-                    // The bridge also publishes live LiDAR scans in CARLA coordinates
-                    // (see sensor_bridge.rs publish_lidar), so NDT matching is consistent.
-                    let _ = tx.try_send((world_pt.x, world_pt.y, world_pt.z, det.intensity));
+                    // Flip Y into the ROS frame. CARLA is left-handed and everything this map
+                    // has to line up with is right-handed: `sensor_bridge.rs` publishes live
+                    // scans as `y: -det.point.y`, and the lanelet2 map is in ROS coordinates
+                    // too.
+                    //
+                    // This used to store CARLA's native Y, with a comment claiming the bridge
+                    // published scans the same way. It does not, and the result was a map
+                    // mirrored against both the scans and the lanelets: the cloud spanned
+                    // y -81 to +415 where the lanelets span -339 to +8. NDT had nothing to
+                    // match, localization never converged, and the ego sat still on a map that
+                    // looked perfectly good in isolation.
+                    let _ = tx.try_send((world_pt.x, -world_pt.y, world_pt.z, det.intensity));
                 }
             }
         })?;
