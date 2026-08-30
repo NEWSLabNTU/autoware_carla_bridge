@@ -1914,3 +1914,50 @@ while a backlog was still possible. With no backlog to fix, restructuring the lo
 change with real ordering risk -- the loop spins to feed `/clock` into the node's clock before
 it reads timestamps -- bought with no measured benefit. If a future change eats the margin, the
 measurement above is how to tell, and that is when to do it.
+
+### Raising the control rate: reachable only by changing the launch or the shared install
+
+The conclusion above -- that the loop's delay is its own 10 Hz cadence, so a faster lateral loop
+wants a higher `update_rate` -- is testable in principle and awkward in practice. What was
+established before stopping:
+
+**A runtime parameter set is accepted and inert.**
+
+```
+ros2 param get /control/vehicle_cmd_gate update_rate   ->  10.0
+ros2 param set /control/vehicle_cmd_gate update_rate 20.0  ->  success
+ros2 param get /control/vehicle_cmd_gate update_rate   ->  20.0
+```
+
+and the commands then arrive at **99.9 ms, still 10.0 Hz**. The node builds its timer at
+construction, so the new value is stored and never used. Anyone testing this should measure the
+arrival interval rather than trust the parameter read-back.
+
+**The value is hardcoded upstream.** `autoware_launch`'s
+`components/tier4_control_component.launch.xml` sets
+
+```xml
+<arg name="vehicle_cmd_gate_param_path" value="$(find-pkg-share autoware_launch)/config/..."/>
+```
+
+with `value=`, not `default=`, so no argument passed from this repository can override it.
+`tier4_control_launch/control.launch.xml` does take the path as a plain argument, but its only
+caller is that component. play_launch has no parameter-override flag either.
+
+So raising the rate needs one of:
+
+1. editing `/opt/autoware/1.5.0/share/autoware_launch/config/control/vehicle_cmd_gate/`, which
+   is a shared install other sessions on this host are using;
+2. including `control.launch.xml` directly instead of the component, which diverges from
+   Autoware's own composition and is a launch change with its own regression risk;
+3. an overlay `autoware_launch` package in this workspace shadowing the Debian one, which is the
+   standard ROS way to override a package's config and means vendoring it.
+
+None of the three is a small change, and the first affects other people's runs. The experiment
+is worth doing -- it either buys lateral tracking or closes the question -- but it should be
+chosen deliberately rather than reached for.
+
+Note the interaction with the callback margin measured above: at 20 Hz the control stream alone
+needs 20 callbacks a second against the 13.9 the main loop drains, so it would create the
+backlog that does not currently exist. Moving the executor off the main thread becomes a
+prerequisite rather than optional hardening.
