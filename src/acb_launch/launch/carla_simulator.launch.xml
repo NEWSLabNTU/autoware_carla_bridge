@@ -128,12 +128,8 @@
            lidar_detection_model can be chosen (autoware.launch.xml does not
            forward it, hardwiring centerpoint) -->
       <arg name="launch_perception" value="false"/>
-      <!-- CRITICAL - Disable control here, launch separately below so
-           vehicle_cmd_gate's param file can come from this repository.
-           autoware_launch hardcodes that path with `value=`, so it cannot be
-           overridden by an argument; see carla_control_component.launch.xml. -->
       <arg name="launch_planning" value="$(var planning)"/>
-      <arg name="launch_control" value="false"/>
+      <arg name="launch_control" value="$(var control)"/>
       <!-- Global parameters -->
       <arg name="use_sim_time" value="$(var use_sim_time)"/>
       <!-- CRITICAL - Set logging_simulation mode to disable stop_check in pose_initializer -->
@@ -193,20 +189,6 @@
 
          If this is revisited, the lever is the head's apparent size (a longer focal
          length, or a scenario that gets closer), not the padding. -->
-    <!-- Control, from this repository's copy of the component rather than autoware_launch's.
-         The copy differs in one line: vehicle_cmd_gate's param path, which upstream hardcodes
-         into the shared /opt install. Routing it here makes `update_rate` — the dominant term
-         in the control loop's delay, see docs/issues/016 — changeable without editing a
-         config other sessions on this host share. The arguments below are exactly the three
-         autoware.launch.xml passes. -->
-    <group if="$(var control)">
-      <include file="$(find-pkg-share acb_launch)/launch/carla_control_component.launch.xml">
-        <arg name="module_preset" value="$(var control_module_preset)"/>
-        <arg name="use_sim_time" value="$(var use_sim_time)"/>
-        <arg name="vehicle_model" value="$(var vehicle_model)"/>
-      </include>
-    </group>
-
     <include file="$(find-pkg-share autoware_launch)/launch/components/tier4_perception_component.launch.xml">
       <arg name="data_path" value="$(var data_path)"/>
       <arg name="pointcloud_container_name" value="pointcloud_container"/>

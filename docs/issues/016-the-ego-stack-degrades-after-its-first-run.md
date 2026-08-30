@@ -1991,10 +1991,17 @@ The trajectory follower upstream runs at `ctrl_period: 0.03`, i.e. 33 Hz, so the
 imposed somewhere between it and the topic -- `control_command_gate`, which the same component
 launches with its own param file, is the obvious next place to look.
 
-Two things were still worth the trip. The launch shadow is now in place, so any control
-parameter can be changed without touching the shared install, which is what the next attempt
-needs. And a run with it in place passes unchanged: 2/2 acceptance runs at the default,
-cross-track 0.055 and 0.085 m against a historical range of 0.029 to 0.289.
+**The shadow was then reverted.** It was built to answer one question, the answer was no, and
+keeping it would have meant carrying a copy of an upstream launch file that must be re-copied
+on every Autoware upgrade -- a standing maintenance cost against a hypothesis already
+disproved. Control is back to `autoware.launch.xml`'s own component; verified after reverting:
+one `vehicle_cmd_gate` node reading 10.0 from Autoware's config, and 2/2 acceptance runs at
+cross-track 0.037 and 0.137 m.
+
+What the trip established stands without it: `update_rate` does not pace this topic, and an
+independent subscriber says so. Anyone resuming should look at `control_command_gate` first,
+and will need the same shadow again -- it is recorded here, and in the reverted commit, so it
+can be rebuilt in one step rather than rediscovered.
 
 Two mistakes are recorded rather than tidied away. `launch_control` was already being set
 further down the same include, so the first attempt was silently overridden and control came up
