@@ -1880,13 +1880,37 @@ empties: the pump went from 0.32 ms to **10.68 ms** at the median, the loop fell
 12.7, and the command spacing was unchanged at 99.8 ms. It costs a tenth of the loop and buys
 nothing, so it was reverted.
 
-**What is not established.** Whether a standing backlog actually exists. Processed command
-spacing matches the publisher exactly (99.8 to 100.1 ms across every capture), which shows the
-queue is not *growing*, but a constant backlog would look identical. The measurement that would
-settle it -- the command's age when the callback sees it -- cannot be taken this way: the stamp
-and the node's ROS clock both come from `/clock`, which this loop republishes at about 14 Hz, so
-the difference quantises to the clock period and reads 0.00 ms.
+**Settled: there is no backlog.** The question was whether a *constant* queue sat in front of
+the control callback -- processed spacing matches the publisher exactly in every capture, which
+rules out a growing queue but looks identical to a standing one.
 
-Settling it needs either a clock the bridge does not publish, or the executor moved onto its own
-thread so the question stops mattering. The latter is the real fix and is a structural change,
-not a spin option.
+The measurement that settles it is the command's age when the callback sees it. An earlier
+attempt at this was misread: the reasoning was that `/clock` is republished by this loop, so the
+age would quantise to the loop period and be useless. That is wrong for a managed ego --
+`publish_clock` is **false** there, because SSv2 owns the clock in its domain. The quantisation
+is real but it comes from `/clock`'s own step, about 100 ms, and that is exactly the resolution
+the question needs: a backlog of one command period would read as one clock step.
+
+Measured over a driving run:
+
+```
+command age at callback entry, n=105
+      0 ms : 104  (99.0%)
+     44 ms :   1  (1.0%)
+  median 0.0 ms   p90 0.0 ms   max 43.6 ms
+  arrival gap median 99.6 ms   bridge work median 20 us
+```
+
+Ninety-nine percent of commands are acted on inside the same clock step they were stamped in.
+Nothing is queueing.
+
+So the 3.9 callbacks a second of headroom is thin on paper and not binding in practice: the
+other four subscriptions do not, between them, use it. The margin is worth knowing about --
+adding a subscription, or raising `update_rate`, would eat it -- but it is not costing anything
+today.
+
+**And therefore the executor stays on this thread.** Moving it off was the identified real fix
+while a backlog was still possible. With no backlog to fix, restructuring the loop would be a
+change with real ordering risk -- the loop spins to feed `/clock` into the node's clock before
+it reads timestamps -- bought with no measured benefit. If a future change eats the margin, the
+measurement above is how to tell, and that is when to do it.
