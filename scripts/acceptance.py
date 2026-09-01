@@ -46,6 +46,10 @@ import sys
 import time
 from pathlib import Path
 
+import math
+import threading
+
+import carla
 import rclpy
 from autoware_control_msgs.msg import Control
 from autoware_planning_msgs.msg import Trajectory
@@ -94,6 +98,55 @@ def diag_level(status) -> int:
     return lvl if isinstance(lvl, int) else int.from_bytes(lvl, "little")
 
 
+def watch_carla_for_ego(role_name: str, started: float, seen: dict, stop: threading.Event):
+    """Record when an ego is first *seen* in CARLA, as a passive observer.
+
+    Seen, not spawned: an ego left over from a previous run counts, which is why a reading of
+    0.1 s is normal rather than suspicious. What matters is the pairing with the attach time,
+    not the absolute value.
+
+    Answers the question a failed run cannot otherwise answer: was there an ego at all? Without
+    it, "no vehicle status" means either the simulation bridge never spawned one or this bridge
+    never attached to it, and those are different faults with different owners. Reading it out
+    of logs afterwards misleads, because between runs the ego is legitimately absent -- that
+    mistake was made three times before this was written.
+
+    Two rules, both learned the hard way:
+      * `wait_for_tick` before reading actors. A client that has observed no tick has no
+        snapshot and reports zero actors on a healthy synchronous server.
+      * never hold an actor handle across ticks. A despawned actor keeps claiming to be alive
+        and then returns garbage.
+    """
+    # Connect inside the loop, not before it. A fresh client's first `get_world()` waits for a
+    # world snapshot, so it raises when nothing is ticking -- which is the state between runs,
+    # exactly when this thread starts. Returning on that error made the watcher exit silently
+    # and report "no ego seen" for runs where the ego plainly drove.
+    world = None
+    while not stop.is_set():
+        if world is None:
+            try:
+                client = carla.Client("localhost", 2000)
+                client.set_timeout(10.0)
+                world = client.get_world()
+            except RuntimeError:
+                time.sleep(2.0)
+                continue
+        try:
+            world.wait_for_tick(seconds=5.0)
+        except RuntimeError:
+            continue        # nobody ticking; between runs this is normal
+        try:
+            found = any(a.attributes.get("role_name") == role_name
+                        for a in world.get_actors().filter("vehicle.*"))
+        except RuntimeError:
+            world = None    # the episode went away; reconnect rather than go blind
+            continue
+        if found and seen.get("ego_at") is None:
+            seen["ego_at"] = time.time() - started
+        elif not found and seen.get("ego_at") is not None:
+            seen["ego_gone"] = True
+
+
 def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
     """Watch one run from ROS alone and return what it did.
 
@@ -105,10 +158,17 @@ def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
     os.environ["ROS_DOMAIN_ID"] = str(domain)
     rclpy.init()
     node = rclpy.create_node("acceptance_%d" % os.getpid())
-    seen = {"peak": 0.0, "first": None, "last": None, "samples": 0}
+    started = time.time()
+    seen = {"peak": 0.0, "first": None, "last": None, "samples": 0,
+            "attach_at": None, "ego_at": None, "ego_gone": False}
+    stop_carla = threading.Event()
+    threading.Thread(target=watch_carla_for_ego,
+                     args=("hero", started, seen, stop_carla), daemon=True).start()
     diags: dict[str, tuple[int, str]] = {}
 
     def on_velocity(m):
+        if seen["samples"] == 0:
+            seen["attach_at"] = time.time() - started
         seen["peak"] = max(seen["peak"], abs(m.longitudinal_velocity))
         seen["samples"] += 1
 
@@ -193,11 +253,13 @@ def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
             "peak_speed": 0.0, "distance": 0.0, "status_samples": 0,
             "diagnostics": diags, "longitudinal": {"samples": 0, "median_error": None},
             "cross_track": None, "localization_gap": None, "localization_gap_max": None,
+            "attach_at": None, "ego_at": seen["ego_at"],
         }
 
     start = time.time()
     while time.time() - start < duration:
         rclpy.spin_once(node, timeout_sec=0.2)
+    stop_carla.set()
     rclpy.shutdown()
 
     distance = 0.0
@@ -210,6 +272,11 @@ def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
         "diagnostics": diags,
         "longitudinal": longitudinal_error(commands, speeds),
         "cross_track": median(cross_track) if cross_track else None,
+        # When the ego appeared in CARLA, and when this bridge first reported it. Kept apart
+        # because "no vehicle status" is ambiguous between the two, and the ambiguity sent an
+        # earlier investigation down the wrong path three separate times.
+        "attach_at": seen["attach_at"],
+        "ego_at": seen["ego_at"],
         # Median, not max: the estimate is legitimately far from GNSS for the moment before
         # it converges, and a max would fail every run on that alone.
         "localization_gap": median(localization_gap) if localization_gap else None,
@@ -372,8 +439,19 @@ def main() -> int:
             else:
                 why.append(why_verdict)
         if seen["status_samples"] == 0:
-            why.append("no vehicle status in domain %d: the bridge never found the ego"
-                       % args.domain)
+            # Say which of the two faults this is. "No vehicle status" alone is ambiguous
+            # between the simulation bridge never spawning an ego and this bridge never
+            # attaching to one, and the two have different owners. Reading it out of logs
+            # afterwards is worse than useless: between runs the ego is legitimately gone, so
+            # the same "still waiting" line appears whether or not anything is wrong.
+            if seen["ego_at"] is None:
+                why.append("no ego was ever spawned in CARLA, and no vehicle status followed: "
+                           "the scenario or the simulation bridge, not the vehicle bridge")
+            else:
+                why.append("an ego was present in CARLA from %.1f s but the bridge never "
+                           "attached "
+                           "to it (no vehicle status in domain %d)"
+                           % (seen["ego_at"], args.domain))
         if seen["peak_speed"] < MIN_PEAK_SPEED:
             why.append("ego never drove (peak %.2f m/s)" % seen["peak_speed"])
         if seen["distance"] < MIN_DISTANCE:
@@ -405,9 +483,23 @@ def main() -> int:
                         "distance": round(seen["distance"], 1),
                         "longitudinal": seen["longitudinal"],
                         "cross_track": seen["cross_track"],
+                        "ego_spawn_s": seen.get("ego_at"),
+                        "bridge_attach_s": seen.get("attach_at"),
                         "localization_gap": seen["localization_gap"],
                         "localization_gap_max": seen["localization_gap_max"],
                         "diagnostic_errors": errors})
+        # Attach timing is reported on every run, passing or not: a run that passes with the
+        # bridge attaching ten seconds late is still worth seeing before it becomes a failure.
+        if seen.get("ego_at") is not None:
+            if seen.get("attach_at") is not None:
+                print("    ego first seen at %.1f s, bridge attached at %.1f s (%.1f s later)"
+                      % (seen["ego_at"], seen["attach_at"],
+                         seen["attach_at"] - seen["ego_at"]))
+            else:
+                print("    ego first seen at %.1f s; the bridge never attached" % seen["ego_at"])
+        else:
+            print("    no ego seen in CARLA during this run")
+
         lon_txt = ("%.3f" % seen["longitudinal"]["median_error"]
                    if seen["longitudinal"]["median_error"] is not None else "n/a")
         xt_txt = "%.3f" % seen["cross_track"] if seen["cross_track"] is not None else "n/a"
