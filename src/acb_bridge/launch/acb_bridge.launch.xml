@@ -35,6 +35,10 @@
   <!-- Report CARLA's actors as perception output instead of deriving them from the LiDAR.
        Only correct with Autoware's own perception disabled (perception:=false), or two
        publishers interleave on /perception/object_recognition/objects. -->
+  <arg name="seed_localization_on_attach" default="true"
+       description="Re-seed Autoware's pose estimator when attaching, if its estimate is
+                    somewhere other than this vehicle. Only acts on an estimate that
+                    already exists, so a cold start is left to Autoware's own initializer." />
   <arg name="publish_ground_truth_objects" default="false"
        description="Publish CARLA actors as PredictedObjects, bypassing perception"/>
   <arg name="ground_truth_range_m" default="100.0"
@@ -64,6 +68,7 @@
     <param name="report_measured_steering" value="$(var report_measured_steering)"/>
     <param name="steering_multiplier" value="$(var steering_multiplier)"/>
     <param name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)"/>
+    <param name="seed_localization_on_attach" value="$(var seed_localization_on_attach)"/>
     <param name="ground_truth_range_m" value="$(var ground_truth_range_m)"/>
     <param name="control_trace_path" value="$(var control_trace_path)"/>
     <param name="accel_map_path" value="$(var accel_map_path)"/>

@@ -160,6 +160,8 @@ struct BridgeParams {
     pub report_measured_steering: bool,
     pub steering_multiplier: f64,
     pub publish_ground_truth_objects: bool,
+    /// Re-seed Autoware's pose estimator when attaching to a vehicle.
+    pub seed_localization_on_attach: bool,
     pub ground_truth_range_m: f64,
     pub honor_emergency_cmd: bool,
     pub control_trace_path: String,
@@ -239,6 +241,17 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        // On by default, and only ever acts on an estimate that already exists and is in
+        // the wrong place: on the second and later scenarios of one ego stack nothing
+        // re-seeds the pose estimator, so it stays where the previous run left it. A
+        // parameter because the seed publishes into Autoware's localization, which is
+        // worth being able to switch off when comparing against a stack without it.
+        let seed_localization_on_attach = node
+            .declare_parameter("seed_localization_on_attach")
+            .default(true)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         // Off by default: measured on this stack, the flag is true in 29% of samples while
         // driving while Autoware commands acceleration, so acting on it brakes against a
         // normal control command. See docs/issues/021.
@@ -287,6 +300,7 @@ impl BridgeParams {
         let report_measured_steering_val: bool = report_measured_steering.get();
         let steering_multiplier_val: f64 = steering_multiplier.get();
         let publish_ground_truth_objects_val: bool = publish_ground_truth_objects.get();
+        let seed_localization_on_attach_val: bool = seed_localization_on_attach.get();
         let ground_truth_range_m_val: f64 = ground_truth_range_m.get();
         let honor_emergency_cmd_val: bool = honor_emergency_cmd.get();
         let control_trace_path_val: Arc<str> = control_trace_path.get();
@@ -312,6 +326,7 @@ impl BridgeParams {
             report_measured_steering: report_measured_steering_val,
             steering_multiplier: steering_multiplier_val,
             publish_ground_truth_objects: publish_ground_truth_objects_val,
+            seed_localization_on_attach: seed_localization_on_attach_val,
             ground_truth_range_m: ground_truth_range_m_val,
             honor_emergency_cmd: honor_emergency_cmd_val,
             control_trace_path: control_trace_path_val.to_string(),
@@ -848,6 +863,19 @@ fn main() -> Result<()> {
         drop(vehicle_guard);
 
         tracing::info!("Sensors attached to hero vehicle successfully!");
+
+        // This vehicle is new to Autoware even when the stack is not: on the second and
+        // later scenarios of one ego stack nothing re-seeds the pose estimator, so it
+        // carries on from where the previous run ended. Ask for a re-seed now; the work
+        // happens in `tick`, which has the vehicle's pose already.
+        if params.seed_localization_on_attach {
+            autoware.request_localization_seed();
+        } else {
+            tracing::info!(
+                "Localization re-seeding is disabled; Autoware's own initializer is the \
+                 only thing that will place the estimate on this vehicle."
+            );
+        }
 
         // === Register sensors with Autoware for topic mapping ===
         tracing::info!("Registering sensors with Autoware...");

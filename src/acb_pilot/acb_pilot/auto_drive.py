@@ -109,6 +109,12 @@ class AutoDriveNode(Node):
         # `timeout`, and much longer, because it measures someone else's startup:
         # see step1b_wait_for_vehicle.
         self.declare_parameter("spawn_timeout", 1800.0)
+        # How far the EKF estimate may sit from the GNSS fix before this node treats
+        # localization as not really initialized. A healthy stack measures 1.2-1.3 m,
+        # which is the antenna offset rather than error; an estimate left behind at the
+        # previous run's goal measures 80-95 m. The limit sits well clear of the healthy
+        # figure and well below the fault.
+        self.declare_parameter("localization_gap_limit_m", 5.0)
 
         poses_file = self.get_parameter("poses_file").get_parameter_value().string_value
         if not poses_file:
@@ -128,9 +134,18 @@ class AutoDriveNode(Node):
         self.spawn_timeout = (
             self.get_parameter("spawn_timeout").get_parameter_value().double_value
         )
+        self.localization_gap_limit = (
+            self.get_parameter("localization_gap_limit_m")
+            .get_parameter_value()
+            .double_value
+        )
 
         # State
         self.gnss_stamp = None
+        # The GNSS fix itself. It is the only estimate of where the vehicle is that does
+        # not come from the filter being checked, so it is what makes a stale EKF pose
+        # detectable at all.
+        self.gnss_pose = None
         self.localization_state = LocalizationInitializationState.UNKNOWN
         self.route_state = RouteState.UNKNOWN
         self.op_mode_state = None
@@ -209,6 +224,7 @@ class AutoDriveNode(Node):
 
     def _on_gnss(self, msg: PoseWithCovarianceStamped):
         self.gnss_stamp = time.monotonic()
+        self.gnss_pose = msg.pose.pose
 
     def _on_kinematic_state(self, msg: Odometry):
         self.kinematic_pose = msg.pose.pose
@@ -241,6 +257,17 @@ class AutoDriveNode(Node):
             return False
         self.get_logger().info("  Re-initialization requested (GNSS)")
         return True
+
+    def _localization_gap(self):
+        """Planar distance between the EKF estimate and the GNSS fix, in metres.
+
+        Returns None when either estimate is missing, which is not agreement and must
+        not be read as such by the caller.
+        """
+        if self.kinematic_pose is None or self.gnss_pose is None:
+            return None
+        a, b = self.kinematic_pose.position, self.gnss_pose.position
+        return math.hypot(a.x - b.x, a.y - b.y)
 
     def _spin_for(self, seconds: float):
         end = time.monotonic() + seconds
@@ -397,21 +424,43 @@ class AutoDriveNode(Node):
             self._request_localization_reinit()
 
         last_log = time.monotonic()
+        last_reinit = time.monotonic()
         while time.monotonic() < end:
             rclpy.spin_once(self, timeout_sec=0.5)
             self._abort_if_vehicle_gone()
             initialized = (
                 self.localization_state == LocalizationInitializationState.INITIALIZED
             )
-            # A fresh EKF pose is the evidence that the estimate is live and belongs
-            # to the vehicle in front of us; the state flag alone is not.
+            # A fresh EKF pose is evidence that the estimate is live, but not that it
+            # belongs to the vehicle in front of us: an estimate stranded at the
+            # previous run's goal goes on publishing at full rate forever, so it is
+            # both INITIALIZED and fresh while being 90 m from the car. Only agreement
+            # with GNSS -- the one estimate that does not come from this filter --
+            # distinguishes the two.
             fresh = self.kinematic_stamp is not None and (
                 time.monotonic() - self.kinematic_stamp < 2.0
             )
-            if initialized and fresh:
+            gap = self._localization_gap() if fresh else None
+            agrees = gap is not None and gap <= self.localization_gap_limit
+            if initialized and fresh and not agrees:
+                # Re-ask, but no faster than the pipeline can answer: a re-init has to
+                # travel through NDT and the EKF before the pose can move.
+                if time.monotonic() - last_reinit >= 20.0:
+                    last_reinit = time.monotonic()
+                    where = "no GNSS fix yet" if gap is None else f"{gap:.1f} m from GNSS"
+                    self.get_logger().warn(
+                        f"  Localization reports INITIALIZED but the estimate is "
+                        f"{where}; re-initializing."
+                    )
+                    self.kinematic_pose = None
+                    self.kinematic_stamp = None
+                    self._request_localization_reinit()
+                continue
+            if initialized and fresh and agrees:
                 p = self.kinematic_pose.position
                 self.get_logger().info(
-                    f"  Localization: INITIALIZED at ({p.x:.2f}, {p.y:.2f})"
+                    f"  Localization: INITIALIZED at ({p.x:.2f}, {p.y:.2f}), "
+                    f"{gap:.2f} m from GNSS"
                 )
                 # Let diagnostics and the planning pipeline settle before routing.
                 # Without this, engage fails with "target mode not available".
@@ -426,14 +475,22 @@ class AutoDriveNode(Node):
                 name = _LOC_STATE_NAMES.get(
                     self.localization_state, str(self.localization_state)
                 )
+                gap_note = (
+                    ""
+                    if not fresh
+                    else " (no GNSS fix yet)"
+                    if gap is None
+                    else f" ({gap:.1f} m from GNSS)"
+                )
                 self.get_logger().info(
                     f"  Localization state: {name}"
                     + ("" if fresh else " (no fresh pose yet)")
+                    + gap_note
                 )
                 last_log = now
         self.get_logger().error(
-            f"  Localization did not reach INITIALIZED with a live pose within "
-            f"{timeout:.0f}s"
+            f"  Localization did not reach INITIALIZED with a live pose that agrees "
+            f"with GNSS (within {self.localization_gap_limit:.1f} m) in {timeout:.0f}s"
         )
         return False
 
@@ -634,6 +691,7 @@ class AutoDriveNode(Node):
                 self.kinematic_pose = None
                 self.kinematic_stamp = None
                 self.gnss_stamp = None
+                self.gnss_pose = None
 
             if not self.step1b_wait_for_vehicle(timeout=remaining):
                 return False

@@ -28,6 +28,11 @@ conventions.
 | [015](015-sensors-destroyed-while-still-listening.md) | A listening client's streams are destroyed underneath it | High | Fixed (release protocol) |
 | [016](016-the-ego-stack-degrades-after-its-first-run.md) | The ego stops mid-route and never resumes | High | Fixed (`substeps: 2`) |
 | [017](017-carla-segfaults-under-long-uptime.md) | The CARLA server segfaults under long uptime | Medium | Open |
+| [018](018-background-avs-accumulate-across-runs.md) | Background AVs accumulate across bridge processes | Medium | Fixed (orphan reaper) |
+| [019](019-one-constant-for-every-pedal-and-speed.md) | One constant converts every acceleration request into a pedal | Medium | Fixed (measured pedal maps) |
+| [020](020-the-domain-runs-out-of-participants.md) | Attaching one more node to a running stack fails obscurely | Medium | Fixed (`MaxAutoParticipantIndex` 450) |
+| [021](021-nothing-listened-for-the-emergency.md) | The emergency topic has no subscriber, and should not have one yet | Medium | Behind a flag, default off |
+| [022](022-the-pose-estimate-outlives-the-run.md) | The pose estimate outlives the vehicle it belongs to | High | Fixed (`/initialpose` seed on attach) |
 
 ## Severity
 

@@ -13,6 +13,53 @@ use crate::{
 };
 use std::sync::Mutex;
 
+/// A pending re-seed of Autoware's pose estimator.
+///
+/// `tick` owns the publishing because it already holds the vehicle's true pose in the ROS
+/// frame; this only records whether a seed is still wanted and when the last one went out.
+struct SeedState {
+    /// Whether a seed is still outstanding. Cleared on agreement or on timeout.
+    pending: bool,
+    /// When the seed was requested, used for the give-up deadline.
+    requested_at: Option<std::time::Instant>,
+    /// When the last `/initialpose` went out, used to space the retries.
+    last_sent: Option<std::time::Instant>,
+    /// How many have gone out, for the log.
+    sent: u32,
+}
+
+impl SeedState {
+    fn idle() -> Self {
+        Self {
+            pending: false,
+            requested_at: None,
+            last_sent: None,
+            sent: 0,
+        }
+    }
+}
+
+/// How close the EKF estimate must come to the vehicle's true pose before the seed is
+/// considered to have taken. Generous: what this has to distinguish is a converged
+/// estimate from one stranded at the previous run's goal, measured at 95 m.
+const SEED_TOLERANCE_M: f64 = 5.0;
+
+/// How long to keep re-seeding before giving up and letting the run continue. NDT has to
+/// align and the EKF has to accept the jump, so this is several seconds of pipeline, not
+/// one message.
+const SEED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How old the last `/localization/kinematic_state` may be and still count as the current
+/// estimate. The topic runs at tens of hertz when localization is alive, so this is
+/// generous; what it has to exclude is the previous run's final message, which is minutes
+/// old and otherwise looks exactly like a live estimate in the wrong place.
+const ESTIMATE_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Minimum spacing between `/initialpose` messages. A seed starts an NDT alignment, and
+/// sending the next one before that finishes just restarts it, so this has to be longer
+/// than an alignment takes rather than as fast as the fault can be noticed.
+const SEED_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Main Autoware ROS communication coordinator
 ///
 /// Manages Autoware detection, ROS topic names, sensor configurations,
@@ -53,6 +100,13 @@ pub struct Autoware {
     /// Publisher for localization pose (bypasses Autoware localization when enabled)
     pub_localization: Option<Arc<rclrs::Publisher<nav_msgs::msg::Odometry>>>,
 
+    /// Publisher for `/initialpose`, used to re-seed Autoware's pose estimator when this
+    /// bridge attaches to a vehicle. See `request_localization_seed`.
+    pub_initialpose: Arc<rclrs::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>>,
+
+    /// Pending re-seed of the pose estimator, if any.
+    seed: Mutex<SeedState>,
+
     /// Publisher for TF transforms (bypasses Autoware TF when enabled)
     pub_tf: Option<Arc<rclrs::Publisher<tf2_msgs::msg::TFMessage>>>,
 
@@ -89,6 +143,13 @@ pub struct Autoware {
     /// NOTE: Updated by callback, reserved for future Phase 4+ features
     #[allow(dead_code)]
     localization_kinematic_state: Arc<Mutex<Option<nav_msgs::msg::Odometry>>>,
+
+    /// When the last `/localization/kinematic_state` arrived. Held separately from the
+    /// message because the message alone cannot say whether it is still being published:
+    /// the last one from a previous run stays readable forever, and reading it as the
+    /// current estimate makes a topic that has gone quiet indistinguishable from an
+    /// estimate that is 95 m away.
+    localization_state_received_at: Arc<Mutex<Option<std::time::Instant>>>,
 
     /// Subscription to /localization/initialization_state (kept alive)
     _localization_init_state_sub:
@@ -195,6 +256,15 @@ impl Autoware {
             (None, None)
         };
 
+        // `/initialpose` is the same entry point RViz's "2D Pose Estimate" uses. Reliable
+        // and kept out of the direct-localization branch above: re-seeding is wanted
+        // whether or not this bridge is publishing the pose itself.
+        let pub_initialpose = Arc::new(
+            node.create_publisher::<geometry_msgs::msg::PoseWithCovarianceStamped>(
+                "/initialpose".reliable(),
+            )?,
+        );
+
         // Create initial pose state (set via modern Autoware localization API)
         let initial_pose = Arc::new(Mutex::new(None));
 
@@ -241,11 +311,16 @@ impl Autoware {
 
         // Subscribe to kinematic state
         let localization_kinematic_state_cb = localization_kinematic_state.clone();
+        let localization_state_received_at: Arc<Mutex<Option<std::time::Instant>>> =
+            Arc::new(Mutex::new(None));
+        let localization_state_received_at_cb = localization_state_received_at.clone();
         let localization_kinematic_state_sub =
             Arc::new(node.create_subscription::<nav_msgs::msg::Odometry, _>(
                 "/localization/kinematic_state".reliable().keep_last(1),
                 move |msg: nav_msgs::msg::Odometry| {
                     *localization_kinematic_state_cb.lock().unwrap() = Some(msg);
+                    *localization_state_received_at_cb.lock().unwrap() =
+                        Some(std::time::Instant::now());
                 },
             )?);
 
@@ -269,6 +344,8 @@ impl Autoware {
 
             // === Direct Localization Publishers (Optional) ===
             pub_localization,
+            pub_initialpose,
+            seed: Mutex::new(SeedState::idle()),
             pub_tf,
 
             // === Initial Pose ===
@@ -277,6 +354,7 @@ impl Autoware {
             // === Localization State Monitoring ===
             localization_init_state,
             localization_kinematic_state,
+            localization_state_received_at,
             _localization_init_state_sub: localization_init_state_sub,
             _localization_kinematic_state_sub: localization_kinematic_state_sub,
 
@@ -590,6 +668,14 @@ impl Autoware {
             &[angular_vel.x, angular_vel.y, angular_vel.z],
         )?;
 
+        // Re-seed the pose estimator if one was requested when we attached. The true pose
+        // is already in hand here, in the frame `/initialpose` wants.
+        self.service_localization_seed(
+            &ros_timestamp,
+            &[position.x, position.y, position.z],
+            &[orientation.w, orientation.i, orientation.j, orientation.k],
+        );
+
         Ok(())
     }
 
@@ -737,6 +823,158 @@ impl Autoware {
         }
 
         Ok(())
+    }
+
+    /// Ask for Autoware's pose estimator to be re-seeded with the vehicle's true pose.
+    ///
+    /// Call this when attaching to a vehicle. Nothing else re-seeds on a stack that has
+    /// already run: Autoware's automatic initializer fires on the UNINITIALIZED ->
+    /// INITIALIZED edge, and on the second and later scenarios of one stack the state
+    /// never leaves INITIALIZED. The estimate therefore stays where the previous run left
+    /// it -- measured at 95 m from the newly spawned ego, for the first several seconds of
+    /// the run, which is long enough for the planner to act on a pose belonging to a
+    /// vehicle that no longer exists.
+    ///
+    /// The seed is best effort, narrow, and bounded. It acts only on an estimate that
+    /// already exists and disagrees: with no estimate at all the stack is cold, Autoware's
+    /// own initializer is doing this job, and seeding into it would restart the alignment
+    /// it is running. It stops as soon as the estimate agrees, retries no faster than an
+    /// alignment takes, and gives up after `SEED_TIMEOUT` rather than publishing into a
+    /// running scenario indefinitely.
+    pub fn request_localization_seed(&self) {
+        let mut seed = self.seed.lock().unwrap();
+        *seed = SeedState {
+            pending: true,
+            requested_at: Some(std::time::Instant::now()),
+            last_sent: None,
+            sent: 0,
+        };
+        tracing::info!(
+            "Localization re-seed requested; publishing /initialpose until the estimate \
+             agrees with the vehicle's pose (within {SEED_TOLERANCE_M} m) or {} s pass",
+            SEED_TIMEOUT.as_secs()
+        );
+    }
+
+    /// Distance from the EKF estimate to a given position, in metres, in the ground plane.
+    ///
+    /// `None` when there is no *live* estimate, which is not agreement. Liveness is the
+    /// point: the last message from a previous run stays readable indefinitely, and was
+    /// measured reading as a rock-steady 96.6 m gap for a full minute on a stack whose
+    /// localization had simply not started publishing for this run yet.
+    fn estimate_gap(&self, position: &[f64; 3]) -> Option<f64> {
+        let received_at = (*self.localization_state_received_at.lock().unwrap())?;
+        if received_at.elapsed() > ESTIMATE_STALE_AFTER {
+            return None;
+        }
+        let state = self.localization_kinematic_state.lock().unwrap();
+        let odom = state.as_ref()?;
+        let p = &odom.pose.pose.position;
+        Some((p.x - position[0]).hypot(p.y - position[1]))
+    }
+
+    /// Publish `/initialpose` while a seed is outstanding. Called once per tick.
+    fn service_localization_seed(
+        &self,
+        timestamp: &builtin_interfaces::msg::Time,
+        position: &[f64; 3],
+        orientation: &[f64; 4],
+    ) {
+        let mut seed = self.seed.lock().unwrap();
+        if !seed.pending {
+            return;
+        }
+
+        let now = std::time::Instant::now();
+        let gap = self.estimate_gap(position);
+
+        // No estimate at all means a cold stack, where Autoware's own automatic
+        // initializer does this job and does it well -- that is the first run of a
+        // session, which is the case that never fails. Seeding into it would restart
+        // the alignment it is already running, so wait instead. This is the reason the
+        // seed only ever acts on an estimate that exists and is in the wrong place.
+        let Some(gap) = gap else {
+            if let Some(requested_at) = seed.requested_at {
+                if now.duration_since(requested_at) >= SEED_TIMEOUT {
+                    tracing::info!(
+                        "No localization estimate appeared within {} s of attaching; \
+                         leaving initialization to Autoware.",
+                        SEED_TIMEOUT.as_secs()
+                    );
+                    *seed = SeedState::idle();
+                }
+            }
+            return;
+        };
+
+        // Agreement ends it. Checked before the deadline so a seed that took on the last
+        // attempt is reported as success rather than as a timeout.
+        if gap <= SEED_TOLERANCE_M {
+            if seed.sent > 0 {
+                tracing::info!(
+                    "Localization seeded: the estimate is {gap:.2} m from the vehicle \
+                     after {} /initialpose message(s)",
+                    seed.sent
+                );
+            }
+            *seed = SeedState::idle();
+            return;
+        }
+
+        if let Some(requested_at) = seed.requested_at {
+            if now.duration_since(requested_at) >= SEED_TIMEOUT {
+                tracing::warn!(
+                    "Localization did not take the seed within {} s after {} attempt(s); \
+                     the estimate is {gap:.1} m from the vehicle. The run continues, but \
+                     a pose this far out is the stale-estimate failure this seed exists \
+                     to prevent.",
+                    SEED_TIMEOUT.as_secs(),
+                    seed.sent
+                );
+                *seed = SeedState::idle();
+                return;
+            }
+        }
+
+        if let Some(last) = seed.last_sent {
+            if now.duration_since(last) < SEED_INTERVAL {
+                return;
+            }
+        }
+
+        let mut msg = geometry_msgs::msg::PoseWithCovarianceStamped::default();
+        msg.header.stamp = timestamp.clone();
+        msg.header.frame_id = "map".to_string();
+        msg.pose.pose.position.x = position[0];
+        msg.pose.pose.position.y = position[1];
+        msg.pose.pose.position.z = position[2];
+        msg.pose.pose.orientation.w = orientation[0];
+        msg.pose.pose.orientation.x = orientation[1];
+        msg.pose.pose.orientation.y = orientation[2];
+        msg.pose.pose.orientation.z = orientation[3];
+        // The same covariance RViz sends with a "2D Pose Estimate": half a metre of
+        // position uncertainty and about 15 degrees of yaw. The pose is exact, but a
+        // confident covariance would tell NDT not to search, and searching is the point.
+        msg.pose.covariance[0] = 0.25; // x
+        msg.pose.covariance[7] = 0.25; // y
+        msg.pose.covariance[35] = 0.068_539_82; // yaw
+
+        match self.pub_initialpose.publish(&msg) {
+            Ok(()) => {
+                seed.sent += 1;
+                seed.last_sent = Some(now);
+                tracing::info!(
+                    "Sent /initialpose #{} at ({:.2}, {:.2}); the estimate was {gap:.1} m away",
+                    seed.sent,
+                    position[0],
+                    position[1]
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Could not publish /initialpose: {e}");
+                seed.last_sent = Some(now);
+            }
+        }
     }
 
     /// Check if localization has been initialized (from /localization/initialization_state)
