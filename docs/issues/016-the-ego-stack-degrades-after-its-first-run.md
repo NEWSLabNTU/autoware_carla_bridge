@@ -2165,7 +2165,29 @@ above). That points at the lateral controller's tuning against this vehicle's ac
 response — its delay and its gain — rather than at any single wrong number in the bridge.
 
 One gap is the bridge's own, though, and is worth closing regardless of the cause: nothing
-notices that the vehicle has been commanded to move and is not moving. The run above spends
+noticed that the vehicle had been commanded to move and was not moving. The run above spends
 its last 140 seconds applying 22.7% throttle to a stationary car in silence, and no
-component says anything. A "commanded to move, not moving" warning from the side that
-applies the pedal and reads the speed would turn that silence into a diagnosis.
+component says anything.
+
+**Closed.** `acb_bridge` now reports it, from the one place that knows both what was asked
+for and what the actor did about it:
+
+```
+WARN Commanded to move but stationary for 5s: throttle 0.230, no brake, gear 2,
+     asked for 0.25 m/s, measured 0.00 m/s. The command path is doing its job, so the
+     vehicle is being held by the simulation -- wedged geometry is what this was when it
+     was traced (docs/issues/016).
+```
+
+It waits five seconds so a standing start is not a fault, repeats no more than once every
+fifteen, and says nothing at all when the vehicle is braking, parked, in neutral, held by
+the handbrake, or under no meaningful throttle. Verified both ways: silent across five
+consecutive healthy runs, and firing on a deliberately held vehicle
+(`scripts/inject_stall.py`, which freezes the ego's physics mid-drive while Autoware keeps
+commanding motion).
+
+That injection also earned the warning its one subtlety. The stuck condition can end two
+ways and only one is good news -- the vehicle can start moving, or Autoware can stop asking
+it to -- and the first version announced "moving again" about a car that was still frozen,
+because the planner's target dipped below the threshold for a single command. Recovery is
+now reported only when the vehicle is actually moving.

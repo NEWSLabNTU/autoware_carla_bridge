@@ -16,6 +16,7 @@ use carla::{
 };
 use rclrs::IntoPrimitiveOptions;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Fall back maximum steering tire angle in radians (~70 degrees).
 ///
@@ -115,6 +116,102 @@ fn steer_command_for(tire_angle: f32, geometry: &SteerGeometry) -> f32 {
 ///
 /// Autoware compares commanded against reported state (`vehicle_cmd_gate` will not
 /// consider a shift complete until the report agrees), so these have to be the values
+/// Speed below which the vehicle counts as not moving, in m/s. CARLA reports small
+/// non-zero velocities for a stationary car, so this is not zero.
+const STALL_SPEED_MPS: f64 = 0.1;
+
+/// Throttle below which no meaningful drive torque was asked for. Without this a vehicle
+/// legitimately held at a stop line, where the pedal maps ask for a whisper of throttle
+/// against drag, would read as stuck.
+const STALL_MIN_THROTTLE: f32 = 0.05;
+
+/// How long the vehicle must be told to move, and not move, before that is worth saying.
+/// Long enough to cover a standing start on a heavy vehicle rather than report every
+/// pull-away as a fault.
+const STALL_AFTER: Duration = Duration::from_secs(5);
+
+/// Spacing between repeats while a stall persists, so a stuck run costs one line every
+/// fifteen seconds instead of one per control command at 20 Hz.
+const STALL_WARN_INTERVAL: Duration = Duration::from_secs(15);
+
+/// What `StallWatch` decided to say, if anything.
+#[derive(Debug, PartialEq)]
+enum StallEvent {
+    /// The vehicle has been commanded to move and has not moved for this long.
+    Stuck { seconds: f64 },
+    /// It started moving again, after this long stuck.
+    Recovered { seconds: f64 },
+}
+
+/// Notices that the vehicle has been told to move and is not moving.
+///
+/// This does not intervene and is not a controller. Its whole job is to say out loud that
+/// a run has entered a state nothing else reports: `vehicle_cmd_gate` goes on issuing
+/// positive acceleration, this bridge goes on applying real throttle, and the vehicle
+/// stays at a standstill. A traced run spent its last 140 seconds doing exactly that at
+/// 22.7% throttle, with no diagnostic from any node -- see docs/issues/016.
+///
+/// Reporting it from here is deliberate: this is the one place that knows both what was
+/// asked for and what the actor did about it.
+#[derive(Debug, Default)]
+struct StallWatch {
+    /// When the vehicle first met every condition for being stuck, while it still does.
+    since: Option<Instant>,
+    /// When the last warning went out, for rate limiting.
+    warned_at: Option<Instant>,
+    /// Whether a stall was reported and has not yet cleared, so recovery is logged once
+    /// and only when there was something to recover from.
+    reported: bool,
+}
+
+impl StallWatch {
+    /// Fold in one applied command. `stuck_now` is the caller's judgement of whether this
+    /// command asked for motion that did not happen; `moving` is whether the vehicle is
+    /// actually going anywhere.
+    ///
+    /// Both are needed, because the stuck condition can end two ways and only one of them
+    /// is good news. The vehicle can start moving, or Autoware can stop asking it to --
+    /// and reporting the second as recovery is a lie the log then tells for the rest of
+    /// the run. Observed for real: during a held vehicle the planner's target dipped below
+    /// the threshold for a single command and the bridge announced "moving again" about a
+    /// car that had not moved at all.
+    fn observe(&mut self, now: Instant, stuck_now: bool, moving: bool) -> Option<StallEvent> {
+        if !stuck_now {
+            let was_reported = self.reported;
+            let since = self.since;
+            *self = Self::default();
+            if was_reported && moving {
+                if let Some(since) = since {
+                    return Some(StallEvent::Recovered {
+                        seconds: now.duration_since(since).as_secs_f64(),
+                    });
+                }
+            }
+            // Cleared because nothing is asking for motion any more. That is not recovery
+            // and saying so would be worse than saying nothing.
+            return None;
+        }
+
+        let since = *self.since.get_or_insert(now);
+        let held = now.duration_since(since);
+        if held < STALL_AFTER {
+            return None;
+        }
+        let due = match self.warned_at {
+            None => true,
+            Some(last) => now.duration_since(last) >= STALL_WARN_INTERVAL,
+        };
+        if !due {
+            return None;
+        }
+        self.warned_at = Some(now);
+        self.reported = true;
+        Some(StallEvent::Stuck {
+            seconds: held.as_secs_f64(),
+        })
+    }
+}
+
 /// actually pushed to the actor rather than the values requested.
 #[derive(Debug, Clone, Copy)]
 struct AppliedState {
@@ -302,10 +399,12 @@ impl VehicleControlBridge {
             Arc::new(node.create_publisher("/vehicle/status/actuation_status".reliable())?);
 
         let state = Arc::new(Mutex::new(AppliedState::default()));
+        let stall = Arc::new(Mutex::new(StallWatch::default()));
 
         // Create control command subscriber (Autoware 1.5.0 uses Control message)
         let vehicle_for_control = vehicle.clone();
         let state_for_control = state.clone();
+        let stall_for_control = stall.clone();
         // Trim on the steering command, applied to the normalized value sent to CARLA.
         // 1.0 sends exactly what the Ackermann inverse asks for, which is right for the
         // blueprints measured so far (docs/issues/006). It exists because that inverse is
@@ -331,6 +430,7 @@ impl VehicleControlBridge {
                     trim,
                     calibration.as_ref(),
                     trace.as_deref(),
+                    &stall_for_control,
                     received,
                     crate::utils::ros_time_now_secs(&node_for_clock),
                     &msg,
@@ -631,6 +731,7 @@ impl VehicleControlBridge {
         steering_multiplier: f32,
         longitudinal: Option<&crate::longitudinal_map::LongitudinalCalibration>,
         trace: Option<&crate::control_trace::ControlTrace>,
+        stall: &Mutex<StallWatch>,
         received: std::time::Instant,
         now_sim_s: f64,
         cmd: &autoware_control_msgs::msg::Control,
@@ -743,6 +844,38 @@ impl VehicleControlBridge {
             // the RPC that delivers it. Recorded rather than inferred -- see control_trace.
             let converted = std::time::Instant::now();
             v.apply_control(&control)?;
+
+            // Did that command actually do anything? Everything needed to answer is in
+            // scope here and nowhere else: what Autoware asked for, what pedal it became,
+            // and how fast the actor is going. Nothing intervenes -- a stuck vehicle is
+            // not this bridge's to free -- but a run that spends two minutes applying
+            // throttle to a stationary car should not do it silently.
+            let stuck_now = !applied.is_park()
+                && !applied.is_neutral()
+                && !control.hand_brake
+                && control.throttle >= STALL_MIN_THROTTLE
+                && control.brake <= 0.01
+                && (cmd.longitudinal.velocity.abs() as f64) > STALL_SPEED_MPS
+                && speed < STALL_SPEED_MPS;
+            let moving = speed >= STALL_SPEED_MPS;
+            if let Some(event) = stall.lock().unwrap().observe(converted, stuck_now, moving) {
+                match event {
+                    StallEvent::Stuck { seconds } => tracing::warn!(
+                        "Commanded to move but stationary for {seconds:.0}s: throttle \
+                         {:.3}, no brake, gear {}, asked for {:.2} m/s, measured \
+                         {:.2} m/s. The command path is doing its job, so the vehicle is \
+                         being held by the simulation -- wedged geometry is what this was \
+                         when it was traced (docs/issues/016).",
+                        control.throttle,
+                        applied.gear,
+                        cmd.longitudinal.velocity,
+                        speed
+                    ),
+                    StallEvent::Recovered { seconds } => tracing::info!(
+                        "Moving again after {seconds:.0}s commanded-but-stationary"
+                    ),
+                }
+            }
             if let Some(t) = trace {
                 let stamp = cmd.stamp.sec as f64 + cmd.stamp.nanosec as f64 * 1e-9;
                 // Both in simulation time, so the difference is the command's real staleness
@@ -1099,5 +1232,104 @@ mod tests {
         assert!((base * 0.5).abs() < base.abs());
         assert_eq!((base * 100.0_f32).clamp(-1.0, 1.0), 1.0);
         assert_eq!((-base * 100.0_f32).clamp(-1.0, 1.0), -1.0);
+    }
+}
+
+#[cfg(test)]
+mod stall_watch_tests {
+    use super::*;
+
+    /// A fixed origin plus offsets, so the tests do not wait out real seconds.
+    fn at(origin: Instant, secs: u64) -> Instant {
+        origin + Duration::from_secs(secs)
+    }
+
+    #[test]
+    fn a_moving_vehicle_says_nothing() {
+        let t0 = Instant::now();
+        let mut w = StallWatch::default();
+        for s in 0..60 {
+            assert_eq!(w.observe(at(t0, s), false, true), None);
+        }
+    }
+
+    #[test]
+    fn a_standing_start_is_not_a_stall() {
+        let t0 = Instant::now();
+        let mut w = StallWatch::default();
+        // Stuck, but for less than STALL_AFTER: every vehicle is briefly here when it
+        // pulls away, and reporting that would make the warning worthless.
+        for s in 0..STALL_AFTER.as_secs() {
+            assert_eq!(w.observe(at(t0, s), true, false), None);
+        }
+        assert_eq!(w.observe(at(t0, 1), false, true), None, "recovered before reporting");
+    }
+
+    #[test]
+    fn a_real_stall_reports_once_then_repeats_on_the_interval() {
+        let t0 = Instant::now();
+        let mut w = StallWatch::default();
+        assert_eq!(w.observe(t0, true, false), None);
+        let first = w.observe(at(t0, STALL_AFTER.as_secs()), true, false);
+        assert!(matches!(first, Some(StallEvent::Stuck { .. })), "{first:?}");
+
+        // Silent until the interval has passed, however many commands arrive.
+        for s in STALL_AFTER.as_secs() + 1..STALL_AFTER.as_secs() + STALL_WARN_INTERVAL.as_secs() {
+            assert_eq!(w.observe(at(t0, s), true, false), None, "at {s}s");
+        }
+        let again = w.observe(
+            at(t0, STALL_AFTER.as_secs() + STALL_WARN_INTERVAL.as_secs()),
+            true,
+            false,
+        );
+        assert!(matches!(again, Some(StallEvent::Stuck { .. })), "{again:?}");
+    }
+
+    #[test]
+    fn recovery_is_reported_only_after_a_stall_was() {
+        let t0 = Instant::now();
+        let mut w = StallWatch::default();
+        w.observe(t0, true, false);
+        w.observe(at(t0, STALL_AFTER.as_secs()), true, false);
+        let recovered = w.observe(at(t0, STALL_AFTER.as_secs() + 3), false, true);
+        match recovered {
+            Some(StallEvent::Recovered { seconds }) => {
+                assert!((seconds - (STALL_AFTER.as_secs_f64() + 3.0)).abs() < 0.5, "{seconds}")
+            }
+            other => panic!("expected recovery, got {other:?}"),
+        }
+        // And the watcher is clean again: the next quiet command says nothing.
+        assert_eq!(w.observe(at(t0, STALL_AFTER.as_secs() + 4), false, true), None);
+    }
+
+    #[test]
+    fn the_command_giving_up_is_not_recovery() {
+        let t0 = Instant::now();
+        let mut w = StallWatch::default();
+        w.observe(t0, true, false);
+        assert!(matches!(
+            w.observe(at(t0, STALL_AFTER.as_secs()), true, false),
+            Some(StallEvent::Stuck { .. })
+        ));
+        // The stuck condition ends because nothing asks for motion any more, while the
+        // vehicle is still exactly where it was. Announcing recovery here would be a lie
+        // -- it is what the bridge did when this was first injected for real.
+        assert_eq!(
+            w.observe(at(t0, STALL_AFTER.as_secs() + 1), false, false),
+            None
+        );
+    }
+
+    #[test]
+    fn the_clock_restarts_when_the_vehicle_moves_between_stalls() {
+        let t0 = Instant::now();
+        let mut w = StallWatch::default();
+        for s in 0..STALL_AFTER.as_secs() {
+            w.observe(at(t0, s), true, false);
+        }
+        // One moving command resets the run, so the next stall has to earn its own
+        // STALL_AFTER rather than inheriting the previous one's.
+        assert_eq!(w.observe(at(t0, STALL_AFTER.as_secs()), false, true), None);
+        assert_eq!(w.observe(at(t0, STALL_AFTER.as_secs() + 1), true, false), None);
     }
 }
