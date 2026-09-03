@@ -109,6 +109,22 @@ happen.
 Closing the window properly would mean seeding before the run is allowed to start, which
 needs the scenario runner to wait on localization rather than on the clock.
 
+**That window costs whole runs, so it matters more than "seven seconds" suggests.** Autoware
+routes from whatever pose it has, and if it routes during the window it routes from the
+previous run's pose. Once the seed corrects the estimate the trajectory is left ~90 m behind
+the vehicle, the planning validator rejects it with "longitudinal distance deviation is too
+large", and nothing re-plans: the ego never moves at all for the rest of the run. Measured,
+with localization healthy the whole time at 1.74 m from GNSS:
+
+```
+verdict: FAIL   peak 0.00 m/s   cross-track 84.1 m   localization 1.74 m
+    (diagnostic) planning_validator: longitudinal distance deviation is too large
+```
+
+Most runs re-plan correctly after the correction — the trajectory's first point follows the
+estimate from 152.5 to 195.6 in the same 2-second window — so this is a race, not a
+certainty. It accounted for two of eighteen runs in the suites of 2026-09-03.
+
 ### A live estimate and a readable one are not the same thing
 
 The first version of the convergence check read the last `/localization/kinematic_state`

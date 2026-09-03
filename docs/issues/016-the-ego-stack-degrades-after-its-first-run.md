@@ -3,7 +3,9 @@
 **Severity**: High
 **Component**: lateral control path (`vehicle_control.rs` steer scale, MPC feedback); run-order
 dependence still unexplained
-**Status**: Fixed by `substeps: 2`, confirmed by interleaved A/B (p = 0.003). The IMU sat one dropped sample from gyro_odometer's tolerance
+**Status**: Reopened 2026-09-03 — the stall returns at 8/18 with `substeps: 2` verified
+active. The substeps result stands; it was not the whole cause. Localization is now
+excluded by direct measurement
 
 ## The pattern, as far as it goes
 
@@ -2010,3 +2012,68 @@ And a teardown helper that skipped any process whose command line contained `cla
 skipping every launcher, because the log path it was started with lives under such a directory;
 `pgrep -x` on the executable is the right match, and killing launchers before nodes matters
 because play_launch respawns what it owns.
+
+## Reopened: the stall persists with `substeps: 2` (2026-09-03)
+
+This issue was closed on an interleaved A/B that measured `substeps: 2` at p = 0.003. That
+measurement is not withdrawn — the setting is still active and verified in the running
+bridge's own log (`CARLA sync mode enabled, fixed_delta_seconds=0.05 (2 substeps per 0.1s
+SSv2 frame)`) — but the symptom it was closed on is back, and at a rate too high to call a
+tail:
+
+```
+three consecutive acceptance suites, six runs each, one ego stack, substeps: 2 active
+    8 of 18 passed
+```
+
+Every run here is a second-or-later scenario on a warm stack, which is the condition this
+issue is about.
+
+### What is new: localization is not the cause
+
+Earlier work attributed this class of failure to the pose estimate diverging. That
+attribution is now excluded by direct measurement rather than by argument. A probe recorded
+the EKF, the GNSS fix, the pose estimator's output rate and the planned trajectory at 2 Hz
+through complete runs. In the failures the estimate is *healthy throughout*:
+
+```
+   t   gap_m    ekf_x    ekf_y   gnss_x   gnss_y  speed  ekf/s ndt/s gnss/s   traj_x
+ 208    0.85    179.1   -128.6    179.5   -127.8   4.16   10.0   6.5   10.0    184.1
+ 212    1.10    163.3   -129.4    163.9   -128.5   4.12   10.0   8.5   10.0    168.1
+ 216    1.15    147.0   -130.9    147.7   -130.0   4.04   10.0   2.5   10.0    152.1
+ 220    0.62    136.2   -125.1    136.2   -124.5   0.00   10.0  10.0   10.0    141.1
+ 232    1.08    128.1   -137.2    127.6   -136.3   0.00   10.0   6.5   10.0    132.4
+ 280    0.82    128.0   -137.2    128.3   -136.4   0.00   10.0   8.5   10.0    132.4
+```
+
+The EKF agrees with GNSS to about a metre for the whole run, and the pose estimator never
+stops publishing. What moves is the *vehicle*: y goes -130.9 to -125.1 to -137.2, twelve
+metres of real lateral excursion, and then it sits there for the remaining minute. This is
+this issue's "with lateral departure" signature, measured with the localization explanation
+removed.
+
+### Three shapes, one ending
+
+All three end with an ego that has stopped and does not resume:
+
+| shape | peak speed | cross-track | diagnostics |
+|---|---|---|---|
+| lateral departure | 4.36 m/s | 7.66 m | control_validator: deviated from trajectory |
+| stops for no stated reason | 4.18 m/s | 0.046 m | **none** |
+| never drives at all | 0.00 m/s | 84 m | planning_validator: longitudinal distance deviation too large |
+
+The middle one is the hardest and the most interesting: the ego accelerates to 4.18 m/s,
+tracks its trajectory to 4.6 cm, travels 7.8 m, stops, and no node reports anything wrong.
+
+The third is not this issue at all — it is a consequence of
+[022](022-the-pose-estimate-outlives-the-run.md), where the route is planned from the pose
+the previous run left behind and is never re-planned once that pose is corrected. It is
+listed here because it lands in the same acceptance bucket and has to be separated out
+before this issue's rate can be read honestly.
+
+### Where to look next
+
+Not localization, and not the CARLA step time. The remaining candidates are the lateral
+controller and whatever holds the vehicle after it stops: nothing in the diagnostics
+explains the middle shape, so the next step is a trace of the control command, the gate
+output and the operation mode across a stall, rather than more verdict counting.

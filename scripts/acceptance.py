@@ -174,6 +174,12 @@ def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
 
     def on_odom(m):
         p = m.pose.pose.position
+        # Only once the estimate belongs to this vehicle -- see estimate_is_seated. The
+        # first pose of a run after the first is the previous run's final pose, and
+        # measuring "travelled" from it to the corrected one reported 93.4 m for an ego
+        # that never moved at all.
+        if not estimate_is_seated((p.x, p.y)):
+            return
         if seen["first"] is None:
             seen["first"] = (p.x, p.y)
         seen["last"] = (p.x, p.y)
@@ -217,6 +223,20 @@ def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
     gnss = {"last": None}
     localization_gap: list[float] = []
 
+    # Distance from the estimate to the GNSS fix beyond which the estimate is not this
+    # vehicle's yet. On a stack that has already run a scenario the pose estimator starts
+    # each new run holding the *previous* run's final pose, about 95 m away, until it is
+    # re-seeded and NDT re-converges a few seconds later -- see acb issue 022. Every
+    # position-derived measurement below has to ignore that window or it measures the
+    # correction rather than the run.
+    ESTIMATE_SEATED_M = 5.0
+
+    def estimate_is_seated(pos) -> bool:
+        """Is the pose estimate on this vehicle, rather than the last one's?"""
+        if gnss["last"] is None:
+            return False
+        return math.dist(pos, gnss["last"]) <= ESTIMATE_SEATED_M
+
     def on_gnss(m):
         p = m.pose.pose.position
         gnss["last"] = (p.x, p.y)
@@ -230,6 +250,13 @@ def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
         pts = traj["points"]
         if len(pts) >= 2:
             p = m.pose.pose.position
+            # Same gate as on_odom: while the estimate is still the previous run's, the
+            # distance to the trajectory says nothing about how well this run is tracking.
+            # It does *not* hide a genuinely stranded trajectory -- once the estimate is
+            # seated, a trajectory left behind at the old pose still scores its full
+            # distance, which is how the "ego never drove" runs read 86 m.
+            if not estimate_is_seated((p.x, p.y)):
+                return
             cross_track.append(min(math.dist((p.x, p.y), q) for q in pts))
 
     node.create_subscription(VelocityReport, "/vehicle/status/velocity_status", on_velocity, 10)
