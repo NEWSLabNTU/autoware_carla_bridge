@@ -1053,6 +1053,9 @@ fn main() -> Result<()> {
         // Consecutive ticks with no frame. Only used to rate-limit the log; a paused
         // simulation is a normal state that can last minutes.
         let mut idle_ticks: u64 = 0;
+        // Last CARLA frame whose time was published on /clock. Used to emit the frames a
+        // slow loop iteration skipped over -- see the publish site below.
+        let mut last_clock_frame: Option<usize> = None;
         /// Roughly one loop period each, so this is ~2s of silence before the first note.
         const IDLE_TICKS_BEFORE_FIRST_LOG: u64 = 40;
         /// After that, roughly every 30s at a 50ms loop.
@@ -1228,11 +1231,40 @@ fn main() -> Result<()> {
 
             // Publish clock, but only if we own it in this domain. `sec` is CARLA server
             // uptime, so it is rebased onto scenario time before publishing.
+            //
+            // One message per CARLA FRAME, not per loop iteration. `wait_for_tick_or_timeout`
+            // returns the newest frame, not the next one, so an iteration slower than the
+            // server's tick silently swallows the frames in between -- and this loop is
+            // slower: it turns at ~14 Hz against a 20 Hz server. Measured, the clock that
+            // came out advanced in a mix of 50 ms and 100 ms steps, median 50 and mean
+            // 67.79, which puts about a third of its messages at double size. SSv2's clock,
+            // by contrast, is a metronome (median 99.97 ms, mean 100.01).
+            //
+            // So fill in what the iteration jumped over. The frames are real frames that
+            // happened on the server; their times are exact, not interpolated, because
+            // `delta_seconds` is the server's own fixed step.
             if params.publish_clock {
+                let ts = snapshot.timestamp();
                 let sim_sec = clock_epoch.to_sim_time(sec);
+                if let (Some(prev), true) = (last_clock_frame, ts.delta_seconds > 0.0) {
+                    // Cap the catch-up. Between scenario runs the simulation pauses and the
+                    // frame counter can jump by thousands; replaying all of those would
+                    // flood the topic with backdated instants and stall the loop. A run that
+                    // is merely keeping up skips at most one.
+                    const MAX_CATCHUP_FRAMES: usize = 4;
+                    let skipped = ts.frame.saturating_sub(prev + 1).min(MAX_CATCHUP_FRAMES);
+                    for back in (1..=skipped).rev() {
+                        let t = sim_sec - (back as f64) * ts.delta_seconds;
+                        if let Err(e) = simulator_clock.publish_clock(Some(t)) {
+                            tracing::warn!("Failed to publish skipped-frame clock: {e}");
+                            break;
+                        }
+                    }
+                }
                 if let Err(e) = simulator_clock.publish_clock(Some(sim_sec)) {
                     tracing::warn!("Failed to publish clock: {e}");
                 }
+                last_clock_frame = Some(ts.frame);
             }
 
             // Spin executor to process ROS callbacks (subscriptions). This is also what
