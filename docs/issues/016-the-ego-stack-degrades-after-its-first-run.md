@@ -2077,3 +2077,95 @@ Not localization, and not the CARLA step time. The remaining candidates are the 
 controller and whatever holds the vehicle after it stops: nothing in the diagnostics
 explains the middle shape, so the next step is a trace of the control command, the gate
 output and the operation mode across a stall, rather than more verdict counting.
+
+## The control command across a stall (2026-09-03)
+
+Traced with `scripts/probe_control_chain.py` (planner target, trajectory-follower output,
+gate output, operation mode, MRM) and `scripts/probe_carla_pedal.py` (the pedal that
+actually reaches the vehicle, and whether it is still on a mapped lane), both sampling at
+1 Hz through complete runs.
+
+### The command path is not at fault
+
+During the stall Autoware is asking the vehicle to move and the bridge is doing as it is
+told:
+
+```
+   t  speed traj_v  tf_acc tf_steer cmd_acc cmd_vel cmd_steer mode ctrl  mrm
+   39   4.07   0.00  -0.474   -0.017  -0.174   3.657    -0.037 AUTO   on MRM_OPERATING/PULL_OVER
+   40   0.00   0.25   0.306    0.121  -1.819   2.661    -0.037 AUTO   on MRM_SUCCEEDED/PULL_OVER
+   41  -0.00   0.25   0.432    0.037   0.432   0.250     0.037 AUTO   on NORMAL/NONE
+   ...
+   70   0.01   0.25   0.501    0.047  -0.705   0.245     0.042 AUTO   on MRM_SUCCEEDED/PULL_OVER
+```
+
+For the thirty seconds after the stop the planner asks for 0.25 m/s, the gate passes
+**+0.50 m/s^2**, operation mode is AUTONOMOUS with control enabled, and the vehicle reports
+0.00 m/s. On the CARLA side, over the same window:
+
+```
+   t  actor  speed  throttle  brake   steer  hand gear      x       y  onroad
+   47    421   0.00     0.227  0.000  -0.086 False    1  ...     ...     yes
+   63    421   0.00     0.227  0.000  -0.034 False    1  ...     ...     yes
+```
+
+**Throttle 0.227, brake 0.000, hand brake off, gear 1, forward.** The bridge applies a
+real pedal — the same magnitude that was driving the car at 4 m/s a few seconds earlier —
+and the vehicle does not move. So the stall is not a lost command, not a gate hold, not an
+emergency, and not a gear or hand-brake mistake. Everything upstream of the tyres is
+behaving.
+
+### What distinguishes the failing run is the steering, not the MRM
+
+The MRM is tempting to blame and is not the cause. It flickers for a sample or two in runs
+that pass and drive on regardless:
+
+```
+run  peak speed  max |tf_steer|  MRM samples  outcome
+ b     4.49        0.178            0         pass
+ c     4.86        0.082            3         pass
+ d     4.33        0.232            2         pass
+ h     4.28        0.137            2         pass
+ i     4.27        0.148            2         pass
+ j     4.28        0.281            3         pass
+ e     4.32        0.405            8         FAIL
+```
+
+What separates the failure is the size of the steering command Autoware itself produces.
+The failing run's trajectory follower swings to **0.405 rad — 23 degrees at 4.2 m/s** —
+roughly double the worst run that survived, and it arrives as a growing oscillation:
+
+```
+t=33 +0.279   t=34 +0.213   t=35 +0.002   t=36 -0.208   t=37 -0.405   t=38 -0.226
+t=39 MRM_OPERATING/PULL_OVER, speed 4.07 -> 0.00 in one second
+```
+
+This is the diverging lateral loop this issue describes, now measured on the command
+itself rather than inferred from the path. The MRM and the stop are its consequences.
+
+### Not the steering scale
+
+The obvious suspect is the command-to-CARLA steering conversion, and it is not that. The
+bridge reads the geometry from CARLA at attach and reports it:
+
+```
+Steering geometry from CARLA physics: limit 70.0 deg, track/wheelbase 0.5547,
+    so 58.7 deg at full lock
+```
+
+which is what issue [006](006-hardcoded-max-steer-angle.md) fixed, and issue
+[009](009-steering-report-echoes-command.md) separately measured the wheels following the
+command at unity over 1296 paired samples.
+
+### What is left
+
+The oscillation is in Autoware's own lateral output, on a plant whose steering scale
+measures correct, with localization measured healthy throughout (see the reopening note
+above). That points at the lateral controller's tuning against this vehicle's actual
+response — its delay and its gain — rather than at any single wrong number in the bridge.
+
+One gap is the bridge's own, though, and is worth closing regardless of the cause: nothing
+notices that the vehicle has been commanded to move and is not moving. The run above spends
+its last 140 seconds applying 22.7% throttle to a stationary car in silence, and no
+component says anything. A "commanded to move, not moving" warning from the side that
+applies the pedal and reads the speed would turn that silence into a diagnosis.
