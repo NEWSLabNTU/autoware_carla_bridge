@@ -274,6 +274,17 @@ So making this parameter usable is not a matter of correcting the report. It wou
 lateral controller to know the delay, or the delay itself to come down.
 
 
+### The lag, measured (2026-09-03)
+
+The ~1 s figure above is superseded. Measured directly against CARLA's front-wheel angles
+with `scripts/probe_steering_plant.py`, the command-to-wheel delay is **0.10 s -- one
+command period** (correlation 0.9932 there, decaying to 0.00 by 0.9 s and going negative
+beyond, on a command with a p95 step of 0.022 rad, so the peak is real rather than the
+artefact of a smooth signal). The wheels deliver 0.927 of the commanded angle.
+
+This section's caution was right: the second was never there. See
+[016](016-the-ego-stack-degrades-after-its-first-run.md) for the full curve.
+
 ### Enabling it
 
 `REPORT_MEASURED_STEERING=true just ego-av` still works and is still worth having for anyone

@@ -2191,3 +2191,58 @@ ways and only one is good news -- the vehicle can start moving, or Autoware can 
 it to -- and the first version announced "moving again" about a car that was still frozen,
 because the planner's target dipped below the threshold for a single command. Recovery is
 now reported only when the vehicle is actually moving.
+
+## Re-baselined after the per-frame clock, and the plant measured (2026-09-03)
+
+`/clock` began being published once per CARLA frame rather than once per bridge loop
+iteration (acb `cf53fe9`, from separate work). Re-running the same acceptance suites on the
+merged head:
+
+```
+before   8 of 18 passed
+after    9 of 10 passed
+```
+
+**Two things changed between those numbers, not one**, and this should not be read as a
+clean attribution. The other is this repository's own harness fix, which stopped charging
+the localization correction as vehicle motion. That fix is not the explanation, though: it
+still reports the large failures at their full size — the one failure in the new sample
+scores 80.6 m of cross-track — so it is not turning failures into passes. The honest
+statement is that the rate improved sharply, the clock is the plausible cause, and no
+controlled A/B was run.
+
+What did change qualitatively is the *shape* of what is left. The lateral-departure and
+stops-for-no-reason shapes did not appear at all in the new sample. The single failure is
+the third shape, which belongs to [022](022-the-pose-estimate-outlives-the-run.md): the
+route is planned from the pose the previous run left behind and never re-planned.
+
+### The plant, measured at last
+
+This issue and [009](009-steering-report-echoes-command.md) both guessed at a steering lag
+of roughly a second, and 009 rightly flagged its own number as unexplained: the steering
+command is smooth, so a cross-correlation peak on it means little. Measured directly with
+`scripts/probe_steering_plant.py`, pairing the commanded tire angle against CARLA's own
+front-wheel angles on a driving ego:
+
+```
+command step per sample: median 0.00105 rad, p95 0.02176, max 0.02527
+command range           -0.1491 to 0.1251 rad
+
+lag(s)   0.00    0.10    0.20    0.30    0.50    0.70    0.90
+corr    0.9931  0.9932  0.9495  0.8661  0.6103  0.2996  0.0020
+
+best alignment    0.10 s
+wheels/command    median 0.927
+```
+
+**The delay is one command period, not a second.** And this curve, unlike the earlier one,
+means something: it decays to zero by 0.9 s and goes negative beyond, which a signal with
+no edges cannot do. The command does have edges here — a p95 step of 0.022 rad per sample.
+
+The plant also under-delivers by about 7%: the wheels reach 0.927 of the angle asked for.
+That is worth knowing and is small enough that a closed loop absorbs it; it is not the
+factor-of-two that would explain an oscillation.
+
+So the lateral loop is not closing around a second of delay. Whatever drove the divergence
+traced above, the plant it was driving looks healthy on the merged head, which is
+consistent with those shapes vanishing from the sample.

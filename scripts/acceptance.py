@@ -99,6 +99,15 @@ def diag_level(status) -> int:
 
 
 def watch_carla_for_ego(role_name: str, started: float, seen: dict, stop: threading.Event):
+    """Wrapper that never lets this thread's failure end the suite."""
+    try:
+        _watch_carla_for_ego(role_name, started, seen, stop)
+    except Exception as e:            # noqa: BLE001 -- a watcher is not worth a lost run
+        print("    (watcher) stopped after %s: %s" % (type(e).__name__, e))
+
+
+def _watch_carla_for_ego(role_name: str, started: float, seen: dict,
+                         stop: threading.Event):
     """Record when an ego is first *seen* in CARLA, as a passive observer.
 
     Seen, not spawned: an ego left over from a previous run counts, which is why a reading of
@@ -121,24 +130,31 @@ def watch_carla_for_ego(role_name: str, started: float, seen: dict, stop: thread
     # world snapshot, so it raises when nothing is ticking -- which is the state between runs,
     # exactly when this thread starts. Returning on that error made the watcher exit silently
     # and report "no ego seen" for runs where the ego plainly drove.
+    # The client is held for as long as the world derived from it. Dropping it while a
+    # call is in flight lets the timeout surface as a C++ terminate rather than a Python
+    # exception, and that aborts the whole suite: one run 5 of 6 died as
+    # "what(): time-out of 10000ms ... Aborted (core dumped)", losing the run set. The
+    # timeout is generous for the same reason -- by the fifth consecutive scenario this
+    # host is busy enough that 10 s is not obviously long.
+    client = None
     world = None
     while not stop.is_set():
         if world is None:
             try:
                 client = carla.Client("localhost", 2000)
-                client.set_timeout(10.0)
+                client.set_timeout(30.0)
                 world = client.get_world()
-            except RuntimeError:
+            except Exception:
                 time.sleep(2.0)
                 continue
         try:
             world.wait_for_tick(seconds=5.0)
-        except RuntimeError:
+        except Exception:
             continue        # nobody ticking; between runs this is normal
         try:
             found = any(a.attributes.get("role_name") == role_name
                         for a in world.get_actors().filter("vehicle.*"))
-        except RuntimeError:
+        except Exception:
             world = None    # the episode went away; reconnect rather than go blind
             continue
         if found and seen.get("ego_at") is None:
