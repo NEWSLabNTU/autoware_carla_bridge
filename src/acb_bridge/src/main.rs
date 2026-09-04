@@ -1067,6 +1067,11 @@ fn main() -> Result<()> {
         // Last CARLA frame whose time was published on /clock. Used to emit the frames a
         // slow loop iteration skipped over -- see the publish site below.
         let mut last_clock_frame: Option<usize> = None;
+        let clock_decimate: usize = std::env::var("ACB_CLOCK_DECIMATE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|n| *n >= 1)
+            .unwrap_or(1);
         /// Roughly one loop period each, so this is ~2s of silence before the first note.
         const IDLE_TICKS_BEFORE_FIRST_LOG: u64 = 40;
         /// After that, roughly every 30s at a 50ms loop.
@@ -1264,7 +1269,25 @@ fn main() -> Result<()> {
             if params.publish_clock {
                 let ts = snapshot.timestamp();
                 let sim_sec = clock_epoch.to_sim_time(sec);
-                if let (Some(prev), true) = (last_clock_frame, ts.delta_seconds > 0.0) {
+                // Experiment hook (ACB_CLOCK_DECIMATE, default 1 = every frame).
+                //
+                // Autoware's control timers run on simulation time, so the /clock rate sets
+                // the rate at which it recomputes: measured 11.03 Hz of control_cmd against
+                // SSv2's 10 Hz clock, and 21.43 Hz against this bridge's 20 Hz one. The
+                // bridge's own loop turns at ~14 Hz, so at 21 Hz the commands arrive faster
+                // than they can be consumed. This exists to test whether that is what makes
+                // an unmanaged ego track worse than a managed one; it is not a setting
+                // anyone should need.
+                if clock_decimate > 1 && ts.frame % clock_decimate != 0 {
+                    // Skipped deliberately. Record the frame anyway: leaving it unrecorded
+                    // makes the catch-up below re-publish exactly what was just skipped,
+                    // which is how the first attempt at this defeated itself -- the clock
+                    // came out at 20 Hz again, merely delivered in pairs.
+                    last_clock_frame = Some(ts.frame);
+                } else {
+                if let (Some(prev), true) =
+                    (last_clock_frame, ts.delta_seconds > 0.0 && clock_decimate == 1)
+                {
                     // Cap the catch-up. Between scenario runs the simulation pauses and the
                     // frame counter can jump by thousands; replaying all of those would
                     // flood the topic with backdated instants and stall the loop. A run that
@@ -1283,6 +1306,7 @@ fn main() -> Result<()> {
                     tracing::warn!("Failed to publish clock: {e}");
                 }
                 last_clock_frame = Some(ts.frame);
+                }
             }
 
             // Spin executor to process ROS callbacks (subscriptions). This is also what
