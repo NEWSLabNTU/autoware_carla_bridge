@@ -161,6 +161,62 @@ incidental recovery usually did happen. This fix is justified by the measured er
 its deterministic correction, not by a pass-rate delta it is far too small a sample to
 show.
 
+## Trying to close the window, and why it cannot be closed from here (2026-09-04)
+
+Two attempts, both measured, both negative. They are recorded because each rules something
+out.
+
+### The delay is not a search width
+
+The seed sends RViz's "2D Pose Estimate" covariance -- half a metre of position uncertainty
+-- on the reasoning that a confident covariance tells NDT not to search. But this pose is
+exact ground truth, so a confident covariance ought to be both more honest and faster.
+Timed on a stale estimate, seeding by hand at each covariance:
+
+```
+loose (0.25 m^2, 0.0685 rad^2)   converged in 7.81 s
+tight (0.01 m^2, 0.001  rad^2)   converged in 9.41 s
+```
+
+No improvement, so the covariance stays as it is. The window is Autoware's pipeline time,
+not the width of a search, and it cannot be shortened by choosing better numbers.
+
+### Holding the scenario at the spawn does not work under a managed ego
+
+If the estimate cannot be corrected faster, the alternative is not to start the scenario
+until it has been. `carla_scenario_bridge` can do that: SSv2's client does a plain blocking
+`recv` with no timeout set, so it will wait as long as the spawn reply takes, and the bridge
+owns the CARLA connection and can tick the world itself meanwhile.
+
+That was implemented -- `acb_bridge` reports `seated <actor_id>` when the estimate settles
+onto the vehicle, and the runner waits for it at the ego's spawn -- and it does not work,
+for a reason that is worth writing down:
+
+**Under a managed ego, SSv2 publishes `/clock`.** Autoware runs on simulation time, so
+holding SSv2 stops Autoware's clock, and NDT and the EKF stop with it. The wait is for an
+estimate that cannot move until the wait ends. The measurements say it exactly:
+
+```
+30 s wait   timed out; the bridge reported the estimate seated 6 s LATER,
+            on the clock SSv2 resumed the moment it was answered
+90 s wait   timed out in full
+```
+
+CARLA frames were advancing throughout -- the world ticks, Autoware does not.
+
+So the mechanism ships **disabled** (`sensor_release.localization_warmup_s`, default 0). It
+is kept rather than deleted because it is correct for an *unmanaged* ego, where
+`acb_bridge` publishes `/clock` itself and the world really does keep running while the
+runner waits.
+
+### What would actually close it
+
+Not the bridges. The ordering fault is that Autoware is asked to route before its estimate
+belongs to the vehicle, and the only components that can fix that are the ones that own the
+ordering: SSv2, which routes, or the ego stack, which could refuse to accept a route while
+`/localization/initialization_state` is stale. Anything either bridge does is a race against
+a clock it does not own.
+
 ## Related
 
 - `acb_pilot` had the same blind spot from the other end: it re-initialized on startup but

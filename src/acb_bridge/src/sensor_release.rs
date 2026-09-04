@@ -229,3 +229,55 @@ mod tests {
         assert_eq!(r.role_name, "bg_av_1");
     }
 }
+
+/// Tells the scenario runner when this bridge's localization estimate is on its vehicle.
+///
+/// Shares the runner's PULL endpoint with the release acknowledgements, because it is the
+/// same relationship in the same direction and a second endpoint would be a second thing
+/// to configure and get wrong. Frames are `seated <actor_id>`.
+///
+/// Best effort, deliberately: the runner waits on this only until its own timeout, so a
+/// bridge that never reports costs a bounded pause rather than a stuck scenario.
+pub struct SeatedReporter {
+    push: zmq::Socket,
+    /// Kept alive for the socket's lifetime; dropping it would close the socket.
+    _ctx: zmq::Context,
+}
+
+impl SeatedReporter {
+    /// Connect to the runner's ack endpoint. `None` if the socket cannot be made, which is
+    /// not fatal anywhere: seating simply goes unreported.
+    pub fn connect(ack_endpoint: &str) -> Option<Self> {
+        if ack_endpoint.is_empty() {
+            return None;
+        }
+        let ctx = zmq::Context::new();
+        let push = match ctx.socket(zmq::PUSH) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("Seated reporter: cannot create PUSH socket: {e}");
+                return None;
+            }
+        };
+        // Never block the control loop on a runner that is not listening, and never let a
+        // stale report linger: by the time one is late, the run it belonged to is over.
+        let _ = push.set_sndtimeo(200);
+        let _ = push.set_linger(200);
+        let _ = push.set_sndhwm(4);
+        if let Err(e) = push.connect(ack_endpoint) {
+            tracing::warn!("Seated reporter: cannot connect to {ack_endpoint}: {e}");
+            return None;
+        }
+        Some(Self { push, _ctx: ctx })
+    }
+
+    /// Report that the estimate now sits on `actor_id`.
+    pub fn report(&self, actor_id: u32) {
+        match self.push.send(format!("seated {actor_id}").as_str(), 0) {
+            Ok(()) => tracing::info!(
+                "Told the scenario runner that localization is seated on actor {actor_id}"
+            ),
+            Err(e) => tracing::debug!("Seated reporter: could not send: {e}"),
+        }
+    }
+}

@@ -26,6 +26,12 @@ struct SeedState {
     last_sent: Option<std::time::Instant>,
     /// How many have gone out, for the log.
     sent: u32,
+    /// Whether the estimate has been observed sitting on this vehicle, and that fact has
+    /// not yet been collected by `take_seated`. Reported whether or not a seed was needed,
+    /// because the scenario runner waits on it for every run including the first.
+    seated: bool,
+    /// Whether seating has already been reported for this vehicle, so it is announced once.
+    seated_reported: bool,
 }
 
 impl SeedState {
@@ -35,6 +41,8 @@ impl SeedState {
             requested_at: None,
             last_sent: None,
             sent: 0,
+            seated: false,
+            seated_reported: false,
         }
     }
 }
@@ -848,6 +856,8 @@ impl Autoware {
             requested_at: Some(std::time::Instant::now()),
             last_sent: None,
             sent: 0,
+            seated: false,
+            seated_reported: false,
         };
         tracing::info!(
             "Localization re-seed requested; publishing /initialpose until the estimate \
@@ -881,6 +891,19 @@ impl Autoware {
         orientation: &[f64; 4],
     ) {
         let mut seed = self.seed.lock().unwrap();
+
+        // Seating is watched whether or not a seed is outstanding. On a cold stack no seed
+        // is ever sent -- Autoware's own initializer does the work -- and the scenario
+        // runner still needs to know when the estimate belongs to this vehicle.
+        if !seed.seated_reported {
+            if let Some(gap) = self.estimate_gap(position) {
+                if gap <= SEED_TOLERANCE_M {
+                    seed.seated = true;
+                    seed.seated_reported = true;
+                }
+            }
+        }
+
         if !seed.pending {
             return;
         }
@@ -975,6 +998,17 @@ impl Autoware {
                 seed.last_sent = Some(now);
             }
         }
+    }
+
+    /// Collect the one-shot "the estimate is on this vehicle" event, if it has happened.
+    ///
+    /// Polled by the main loop, which owns the channel back to the scenario runner. The
+    /// runner holds the scenario at the spawn until it hears this, so that Autoware routes
+    /// from a pose belonging to the vehicle in front of it rather than from the one the
+    /// previous run left behind -- see docs/issues/022.
+    pub fn take_seated(&self) -> bool {
+        let mut seed = self.seed.lock().unwrap();
+        std::mem::take(&mut seed.seated)
     }
 
     /// Check if localization has been initialized (from /localization/initialization_state)

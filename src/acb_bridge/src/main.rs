@@ -945,6 +945,17 @@ fn main() -> Result<()> {
             )
         };
 
+        // Tells the runner when the estimate is on this vehicle, so it can hold the
+        // scenario at the spawn rather than letting Autoware route from the pose the
+        // previous run left behind. Shares the release channel's endpoint.
+        let seated_reporter = sensor_release::SeatedReporter::connect(&params.release_ack_endpoint);
+        if seated_reporter.is_none() && !params.release_ack_endpoint.is_empty() {
+            tracing::warn!(
+                "No seated reporter: the scenario runner will wait out its own timeout \
+                 before starting each run"
+            );
+        }
+
         // === Create vehicle control bridge ===
         tracing::info!("Creating vehicle control bridge...");
         // Measured pedal maps, when both are configured and readable. A missing or broken
@@ -1079,6 +1090,13 @@ fn main() -> Result<()> {
             }
 
             let loop_start = std::time::Instant::now();
+
+            // One-shot, as soon as the estimate settles onto this vehicle.
+            if autoware.take_seated() {
+                if let Some(reporter) = &seated_reporter {
+                    reporter.report(vehicle_id);
+                }
+            }
 
             // Check Autoware health
             autoware.health_check();
