@@ -20,6 +20,7 @@ use std::{
     io::{BufWriter, Write},
     path::Path,
     sync::Mutex,
+    sync::atomic::{AtomicU64, Ordering},
     time::Instant,
 };
 
@@ -28,6 +29,11 @@ use crate::error::Result;
 /// Timestamps for one command's passage through the bridge.
 pub struct ControlTrace {
     out: Mutex<BufWriter<File>>,
+    /// Commands applied since the last `loop` row. The `pumped` column used to be the
+    /// literal 1, which reads in the CSV exactly like a measurement of "one callback per
+    /// iteration" and is not one -- it cannot disagree with the assumption it was meant to
+    /// check. This counts them.
+    applied_since_loop: AtomicU64,
     /// Wall clock is not comparable to a simulation-time stamp, so durations are taken from a
     /// monotonic origin and the stamp is recorded as-is for the caller to align.
     origin: Instant,
@@ -59,7 +65,8 @@ impl ControlTrace {
              #\n\
              # A `loop` row is one iteration of the bridge's main loop rather than a command:\n\
              # period_us is since the previous iteration, spin_us is the executor pump, and\n\
-             # pumped is how many callbacks it ran.\n\
+             # pumped is how many control commands were APPLIED during it -- counted, not\n\
+             #   assumed. It was previously the literal 1.\n\
              kind,stamp_s,recv_s,convert_us,apply_us,age_ms"
         )
         .and_then(|()| out.flush());
@@ -71,6 +78,7 @@ impl ControlTrace {
         })?;
         Ok(Self {
             out: Mutex::new(out),
+            applied_since_loop: AtomicU64::new(0),
             origin: Instant::now(),
         })
     }
@@ -86,12 +94,13 @@ impl ControlTrace {
     /// iteration. With several subscriptions live, a control command can wait for as many
     /// iterations as there are other callbacks queued ahead of it, and that wait is invisible
     /// to a trace that starts when the callback begins.
-    pub fn record_loop(&self, period: std::time::Duration, spin: std::time::Duration, pumped: u32) {
+    pub fn record_loop(&self, period: std::time::Duration, spin: std::time::Duration) {
+        let applied = self.applied_since_loop.swap(0, Ordering::Relaxed);
         let row = format!(
             "loop,0,0,{:.1},{:.1},{}",
             period.as_micros() as f64,
             spin.as_micros() as f64,
-            pumped
+            applied
         );
         if let Ok(mut out) = self.out.lock() {
             // Flushed like the command rows: a buffered trace that only reaches disk when
@@ -118,6 +127,7 @@ impl ControlTrace {
             applied.duration_since(converted).as_micros() as f64,
             age_ms,
         );
+        self.applied_since_loop.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut out) = self.out.lock() {
             // A failed trace write must never take the run down with it.
             let _ = writeln!(out, "{row}");

@@ -1324,23 +1324,29 @@ fn main() -> Result<()> {
             // the margin was already negative on paper, and anything queued behind a control
             // command delays it by a whole iteration.
             //
-            // The obvious fix -- `SpinOptions::default()`, which takes all ready work inside
-            // the same bound -- was tried and is worse. rclrs 0.7 waits out the whole timeout
-            // rather than returning once the queue is empty, so the pump went from 0.32 ms to
-            // 10.68 ms at the median and the loop fell from 13.9 Hz to 12.7. Command spacing
-            // was unchanged at 99.8 ms, so nothing was gained for it.
+            // What that costs was then measured end to end. Against a 19.3 Hz command
+            // stream the bridge applied only 13.5 Hz of it -- 30% never reached CARLA -- and
+            // what did arrive was a median of 500 ms stale, a standing backlog of about nine
+            // command periods. A managed ego publishes 11.2 Hz, stays under the ceiling, and
+            // shows 93% applied at zero median staleness. That difference is the whole of
+            // the 3x longitudinal tracking gap between the two modes.
             //
-            // Draining properly needs the executor off this thread, not a different spin
-            // option. Until then this stays as it is, with the margin above written down.
+            // So take all the ready work, with a SHORT bound. `SpinOptions::default()` was
+            // tried once before and rejected, but at a 10 ms timeout: rclrs 0.7 waits out
+            // the whole timeout rather than returning on an empty queue, so an idle pump
+            // cost 10.68 ms at the median and the loop fell to 12.7 Hz. The waiting was the
+            // problem, not the draining. At 1 ms an idle pump costs 1 ms against a loop
+            // period of ~82 ms, and a busy one returns with the queue emptied.
+            //
+            // Draining is right rather than merely cheaper: only the newest command means
+            // anything to an actuator, so a backlog is not work to get through, it is work
+            // to discard. Consuming one per iteration keeps the stale ones and applies them
+            // in order, which is the worst of both.
             let spin_start = std::time::Instant::now();
-            executor.spin(rclrs::SpinOptions::spin_once().timeout(Duration::from_millis(10)));
+            executor.spin(rclrs::SpinOptions::default().timeout(Duration::from_millis(1)));
             if let Some(t) = &loop_trace {
                 let now = std::time::Instant::now();
-                t.record_loop(
-                    now.duration_since(last_loop_at),
-                    now.duration_since(spin_start),
-                    1,
-                );
+                t.record_loop(now.duration_since(last_loop_at), now.duration_since(spin_start));
                 last_loop_at = now;
             }
 
