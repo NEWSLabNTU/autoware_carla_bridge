@@ -15,6 +15,12 @@ What it judges, and why each is here:
 * **Diagnostics that are not OK.** The cascade behind issue 016 was fifteen non-OK nodes.
 * **Longitudinal tracking.** Issue 019 was a factor-of-two error in the pedal conversion that
   no pass/fail verdict ever showed.
+* **The route starts where the ego is.** A route is planned from the ego's pose, so on a
+  healthy run the vehicle begins on its own route. When it does not, the route belongs to a
+  previous run: measured once at 235.5 m, with the ego sitting at its spawn, `route` SET,
+  `mode` AUTONOMOUS and a trajectory stub at the goal. Every other check here scores that as
+  "ego never drove", which is true and useless -- it sent three investigations after the
+  spawn before anyone read `/api/routing/route`.
 * **Localization against ground truth.** Not the same question as cross-track: cross-track
   asks whether the vehicle is on the trajectory it planned, and that stays small when
   localization is confidently wrong, because the trajectory is planned from the same wrong
@@ -51,7 +57,9 @@ import threading
 
 import carla
 import rclpy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from autoware_control_msgs.msg import Control
+from autoware_adapi_v1_msgs.msg import Route
 from autoware_planning_msgs.msg import Trajectory
 from autoware_vehicle_msgs.msg import VelocityReport
 from diagnostic_msgs.msg import DiagnosticArray
@@ -88,6 +96,17 @@ MAX_CROSS_TRACK = 1.00          # m, median distance from the planned trajectory
 # switched off. A mis-localized run is wrong steadily -- run 3's median 32.19 sat against a
 # max of 34.28 -- so the median is what tells the two apart.
 MAX_LOCALIZATION_GAP = 10.0     # m, median |EKF pose - GNSS pose|
+# How far the route's start may be from anywhere the ego actually went. A route is planned
+# from the ego's pose, so on a healthy run the ego begins ON its route and this is ~0.
+# Bracketed at both ends like the limits above, from three runs on one stack: the healthy
+# run measured 0.0 m, and the two stale-route failures measured 162.5 and 214.1 -- the
+# distance from this run's spawn back to where the PREVIOUS run stopped. So 25 m sits far
+# above any honest start offset and six times under the mildest failure seen.
+#
+# Not the same quantity as cross-track, which measured 235.5 m on the same failures: that is
+# the distance to the stale TRAJECTORY, which sits at the goal, while this is the distance to
+# the stale route's START. Both are symptoms of one cause and neither names it.
+MAX_ROUTE_START_GAP = 25.0      # m, closest the ego ever came to its route's start
 LONGITUDINAL_LAG_S = 0.30       # command to delivery; swept once, flat between 0.1 and 0.5
 MIN_TRACKING_SAMPLES = 30       # below this the numbers are not worth judging
 
@@ -275,6 +294,44 @@ def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
                 return
             cross_track.append(min(math.dist((p.x, p.y), q) for q in pts))
 
+    # Where the route was planned FROM, against where the ego has actually been.
+    #
+    # A managed run fails about one time in three with the ego sitting at its spawn,
+    # route SET and mode AUTONOMOUS, while the trajectory is a stub at the goal 235 m away.
+    # `/api/routing/route` names it: its start pose is where the PREVIOUS run stopped, so
+    # the route was planned from a pose this ego was never at and never re-planned (acb
+    # issue 022). Every check here read that as "ego never drove", which is true and sent
+    # three separate investigations after the spawn instead of the route.
+    #
+    # Compared against the CLOSEST the ego ever came, not its current pose: a healthy ego
+    # starts on its route's start and then drives away from it, so a running comparison
+    # would fail every good run near the end.
+    route_start = {"pose": None}
+    route_start_gap = {"min": None}
+
+    def on_route(m):
+        # `data` is a bounded array, `RouteData[<=1]`, and is EMPTY when no route is set --
+        # which is also what is published when a route is cleared. Reading `m.start`
+        # directly, as the topic's printed output suggests, raises AttributeError and takes
+        # the whole run down with it.
+        if not m.data:
+            return
+        p = m.data[0].start.position
+        route_start["pose"] = (p.x, p.y)
+
+    def on_odom_route(m):
+        if route_start["pose"] is None:
+            return
+        p = m.pose.pose.position
+        d = math.dist((p.x, p.y), route_start["pose"])
+        if route_start_gap["min"] is None or d < route_start_gap["min"]:
+            route_start_gap["min"] = d
+
+    node.create_subscription(
+        Route, "/api/routing/route", on_route,
+        QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                   durability=DurabilityPolicy.TRANSIENT_LOCAL))
+    node.create_subscription(Odometry, "/localization/kinematic_state", on_odom_route, 10)
     node.create_subscription(VelocityReport, "/vehicle/status/velocity_status", on_velocity, 10)
     node.create_subscription(VelocityReport, "/vehicle/status/velocity_status", on_speed, 10)
     node.create_subscription(Odometry, "/localization/kinematic_state", on_odom, 10)
@@ -296,7 +353,7 @@ def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
             "peak_speed": 0.0, "distance": 0.0, "status_samples": 0,
             "diagnostics": diags, "longitudinal": {"samples": 0, "median_error": None},
             "cross_track": None, "localization_gap": None, "localization_gap_max": None,
-            "attach_at": None, "ego_at": seen["ego_at"],
+            "attach_at": None, "ego_at": seen["ego_at"], "route_start_gap": None,
         }
 
     start = time.time()
@@ -324,6 +381,7 @@ def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
         # it converges, and a max would fail every run on that alone.
         "localization_gap": median(localization_gap) if localization_gap else None,
         "localization_gap_max": max(localization_gap) if localization_gap else None,
+        "route_start_gap": route_start_gap["min"],
     }
 
 
@@ -520,6 +578,16 @@ def main() -> int:
                        "believes it is somewhere it is not"
                        % (seen["localization_gap"], MAX_LOCALIZATION_GAP))
 
+        if (seen["route_start_gap"] is not None
+                and seen["route_start_gap"] > MAX_ROUTE_START_GAP):
+            # Named for the cause rather than the symptom. Every other check scores this run
+            # as "ego never drove", which is true, and which sent three separate
+            # investigations after the spawn before the route was looked at.
+            why.append("the route was planned from a pose the ego never occupied (closest "
+                       "approach %.1f m, limit %.1f): a route left over from a previous run, "
+                       "never re-planned -- acb issue 022"
+                       % (seen["route_start_gap"], MAX_ROUTE_START_GAP))
+
         ok = not why
         results.append({"run": run, "ok": ok, "why": why,
                         "peak_speed": round(seen["peak_speed"], 2),
@@ -530,6 +598,7 @@ def main() -> int:
                         "bridge_attach_s": seen.get("attach_at"),
                         "localization_gap": seen["localization_gap"],
                         "localization_gap_max": seen["localization_gap_max"],
+                        "route_start_gap": seen["route_start_gap"],
                         "diagnostic_errors": errors})
         # Attach timing is reported on every run, passing or not: a run that passes with the
         # bridge attaching ten seconds late is still worth seeing before it becomes a failure.
@@ -542,6 +611,12 @@ def main() -> int:
                 print("    ego first seen at %.1f s; the bridge never attached" % seen["ego_at"])
         else:
             print("    no ego seen in CARLA during this run")
+
+        if seen["route_start_gap"] is not None:
+            print("    ego came within %.1f m of its route's start"
+                  % seen["route_start_gap"])
+        else:
+            print("    no route was published during this run")
 
         lon_txt = ("%.3f" % seen["longitudinal"]["median_error"]
                    if seen["longitudinal"]["median_error"] is not None else "n/a")
