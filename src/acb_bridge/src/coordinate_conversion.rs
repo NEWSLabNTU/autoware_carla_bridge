@@ -45,7 +45,7 @@
 /// ROS_pitch = CARLA_pitch * π / 180.0  // degrees to radians
 /// ROS_yaw = -CARLA_yaw * π / 180.0     // degrees to radians, sign flip
 /// ```
-use nalgebra::{Quaternion, Vector3};
+use nalgebra::{Matrix3, Quaternion, Rotation3, Vector3};
 use std::f64::consts::PI;
 
 /// Convert position from ROS (meters, right-handed) to CARLA (meters, left-handed)
@@ -475,9 +475,193 @@ pub fn normalize_angle(angle: f64) -> f64 {
     a
 }
 
+// === base_link: the rear axle, not the actor origin ===
+//
+// Autoware's `base_link` is the centre of the rear axle, and `vehicle_info.param.yaml` is
+// authored that way (rear_overhang, wheel_base, front_overhang all measured from it). A
+// CARLA actor's origin is not there: on vehicle.tesla.model3 the rear axle is 1.386 m
+// behind it. Taking the actor transform as `base_link` therefore moved Autoware's idea of
+// the whole body 1.386 m forward -- it believed the car reached 3.93 m ahead of base_link
+// where the real bumper is 2.42 m ahead. See carla-scenario-bridge
+// docs/roadmap/014-feature-completeness.md, "Pose reference point".
+//
+// The offset is measured per vehicle from CARLA's rear wheel positions rather than
+// hard-coded, because `vehicle_config.yaml` offers several blueprints. Everything below is
+// in CARLA's own frame (x forward, y right, z up, metres), so the Y-flip to ROS stays in
+// the one place it already lives.
+
+/// CARLA's rotation matrix for a `Rotation` given in degrees.
+///
+/// Matches LibCarla's `Rotation::RotateVector` (carla/geom/Rotation.h, checked against the
+/// 0.9.16 header in a test), which is Rz(yaw) * Ry(-pitch) * Rx(-roll) in standard
+/// right-handed algebra applied to CARLA's left-handed numbers -- the forward
+/// vector comes out as (cos p cos y, cos p sin y, sin p), as `GetForwardVector` gives.
+/// Not `Rotation::to_na()` from carla-rust, which uses +pitch and +roll; the two agree at
+/// zero pitch and roll, which is where a car spends its time, but this one is exact.
+pub fn carla_rotation_matrix(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> Matrix3<f64> {
+    let rz = Rotation3::from_axis_angle(&Vector3::z_axis(), yaw_deg.to_radians());
+    let ry = Rotation3::from_axis_angle(&Vector3::y_axis(), -pitch_deg.to_radians());
+    let rx = Rotation3::from_axis_angle(&Vector3::x_axis(), -roll_deg.to_radians());
+    (rz * ry * rx).into_inner()
+}
+
+/// World location of a point given in the actor's own frame (CARLA axes, metres).
+///
+/// `base_link = actor_origin + R_actor * base_link_in_actor`. Used to publish the rear
+/// axle, not the actor origin, as Autoware's `base_link`. `rotation_deg` is CARLA's
+/// (roll, pitch, yaw) in degrees. A zero offset returns the actor origin unchanged.
+pub fn base_link_world_location(
+    actor_location: &Vector3<f64>,
+    rotation_deg: (f64, f64, f64),
+    base_link_in_actor: &Vector3<f64>,
+) -> Vector3<f64> {
+    let (roll, pitch, yaw) = rotation_deg;
+    actor_location + carla_rotation_matrix(roll, pitch, yaw) * base_link_in_actor
+}
+
+/// The rear-axle centre in the actor's own frame, from the rear wheels' world positions.
+///
+/// CARLA reports `WheelPhysicsControl::position` in **world centimetres** at the actor's
+/// current pose (the same reading scripts/extract_vehicle_params.py makes). The midpoint
+/// of the rear pair is brought into the actor frame by the inverse of the actor rotation:
+/// `R_actor^T * (rear_mid_world - actor_origin_world)`. Returns `None` when there are no
+/// wheels to average. The z component is returned as measured; the caller decides
+/// whether to keep it.
+pub fn base_link_in_actor_from_wheels(
+    rear_wheels_world_cm: &[Vector3<f64>],
+    actor_location: &Vector3<f64>,
+    rotation_deg: (f64, f64, f64),
+) -> Option<Vector3<f64>> {
+    if rear_wheels_world_cm.is_empty() {
+        return None;
+    }
+    let sum: Vector3<f64> = rear_wheels_world_cm.iter().sum();
+    let rear_mid_world = sum / (rear_wheels_world_cm.len() as f64) / 100.0;
+    let (roll, pitch, yaw) = rotation_deg;
+    let r = carla_rotation_matrix(roll, pitch, yaw);
+    Some(r.transpose() * (rear_mid_world - actor_location))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- base_link offset (rear axle) ---
+
+    const MODEL3_REAR_AXLE: f64 = -1.386;
+
+    fn assert_vec_close(a: &Vector3<f64>, b: &Vector3<f64>, tol: f64) {
+        assert!((a - b).norm() < tol, "expected {b:?}, got {a:?}");
+    }
+
+    #[test]
+    fn test_carla_rotation_forward_vector_matches_carla() {
+        // GetForwardVector: (cos p cos y, cos p sin y, sin p)
+        let (p, y) = (10.0_f64, 30.0_f64);
+        let f = carla_rotation_matrix(0.0, p, y) * Vector3::x();
+        let (pr, yr) = (p.to_radians(), y.to_radians());
+        assert_vec_close(
+            &f,
+            &Vector3::new(pr.cos() * yr.cos(), pr.cos() * yr.sin(), pr.sin()),
+            1e-12,
+        );
+    }
+
+    #[test]
+    fn test_carla_rotation_matches_libcarla_rotate_vector() {
+        // The matrix spelled out in LibCarla 0.9.16 carla/geom/Rotation.h RotateVector.
+        let (r, p, y) = (7.0_f64, -12.0_f64, 143.0_f64);
+        let (cr, sr) = (r.to_radians().cos(), r.to_radians().sin());
+        let (cp, sp) = (p.to_radians().cos(), p.to_radians().sin());
+        let (cy, sy) = (y.to_radians().cos(), y.to_radians().sin());
+        let libcarla = Matrix3::new(
+            cp * cy,
+            cy * sp * sr - sy * cr,
+            -cy * sp * cr - sy * sr,
+            cp * sy,
+            sy * sp * sr + cy * cr,
+            -sy * sp * cr + cy * sr,
+            sp,
+            -cp * sr,
+            cp * cr,
+        );
+        assert!((carla_rotation_matrix(r, p, y) - libcarla).norm() < 1e-12);
+    }
+
+    #[test]
+    fn test_base_link_world_yaw_0() {
+        let origin = Vector3::new(100.0, -50.0, 0.5);
+        let offset = Vector3::new(MODEL3_REAR_AXLE, 0.0, 0.0);
+        let bl = base_link_world_location(&origin, (0.0, 0.0, 0.0), &offset);
+        assert_vec_close(&bl, &Vector3::new(100.0 - 1.386, -50.0, 0.5), 1e-9);
+    }
+
+    #[test]
+    fn test_base_link_world_yaw_90() {
+        // CARLA yaw +90 deg faces +y (right, in the left-handed frame): behind is -y.
+        let origin = Vector3::new(100.0, -50.0, 0.5);
+        let offset = Vector3::new(MODEL3_REAR_AXLE, 0.0, 0.0);
+        let bl = base_link_world_location(&origin, (0.0, 0.0, 90.0), &offset);
+        assert_vec_close(&bl, &Vector3::new(100.0, -50.0 - 1.386, 0.5), 1e-9);
+    }
+
+    #[test]
+    fn test_base_link_world_yaw_180() {
+        let origin = Vector3::new(100.0, -50.0, 0.5);
+        let offset = Vector3::new(MODEL3_REAR_AXLE, 0.0, 0.0);
+        let bl = base_link_world_location(&origin, (0.0, 0.0, 180.0), &offset);
+        assert_vec_close(&bl, &Vector3::new(100.0 + 1.386, -50.0, 0.5), 1e-9);
+    }
+
+    #[test]
+    fn test_base_link_world_yaw_minus_90() {
+        let origin = Vector3::new(100.0, -50.0, 0.5);
+        let offset = Vector3::new(MODEL3_REAR_AXLE, 0.0, 0.0);
+        let bl = base_link_world_location(&origin, (0.0, 0.0, -90.0), &offset);
+        assert_vec_close(&bl, &Vector3::new(100.0, -50.0 + 1.386, 0.5), 1e-9);
+    }
+
+    #[test]
+    fn test_base_link_world_zero_offset_is_identity() {
+        let origin = Vector3::new(12.3, 45.6, 7.8);
+        for rot in [(0.0, 0.0, 0.0), (3.0, -5.0, 137.0), (0.0, 0.0, -90.0)] {
+            let bl = base_link_world_location(&origin, rot, &Vector3::zeros());
+            assert_vec_close(&bl, &origin, 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_base_link_in_actor_from_wheels_round_trips() {
+        // Place model3's rear wheels (track 1.6 m, 0.3 m below the origin) at an arbitrary
+        // pose, report them in world centimetres as CARLA does, and recover the offset.
+        let origin = Vector3::new(190.77, -130.10, 0.3);
+        for rot in [
+            (0.0, 0.0, 0.0),
+            (0.0, 0.0, 90.0),
+            (0.0, 0.0, 180.0),
+            (0.0, 0.0, -90.0),
+            (1.5, -2.0, 175.81),
+        ] {
+            let wheels_world_cm: Vec<Vector3<f64>> = [
+                Vector3::new(MODEL3_REAR_AXLE, -0.8, -0.3),
+                Vector3::new(MODEL3_REAR_AXLE, 0.8, -0.3),
+            ]
+            .iter()
+            .map(|w| base_link_world_location(&origin, rot, w) * 100.0)
+            .collect();
+            let offset = base_link_in_actor_from_wheels(&wheels_world_cm, &origin, rot).unwrap();
+            assert_vec_close(&offset, &Vector3::new(MODEL3_REAR_AXLE, 0.0, -0.3), 1e-9);
+            // ...and the offset puts base_link back on the axle midpoint.
+            let bl = base_link_world_location(&origin, rot, &offset);
+            let mid = (wheels_world_cm[0] + wheels_world_cm[1]) / 200.0;
+            assert_vec_close(&bl, &mid, 1e-9);
+        }
+    }
+
+    #[test]
+    fn test_base_link_in_actor_from_no_wheels() {
+        assert!(base_link_in_actor_from_wheels(&[], &Vector3::zeros(), (0.0, 0.0, 0.0)).is_none());
+    }
     use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2};
 
     #[test]

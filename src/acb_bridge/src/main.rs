@@ -167,6 +167,10 @@ struct BridgeParams {
     pub control_trace_path: String,
     pub accel_map_path: String,
     pub brake_map_path: String,
+    /// Rear axle's position along the actor's x axis (metres, CARLA axes), overriding the
+    /// measurement from CARLA's wheels. `None` -- the default -- measures it. An escape
+    /// hatch for blueprints without wheel physics; see `CarlaVehicle::measure_base_link`.
+    pub base_link_offset_x: Option<f64>,
 }
 
 impl BridgeParams {
@@ -288,6 +292,14 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        // Optional, with no default: unset means "measure the rear axle from the wheels",
+        // which is right for every blueprint with wheel physics. See roadmap 014 in
+        // carla-scenario-bridge, "Pose reference point".
+        let base_link_offset_x = node
+            .declare_parameter::<f64>("base_link_offset_x")
+            .optional()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         // Get parameter values
         let carla_address_val: Arc<str> = carla_address.get();
         let carla_port_val: i64 = carla_port.get();
@@ -332,6 +344,7 @@ impl BridgeParams {
             control_trace_path: control_trace_path_val.to_string(),
             accel_map_path: accel_map_path_val.to_string(),
             brake_map_path: brake_map_path_val.to_string(),
+            base_link_offset_x: base_link_offset_x.get(),
         })
     }
 }
@@ -844,6 +857,7 @@ fn main() -> Result<()> {
             hero_vehicle,
             &vehicle_config,
             autoware.get_tf_buffer(),
+            params.base_link_offset_x,
         ) {
             Ok(v) => v,
             Err(e) => {

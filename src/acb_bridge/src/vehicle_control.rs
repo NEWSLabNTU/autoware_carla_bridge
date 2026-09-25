@@ -956,6 +956,11 @@ impl VehicleControlBridge {
             let control = vehicle.control()?;
             let state = *self.state.lock().unwrap();
 
+            // Measured at the actor origin, not the rear axle that is base_link. Deliberately
+            // uncorrected: longitudinal speed is the same at both, and lateral velocity
+            // differs only by yaw_rate x the axle offset (see `CarlaVehicle::
+            // measure_base_link`).
+            //
             // VelocityReport is a base_link message. CARLA reports velocity in world
             // coordinates, so it has to be rotated into the vehicle's own frame before
             // publishing -- otherwise "lateral" is a world-Y component and "longitudinal"

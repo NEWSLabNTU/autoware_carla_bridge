@@ -628,12 +628,32 @@ impl Autoware {
         let na_velocity = body_velocity.to_na();
         let na_angular_velocity = body_angular_velocity.to_na();
 
+        // `base_link` is the rear-axle centre, not the actor origin: move the published
+        // position there, in CARLA's frame so the Y-flip below stays the only one. The
+        // orientation is the same at every point of a rigid body. See `CarlaVehicle::
+        // measure_base_link` and carla-scenario-bridge docs/roadmap/014 "Pose reference
+        // point". The same position feeds the `/initialpose` re-seed below.
+        //
+        // The twist is deliberately left as the actor origin's. Longitudinal speed is the
+        // same everywhere on a rigid body; lateral velocity at the rear axle differs by
+        // yaw_rate x offset (1.386 m on a model3, so ~0.14 m/s at 0.1 rad/s), and that
+        // term is not corrected here.
+        let base_link = coordinate_conversion::base_link_world_location(
+            &nalgebra::Vector3::new(
+                transform.location.x as f64,
+                transform.location.y as f64,
+                transform.location.z as f64,
+            ),
+            (
+                transform.rotation.roll as f64,
+                transform.rotation.pitch as f64,
+                transform.rotation.yaw as f64,
+            ),
+            vehicle_guard.base_link_in_actor(),
+        );
+
         // Convert CARLA coordinates to ROS coordinates
-        let position = coordinate_conversion::carla_to_ros_position(&nalgebra::Vector3::new(
-            na_transform.translation.x as f64,
-            na_transform.translation.y as f64,
-            na_transform.translation.z as f64,
-        ));
+        let position = coordinate_conversion::carla_to_ros_position(&base_link);
 
         // Convert CARLA rotation (quaternion) to ROS quaternion
         let carla_quat = nalgebra::Quaternion::new(

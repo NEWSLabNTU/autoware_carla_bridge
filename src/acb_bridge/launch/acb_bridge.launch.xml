@@ -73,5 +73,12 @@
     <param name="control_trace_path" value="$(var control_trace_path)"/>
     <param name="accel_map_path" value="$(var accel_map_path)"/>
     <param name="brake_map_path" value="$(var brake_map_path)"/>
+    <!-- base_link is the rear-axle centre. The bridge measures where it sits from CARLA's
+         rear wheel positions (about -1.386 m along the actor x axis on a model3) and
+         publishes the pose and attaches the sensors relative to it. For a blueprint
+         without wheel physics, set the offset by hand (metres, actor frame, x forward),
+         for example
+           <param name="base_link_offset_x" value="-1.386"/>
+         Left unset on purpose, which means "measure it". -->
   </node>
 </launch>

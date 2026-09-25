@@ -8,6 +8,7 @@
 /// - **No name-based inference**: Blueprints come from config, not URDF link name patterns
 /// - **TF for positions only**: URDF/TF is only used to get sensor transform relative to base_link
 use crate::{
+    coordinate_conversion,
     error::{BridgeError, Result},
     sensor_config::{SensorType, VehicleConfig},
     tf_bridge::TFBuffer,
@@ -27,7 +28,15 @@ pub struct CarlaVehicle {
     sensors: HashMap<String, Sensor>,
     /// Sensor types keyed by link name (derived from VehicleConfig blueprints)
     sensor_types: HashMap<String, SensorType>,
+    /// Where Autoware's `base_link` -- the rear-axle centre -- sits in the actor's own
+    /// frame, in CARLA axes (x forward, y right, z up) and metres. About (-1.386, 0, 0)
+    /// on vehicle.tesla.model3. Measured once, at adoption; see `measure_base_link`.
+    base_link_in_actor: nalgebra::Vector3<f64>,
 }
+
+/// A rear axle further than this from the actor origin is a bad reading, not a vehicle.
+/// Half the length of a long bus; a car's is under 2 m.
+const MAX_PLAUSIBLE_BASE_LINK_OFFSET_M: f64 = 6.0;
 
 impl CarlaVehicle {
     /// Create a CarlaVehicle wrapper around an existing hero vehicle and spawn sensors on it
@@ -40,6 +49,8 @@ impl CarlaVehicle {
     /// * `vehicle` - Existing CARLA vehicle actor (role_name="hero")
     /// * `vehicle_config` - Vehicle and sensor configuration (single source of truth)
     /// * `tf_buffer` - TF buffer for sensor position lookups
+    /// * `base_link_offset_x` - Override for the rear axle's position along the actor's
+    ///   x axis (metres); `None` measures it from CARLA's wheel positions
     ///
     /// # Returns
     /// A CarlaVehicle instance managing the given vehicle and its spawned sensors
@@ -48,6 +59,7 @@ impl CarlaVehicle {
         vehicle: Vehicle,
         vehicle_config: &VehicleConfig,
         tf_buffer: &TFBuffer,
+        base_link_offset_x: Option<f64>,
     ) -> Result<Self> {
         // Log vehicle position in CARLA
         let spawned_transform = vehicle.transform()?;
@@ -72,8 +84,17 @@ impl CarlaVehicle {
             tracing::debug!("  - {}", frame);
         }
 
-        let (sensors, sensor_types) =
-            Self::spawn_sensors(world, &vehicle, vehicle_config, tf_buffer)?;
+        // Before the sensors: they are declared relative to base_link, so where base_link
+        // is decides where they are attached.
+        let base_link_in_actor = Self::measure_base_link(&vehicle, base_link_offset_x);
+
+        let (sensors, sensor_types) = Self::spawn_sensors(
+            world,
+            &vehicle,
+            vehicle_config,
+            tf_buffer,
+            &base_link_in_actor,
+        )?;
 
         tracing::info!("All sensors spawned successfully");
 
@@ -81,7 +102,119 @@ impl CarlaVehicle {
             vehicle,
             sensors,
             sensor_types,
+            base_link_in_actor,
         })
+    }
+
+    /// Locate Autoware's `base_link` (the rear-axle centre) in the actor's own frame.
+    ///
+    /// A CARLA actor's origin is not the rear axle -- on vehicle.tesla.model3 the axle is
+    /// 1.386 m behind it -- while `vehicle_info.param.yaml` measures every overhang from
+    /// the axle. Publishing the actor origin as `base_link` therefore put Autoware's idea of
+    /// the body 1.386 m ahead of the real one. See carla-scenario-bridge
+    /// docs/roadmap/014-feature-completeness.md, "Pose reference point".
+    ///
+    /// Measured from the rear wheels rather than hard-coded, because `vehicle_config.yaml`
+    /// offers several blueprints. The rear pair is the two wheels that do not steer -- the
+    /// same split scripts/extract_vehicle_params.py and `read_steer_geometry` use, and for a
+    /// four-wheeled CARLA vehicle the same wheels as indices 2 and 3 (FL, FR, RL, RR).
+    ///
+    /// z is dropped: base_link stays at the actor origin's height. Only the horizontal
+    /// placement is what Autoware's footprint gets wrong.
+    ///
+    /// Degrades to zero -- base_link at the actor origin, the behaviour before this --
+    /// rather than failing the attach: a wrong reference point costs accuracy, not the run.
+    fn measure_base_link(vehicle: &Vehicle, override_x: Option<f64>) -> nalgebra::Vector3<f64> {
+        if let Some(x) = override_x {
+            tracing::info!(
+                "base_link at ({x:.3}, 0.000, 0.000) m in the actor frame (CARLA axes), from \
+                 the base_link_offset_x parameter rather than the wheels"
+            );
+            return nalgebra::Vector3::new(x, 0.0, 0.0);
+        }
+
+        let fallback = |why: String| {
+            tracing::warn!(
+                "Cannot locate the rear axle ({why}); publishing base_link at the actor \
+                 origin. Autoware will place the vehicle body ~1.4 m ahead of where it is \
+                 (on a model3) and sensors will sit that far back. Set base_link_offset_x \
+                 to override."
+            );
+            nalgebra::Vector3::zeros()
+        };
+
+        let transform = match vehicle.transform() {
+            Ok(t) => t,
+            Err(e) => return fallback(format!("no actor transform: {e}")),
+        };
+        let physics = match vehicle.physics_control() {
+            Ok(p) => p,
+            Err(e) => return fallback(format!("physics_control failed: {e}")),
+        };
+
+        // `position` is world centimetres at the actor's current pose.
+        let rear: Vec<nalgebra::Vector3<f64>> = physics
+            .wheels
+            .iter()
+            .filter(|w| w.max_steer_angle <= 0.0)
+            .map(|w| {
+                nalgebra::Vector3::new(
+                    w.position.x as f64,
+                    w.position.y as f64,
+                    w.position.z as f64,
+                )
+            })
+            .collect();
+        if rear.len() != 2 {
+            return fallback(format!(
+                "expected 2 fixed (rear) wheels, found {} of {}",
+                rear.len(),
+                physics.wheels.len()
+            ));
+        }
+
+        let location = nalgebra::Vector3::new(
+            transform.location.x as f64,
+            transform.location.y as f64,
+            transform.location.z as f64,
+        );
+        let rotation = (
+            transform.rotation.roll as f64,
+            transform.rotation.pitch as f64,
+            transform.rotation.yaw as f64,
+        );
+        let Some(measured) =
+            coordinate_conversion::base_link_in_actor_from_wheels(&rear, &location, rotation)
+        else {
+            return fallback("no rear wheels".to_string());
+        };
+
+        let horizontal = measured.x.hypot(measured.y);
+        if !horizontal.is_finite() || horizontal > MAX_PLAUSIBLE_BASE_LINK_OFFSET_M {
+            // Wheels read before the vehicle's first physics step can report the world
+            // origin, which lands here as an offset of hundreds of metres.
+            return fallback(format!(
+                "measured ({:.3}, {:.3}) m from the actor origin, which is not a car",
+                measured.x, measured.y
+            ));
+        }
+
+        let offset = nalgebra::Vector3::new(measured.x, measured.y, 0.0);
+        tracing::info!(
+            "base_link (rear-axle centre) at ({:.3}, {:.3}, 0.000) m in the actor frame \
+             (CARLA axes, x forward, y right); wheels put it {:.3} m below the origin, \
+             ignored",
+            offset.x,
+            offset.y,
+            -measured.z
+        );
+        offset
+    }
+
+    /// Where `base_link` (the rear-axle centre) sits in the actor's own frame, in CARLA
+    /// axes and metres. Zero when it could not be measured.
+    pub fn base_link_in_actor(&self) -> &nalgebra::Vector3<f64> {
+        &self.base_link_in_actor
     }
 
     /// Spawn sensors and attach to vehicle (private)
@@ -94,7 +227,19 @@ impl CarlaVehicle {
         vehicle: &Vehicle,
         vehicle_config: &VehicleConfig,
         tf_buffer: &TFBuffer,
+        base_link_in_actor: &nalgebra::Vector3<f64>,
     ) -> Result<(HashMap<String, Sensor>, HashMap<String, SensorType>)> {
+        // TF gives base_link -> sensor; CARLA attaches relative to the actor origin. The
+        // two differ by the rear-axle offset, so attach at T_actor<-base_link *
+        // T_base_link<-sensor. A pure translation, carried into ROS axes (Y-flip) because
+        // that is the frame the TF transform is in until the conversion below.
+        let base_link_ros =
+            coordinate_conversion::carla_to_ros_position(base_link_in_actor).cast::<f32>();
+        let actor_from_base_link = nalgebra::Isometry3::from_parts(
+            nalgebra::Translation3::from(base_link_ros),
+            nalgebra::UnitQuaternion::identity(),
+        );
+
         let blueprint_library = world.blueprint_library()?;
         let mut spawned_sensors = HashMap::new();
         let mut sensor_types = HashMap::new();
@@ -155,12 +300,16 @@ impl CarlaVehicle {
                 }
             };
 
+            // base_link -> sensor, re-expressed from the actor origin (still ROS axes).
+            let na_transform = actor_from_base_link * na_transform;
+
             // Convert ROS sensor transform to CARLA transform using centralized helper
             let carla_transform =
                 crate::coordinate_conversion::ros_isometry_to_carla_transform(&na_transform);
 
             tracing::info!(
-                "Sensor '{}' transform: ROS({:.3}, {:.3}, {:.3}) → CARLA({:.1}, {:.1}, {:.1})",
+                "Sensor '{}' transform from actor origin: ROS({:.3}, {:.3}, {:.3}) → \
+                 CARLA({:.3}, {:.3}, {:.3})",
                 link_name,
                 na_transform.translation.x,
                 na_transform.translation.y,
