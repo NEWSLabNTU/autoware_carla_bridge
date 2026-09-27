@@ -160,6 +160,11 @@ struct BridgeParams {
     /// docs/issues/009 and 006.
     pub report_measured_steering: bool,
     pub steering_multiplier: f64,
+    /// Divide the steer command by CARLA's `steering_curve` at the current speed.
+    /// **Defaults to true.** CARLA scales the achieved wheel angle down with speed (0.9 at
+    /// 20 km/h on the Tesla), which the Ackermann inverse alone does not know about; false
+    /// restores the standstill-only mapping for A/B runs. See roadmap 014, "Steering".
+    pub compensate_steering_curve: bool,
     pub publish_ground_truth_objects: bool,
     /// Re-seed Autoware's pose estimator when attaching to a vehicle.
     pub seed_localization_on_attach: bool,
@@ -240,6 +245,12 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        let compensate_steering_curve = node
+            .declare_parameter("compensate_steering_curve")
+            .default(true)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         let publish_ground_truth_objects = node
             .declare_parameter("publish_ground_truth_objects")
             .default(false)
@@ -312,6 +323,7 @@ impl BridgeParams {
         let release_ack_val: Arc<str> = release_ack_endpoint.get();
         let report_measured_steering_val: bool = report_measured_steering.get();
         let steering_multiplier_val: f64 = steering_multiplier.get();
+        let compensate_steering_curve_val: bool = compensate_steering_curve.get();
         let publish_ground_truth_objects_val: bool = publish_ground_truth_objects.get();
         let seed_localization_on_attach_val: bool = seed_localization_on_attach.get();
         let ground_truth_range_m_val: f64 = ground_truth_range_m.get();
@@ -338,6 +350,7 @@ impl BridgeParams {
             release_ack_endpoint: release_ack_val.to_string(),
             report_measured_steering: report_measured_steering_val,
             steering_multiplier: steering_multiplier_val,
+            compensate_steering_curve: compensate_steering_curve_val,
             publish_ground_truth_objects: publish_ground_truth_objects_val,
             seed_localization_on_attach: seed_localization_on_attach_val,
             ground_truth_range_m: ground_truth_range_m_val,
@@ -1096,6 +1109,7 @@ fn main() -> Result<()> {
             vehicle_shared.clone(),
             params.report_measured_steering,
             params.steering_multiplier as f32,
+            params.compensate_steering_curve,
             longitudinal,
             params.honor_emergency_cmd,
             control_trace.clone(),

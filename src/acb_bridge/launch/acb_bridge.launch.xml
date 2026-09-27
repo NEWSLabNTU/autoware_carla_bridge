@@ -67,6 +67,13 @@
     <param name="release_ack_endpoint" value="$(var release_ack_endpoint)"/>
     <param name="report_measured_steering" value="$(var report_measured_steering)"/>
     <param name="steering_multiplier" value="$(var steering_multiplier)"/>
+    <!-- CARLA multiplies the achieved wheel angle by the blueprint's steering_curve at the
+         vehicle's speed (0.9 at 20 km/h, 0.8 at 60 on a model3; roadmap 014, "Steering"),
+         and the bridge divides the steer command by the same factor so the wheels reach
+         what Autoware asked for. On by default (the node's own default is true); to get the
+         standstill-only mapping back for an A/B run, set
+           <param name="compensate_steering_curve" value="false"/>
+         Read from physics_control at spawn, so it follows the blueprint. -->
     <param name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)"/>
     <param name="seed_localization_on_attach" value="$(var seed_localization_on_attach)"/>
     <param name="ground_truth_range_m" value="$(var ground_truth_range_m)"/>

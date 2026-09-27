@@ -31,22 +31,105 @@ const MAX_ACCEL: f32 = 3.0;
 ///
 /// Read from the spawned vehicle's own wheels, so it follows the blueprint rather than
 /// assuming the Tesla. See `docs/issues/006-*`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct SteerGeometry {
     /// The steered wheels' physical limit, radians.
     max_steer_angle: f32,
     /// track / wheelbase -- the Ackermann differential term. Zero reduces the model to a
     /// plain bicycle, which is the behaviour this replaced.
     track_over_wheelbase: f32,
+    /// `VehiclePhysicsControl::steering_curve` as (speed km/h, factor) points, sorted by
+    /// speed. CARLA multiplies the achieved wheel angle by this curve at the vehicle's
+    /// speed, so the two terms above are exact only at standstill. See `steering_curve_factor`.
+    steering_curve: Vec<(f32, f32)>,
 }
+
+/// The steering curve that changes nothing: a factor of 1.0 at every speed.
+const FLAT_STEERING_CURVE: [(f32, f32); 1] = [(0.0, 1.0)];
 
 impl Default for SteerGeometry {
     fn default() -> Self {
         Self {
             max_steer_angle: FALLBACK_MAX_STEER_ANGLE,
             track_over_wheelbase: 0.0,
+            steering_curve: FLAT_STEERING_CURVE.to_vec(),
         }
     }
+}
+
+/// CARLA's speed-dependent steering reduction at `speed_kmh`.
+///
+/// Measured on 0.9.16 (roadmap 014, "Steering"; raw data in
+/// `docs/measurements/steering_tesla_model3_0916.csv` of the superproject): the command
+/// itself is linear, but the angle the wheels reach is multiplied by `steering_curve`
+/// interpolated at the vehicle's speed in km/h. The Tesla's (0,1.0) (20,0.9) (60,0.8)
+/// (120,0.7) matched every point to +-0.003, so a command model that ignores it
+/// under-steers by 10% at 20 km/h and ~16% at 40.
+///
+/// Linear between points and held at the end values outside them, as UE4 evaluates the
+/// curve. The points are sorted where they are read; an unsorted slice is sorted here too,
+/// rather than trusted, because a mis-ordered curve would interpolate nonsense silently.
+/// An empty curve is no reduction at all.
+fn steering_curve_factor(curve: &[(f32, f32)], speed_kmh: f32) -> f32 {
+    let sorted;
+    let curve = if curve.is_sorted_by(|a, b| a.0 <= b.0) {
+        curve
+    } else {
+        let mut owned = curve.to_vec();
+        owned.sort_by(|a, b| a.0.total_cmp(&b.0));
+        sorted = owned;
+        &sorted
+    };
+    let (Some(first), Some(last)) = (curve.first(), curve.last()) else {
+        return 1.0;
+    };
+    if speed_kmh <= first.0 {
+        return first.1;
+    }
+    if speed_kmh >= last.0 {
+        return last.1;
+    }
+    for pair in curve.windows(2) {
+        let ((x0, y0), (x1, y1)) = (pair[0], pair[1]);
+        if speed_kmh <= x1 {
+            let span = x1 - x0;
+            if span <= f32::EPSILON {
+                return y1;
+            }
+            return y0 + (y1 - y0) * (speed_kmh - x0) / span;
+        }
+    }
+    last.1
+}
+
+/// The steering-curve factor the command should be divided by, or 1.0 when compensation
+/// is switched off (`compensate_steering_curve`).
+///
+/// CARLA applies the curve against the *magnitude* of the forward speed, so reversing is
+/// reduced just as driving forward is.
+fn steer_speed_factor(geometry: &SteerGeometry, compensate: bool, longitudinal_mps: f32) -> f32 {
+    if !compensate {
+        return 1.0;
+    }
+    steering_curve_factor(&geometry.steering_curve, longitudinal_mps.abs() * 3.6)
+}
+
+/// Divide a normalized steer command by the steering-curve factor, clamped to CARLA's
+/// range. Returns the command and whether the clamp had to engage.
+///
+/// Dividing pre-distorts the command so that, after CARLA multiplies by the same factor,
+/// the wheels land where the Ackermann inverse aimed them. Near full lock at speed that
+/// asks for more than 1.0; the rail is the most CARLA will give, and the shortfall is
+/// real rather than a model error. A factor that is not a positive number leaves the
+/// command alone instead of sending an infinity or a sign flip to the actuator.
+fn compensate_steer(steer: f32, factor: f32) -> (f32, bool) {
+    let raw = if factor.is_finite() && factor > 0.0 {
+        steer / factor
+    } else {
+        steer
+    };
+    let clamped = raw.clamp(-1.0, 1.0);
+    (clamped, clamped != raw)
 }
 
 /// The bicycle-model tire angle CARLA actually delivers for a normalized steer command.
@@ -422,6 +505,11 @@ pub struct VehicleControlBridge {
     /// (issue 006). Set false to get the old behaviour when bisecting a lateral-control
     /// problem.
     report_measured_steering: bool,
+
+    /// Divide the steer command by CARLA's steering curve at the current speed
+    /// (`compensate_steering_curve`, roadmap 014). Kept here as well as in the command
+    /// callback so the echoed steering report can undo the same factor.
+    compensate_steering_curve: bool,
 }
 
 impl VehicleControlBridge {
@@ -430,11 +518,14 @@ impl VehicleControlBridge {
     /// # Arguments
     /// * `node` - ROS node for creating publishers/subscribers
     /// * `vehicle` - Arc<Mutex<Option<Vehicle>>> shared with main loop
+    // One argument per launch parameter it honours; a config struct would only move the list.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         node: rclrs::Node,
         vehicle: Arc<Mutex<Option<Vehicle>>>,
         report_measured_steering: bool,
         steering_multiplier: f32,
+        compensate_steering_curve: bool,
         longitudinal: Option<crate::longitudinal_map::LongitudinalCalibration>,
         honor_emergency_cmd: bool,
         control_trace: Option<Arc<crate::control_trace::ControlTrace>>,
@@ -476,6 +567,7 @@ impl VehicleControlBridge {
         // differ from its geometry can still under- or over-steer against the model.
         // Captured by the callback rather than stored: nothing else needs it.
         let trim = sane_steering_multiplier(steering_multiplier);
+        let geometry_for_control = steer_geometry.clone();
         let calibration = longitudinal.clone();
         let trace = control_trace.clone();
         // The node's own ROS clock, read inside the callback: /clock is simulation time, and
@@ -490,8 +582,9 @@ impl VehicleControlBridge {
                 if let Err(e) = Self::apply_control_command(
                     &vehicle_for_control,
                     &state_for_control,
-                    steer_geometry,
+                    &geometry_for_control,
                     trim,
+                    compensate_steering_curve,
                     calibration.as_ref(),
                     trace.as_deref(),
                     &stall_for_control,
@@ -608,6 +701,19 @@ impl VehicleControlBridge {
             effective_tire_angle(1.0, &steer_geometry),
         );
         tracing::info!(
+            "  Steering curve: {}",
+            if compensate_steering_curve {
+                format!(
+                    "compensated, {:?} (km/h, factor)",
+                    steer_geometry.steering_curve
+                )
+            } else {
+                "not compensated (compensate_steering_curve:=false); the ego under-steers \
+                 at speed by CARLA's steering_curve"
+                    .to_string()
+            }
+        );
+        tracing::info!(
             "  Steering status: {}",
             if report_measured_steering {
                 "measured wheel angle"
@@ -644,13 +750,15 @@ impl VehicleControlBridge {
             state,
             steer_geometry,
             report_measured_steering,
+            compensate_steering_curve,
         })
     }
 
     /// Read the spawned vehicle's steering geometry from CARLA.
     ///
-    /// Two things come out of `physics_control`: the steered wheels' limit, and the
-    /// track/wheelbase ratio that sets how far the outer wheel trails the inner one.
+    /// Three things come out of `physics_control`: the steered wheels' limit, the
+    /// track/wheelbase ratio that sets how far the outer wheel trails the inner one, and
+    /// the steering curve that scales both down with speed (roadmap 014).
     /// `vehicle_config.yaml` offers several blueprints and each has its own, so neither
     /// can be a constant. See `docs/issues/006-*`.
     ///
@@ -733,9 +841,24 @@ impl VehicleControlBridge {
             }
         };
 
+        // The speed-dependent reduction CARLA applies on top of the geometry (roadmap 014).
+        // Non-finite points are dropped rather than let into the interpolation.
+        let mut steering_curve: Vec<(f32, f32)> = physics
+            .steering_curve
+            .iter()
+            .map(|p| (p.x, p.y))
+            .filter(|(x, y)| x.is_finite() && y.is_finite())
+            .collect();
+        steering_curve.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if steering_curve.is_empty() {
+            tracing::info!("CARLA reported no steering_curve; steering without speed compensation");
+            steering_curve = FLAT_STEERING_CURVE.to_vec();
+        }
+
         let geometry = SteerGeometry {
             max_steer_angle: max_degrees.to_radians(),
             track_over_wheelbase,
+            steering_curve,
         };
         tracing::info!(
             "Steering geometry from CARLA physics: limit {:.1} deg, track/wheelbase \
@@ -791,8 +914,9 @@ impl VehicleControlBridge {
     fn apply_control_command(
         vehicle: &Arc<Mutex<Option<Vehicle>>>,
         state: &Arc<Mutex<AppliedState>>,
-        geometry: SteerGeometry,
+        geometry: &SteerGeometry,
         steering_multiplier: f32,
+        compensate_steering_curve: bool,
         longitudinal: Option<&crate::longitudinal_map::LongitudinalCalibration>,
         trace: Option<&crate::control_trace::ControlTrace>,
         stall: &Mutex<StallWatch>,
@@ -834,9 +958,34 @@ impl VehicleControlBridge {
             // Ackermann geometry rather than a straight division by the wheel limit, which
             // asks for the inner wheel's angle and so under-delivers. See docs/issues/006-*.
             // Negate: Autoware positive = left turn (ROS), CARLA positive = right turn.
-            control.steer = (-steer_command_for(cmd.lateral.steering_tire_angle, &geometry)
-                * steering_multiplier)
-                .clamp(-1.0, 1.0);
+            //
+            // Then divide by CARLA's steering curve at the current speed: the inverse above
+            // is exact only at standstill, and CARLA scales the achieved angle down with
+            // speed (0.9 at 20 km/h, 0.8 at 60 on the Tesla -- roadmap 014, "Steering").
+            // Indexed by the same body-frame longitudinal speed the VelocityReport carries.
+            // A failed read costs the compensation for one command, not the command.
+            let longitudinal_mps = v
+                .transform()
+                .and_then(|t| {
+                    v.velocity()
+                        .map(|vel| t.rotation.inverse_rotate_vector(&vel).x)
+                })
+                .unwrap_or(0.0);
+            let factor = steer_speed_factor(geometry, compensate_steering_curve, longitudinal_mps);
+            let (steer, clamped) = compensate_steer(
+                -steer_command_for(cmd.lateral.steering_tire_angle, geometry) * steering_multiplier,
+                factor,
+            );
+            if clamped {
+                tracing::debug!(
+                    "Steer command saturated: {:.3} rad at {:.1} km/h needs more than full \
+                     lock after the steering-curve factor {:.3}",
+                    cmd.lateral.steering_tire_angle,
+                    longitudinal_mps.abs() * 3.6,
+                    factor
+                );
+            }
+            control.steer = steer;
 
             // Longitudinal: acceleration (m/s²) → throttle or brake (0 to 1), through the
             // measured pedal maps when they are available. The fallback divides by a single
@@ -1059,7 +1208,18 @@ impl VehicleControlBridge {
                     self.measured_steering_angle(vehicle, control.steer)
                 } else {
                     // Negate: CARLA positive = right turn, Autoware positive = left turn.
-                    -effective_tire_angle(control.steer, &self.steer_geometry)
+                    // The command is multiplied back by the factor it was divided by -- which is
+                    // where CARLA applies the curve, before Ackermann -- so the echo stays what
+                    // Autoware asked for rather than the pre-distorted command.
+                    -effective_tire_angle(
+                        control.steer
+                            * steer_speed_factor(
+                                &self.steer_geometry,
+                                self.compensate_steering_curve,
+                                longitudinal_velocity,
+                            ),
+                        &self.steer_geometry,
+                    )
                 },
             };
 
@@ -1211,7 +1371,100 @@ mod tests {
         SteerGeometry {
             max_steer_angle: 70.0_f32.to_radians(),
             track_over_wheelbase: 0.5548,
+            steering_curve: TESLA_STEERING_CURVE.to_vec(),
         }
+    }
+
+    /// `vehicle.tesla.model3`'s steering_curve on 0.9.16, (km/h, factor). Roadmap 014.
+    const TESLA_STEERING_CURVE: [(f32, f32); 4] =
+        [(0.0, 1.0), (20.0, 0.9), (60.0, 0.8), (120.0, 0.7)];
+
+    /// Interpolation against the measured curve, including between points (10, 40) and
+    /// beyond the last (200), where CARLA holds the end value.
+    #[test]
+    fn steering_curve_factor_matches_the_measured_curve() {
+        let cases = [
+            (0.0, 1.0),
+            (10.0, 0.95),
+            (20.0, 0.9),
+            (40.0, 0.85),
+            (60.0, 0.8),
+            (120.0, 0.7),
+            (200.0, 0.7),
+        ];
+        for (kmh, expected) in cases {
+            let got = steering_curve_factor(&TESLA_STEERING_CURVE, kmh);
+            assert!(
+                (got - expected).abs() < 1e-5,
+                "{kmh} km/h: factor {got}, expected {expected}"
+            );
+        }
+        // Below the first point holds the first value.
+        assert_eq!(steering_curve_factor(&TESLA_STEERING_CURVE, -5.0), 1.0);
+    }
+
+    #[test]
+    fn steering_curve_factor_sorts_and_tolerates_degenerate_curves() {
+        let shuffled = [(60.0, 0.8), (0.0, 1.0), (120.0, 0.7), (20.0, 0.9)];
+        assert!((steering_curve_factor(&shuffled, 40.0) - 0.85).abs() < 1e-5);
+        assert_eq!(steering_curve_factor(&[], 40.0), 1.0);
+        assert_eq!(steering_curve_factor(&FLAT_STEERING_CURVE, 80.0), 1.0);
+    }
+
+    /// Reversing is reduced like driving forward: the curve is indexed by |speed|.
+    #[test]
+    fn speed_factor_uses_the_speed_magnitude_in_kmh() {
+        let g = tesla();
+        // 40 km/h = 11.11 m/s.
+        let fwd = steer_speed_factor(&g, true, 40.0 / 3.6);
+        let rev = steer_speed_factor(&g, true, -40.0 / 3.6);
+        assert!((fwd - 0.85).abs() < 1e-4);
+        assert_eq!(fwd, rev);
+    }
+
+    /// The command is pre-distorted by 1/factor, so CARLA's own multiplication lands the
+    /// wheels on the requested angle; past full lock it saturates and says so.
+    #[test]
+    fn compensation_divides_and_clamps() {
+        let g = tesla();
+        let requested = 0.30_f32;
+        let base = steer_command_for(requested, &g);
+        let factor = steer_speed_factor(&g, true, 40.0 / 3.6);
+        let (cmd, clamped) = compensate_steer(base, factor);
+        assert!(!clamped);
+        assert!((cmd - base / 0.85).abs() < 1e-4);
+        // What CARLA delivers: the curve scales the steer input, and Ackermann is applied
+        // to the result -- so dividing the command by the factor is exact, not approximate.
+        let delivered = effective_tire_angle(cmd * factor, &g);
+        assert!(
+            (delivered - requested).abs() < 1e-3,
+            "delivered {delivered:.4} for {requested:.4}"
+        );
+
+        assert_eq!(compensate_steer(0.9, 0.8), (1.0, true));
+        assert_eq!(compensate_steer(-0.9, 0.8), (-1.0, true));
+        // A factor that is not a positive number leaves the command alone.
+        assert_eq!(compensate_steer(0.4, 0.0), (0.4, false));
+        assert_eq!(compensate_steer(0.4, f32::NAN), (0.4, false));
+    }
+
+    /// Switched off, the factor is 1.0 at every speed and the command is untouched.
+    #[test]
+    fn disabled_compensation_is_the_identity() {
+        let g = tesla();
+        for kmh in [0.0_f32, 20.0, 40.0, 120.0] {
+            let factor = steer_speed_factor(&g, false, kmh / 3.6);
+            assert_eq!(factor, 1.0);
+            for steer in [-1.0_f32, -0.3, 0.0, 0.45, 1.0] {
+                assert_eq!(compensate_steer(steer, factor), (steer, false));
+            }
+        }
+    }
+
+    /// At standstill compensation is a no-op, so the at-rest measurements still hold.
+    #[test]
+    fn compensation_is_a_noop_at_standstill() {
+        assert_eq!(steer_speed_factor(&tesla(), true, 0.0), 1.0);
     }
 
     /// Wheel angles measured off a live server by `scripts/probe_steer_curve.py`, at rest.
@@ -1286,6 +1539,7 @@ mod tests {
         let g = SteerGeometry {
             max_steer_angle: 1.22,
             track_over_wheelbase: 0.0,
+            ..Default::default()
         };
         assert!((steer_command_for(0.61, &g) - 0.5).abs() < 1e-4);
     }
