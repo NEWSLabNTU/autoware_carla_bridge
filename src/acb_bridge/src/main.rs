@@ -350,11 +350,55 @@ impl BridgeParams {
     }
 }
 
+/// Longest single `spin` inside `pump_ros_for`. rclrs 0.7 waits out the whole timeout on an
+/// empty queue (see the main loop's spin), so this bounds how late the pump can overrun its
+/// deadline, not how often it wakes.
+const IDLE_SPIN_SLICE: Duration = Duration::from_millis(100);
+
+/// The next spin timeout for a pump with `remaining` time left, or `None` when it is done.
+fn idle_spin_slice(remaining: Duration, max: Duration) -> Option<Duration> {
+    if remaining.is_zero() {
+        None
+    } else {
+        Some(remaining.min(max))
+    }
+}
+
+/// Serve ROS callbacks for `duration`, in place of sleeping through it.
+///
+/// Everything the node owns is registered before the first vehicle exists -- the
+/// `/control/control_mode_request` service, Autoware's `/robot_description` and `/tf`
+/// subscriptions, `/clock` -- and before this existed nothing spun the executor again until
+/// a hero was found and the main loop started. A service call made while no ego existed was
+/// therefore not refused or queued-and-answered: it sat unanswered for minutes. Measured
+/// 2026-09-27: two `control_mode_request` probes made before the spawn both timed out at
+/// 30 s, then got their replies when the ego appeared. So every wait that has no vehicle to
+/// work on -- connecting, waiting for the hero, backing off after a failed attach -- pumps
+/// the executor instead of sleeping.
+///
+/// Drains with `SpinOptions::default()`, like the main loop, so a burst is served in one
+/// pass rather than one callback per slice.
+fn pump_ros_for(executor: &mut rclrs::Executor, duration: Duration) {
+    let deadline = std::time::Instant::now() + duration;
+    while let Some(slice) = idle_spin_slice(
+        deadline.saturating_duration_since(std::time::Instant::now()),
+        IDLE_SPIN_SLICE,
+    ) {
+        executor.spin(rclrs::SpinOptions::default().timeout(slice));
+    }
+}
+
 /// Connect to CARLA with infinite retry loop.
 ///
 /// Returns a connected Client with timeout configured. Checks the `running` flag
-/// between attempts to allow graceful shutdown via Ctrl-C.
-fn connect_to_carla(params: &BridgeParams, running: &AtomicBool) -> Option<Client> {
+/// between attempts to allow graceful shutdown via Ctrl-C. The back-off between attempts
+/// keeps the ROS executor spinning (`pump_ros_for`), so the node's services answer while
+/// CARLA is down.
+fn connect_to_carla(
+    params: &BridgeParams,
+    running: &AtomicBool,
+    executor: &mut rclrs::Executor,
+) -> Option<Client> {
     tracing::info!(
         "Connecting to CARLA at {}:{}...",
         params.carla_address,
@@ -366,7 +410,7 @@ fn connect_to_carla(params: &BridgeParams, running: &AtomicBool) -> Option<Clien
             Ok(mut client) => {
                 if let Err(e) = client.set_timeout(Duration::from_secs(30)) {
                     tracing::warn!("Failed to set timeout: {e}, retrying in 5 seconds...");
-                    std::thread::sleep(Duration::from_secs(5));
+                    pump_ros_for(executor, Duration::from_secs(5));
                     continue;
                 }
                 match client.world() {
@@ -389,7 +433,7 @@ fn connect_to_carla(params: &BridgeParams, running: &AtomicBool) -> Option<Clien
             return None;
         }
 
-        std::thread::sleep(Duration::from_secs(5));
+        pump_ros_for(executor, Duration::from_secs(5));
     }
 }
 
@@ -533,7 +577,12 @@ fn connection_is_dead(client: &Client) -> bool {
     }
 }
 
-fn wait_for_vehicle(client: &Client, vehicle_name: &str, running: &AtomicBool) -> WaitOutcome {
+fn wait_for_vehicle(
+    client: &Client,
+    vehicle_name: &str,
+    running: &AtomicBool,
+    executor: &mut rclrs::Executor,
+) -> WaitOutcome {
     use carla::client::ActorBase;
     tracing::info!("Waiting for vehicle (role_name={vehicle_name}) in CARLA...");
     let mut start = std::time::Instant::now();
@@ -567,7 +616,7 @@ fn wait_for_vehicle(client: &Client, vehicle_name: &str, running: &AtomicBool) -
             Ok(w) => w,
             Err(e) => {
                 tracing::warn!("Failed to get world while waiting for vehicle: {e}");
-                std::thread::sleep(Duration::from_secs(1));
+                pump_ros_for(executor, Duration::from_secs(1));
                 continue;
             }
         };
@@ -637,7 +686,10 @@ fn wait_for_vehicle(client: &Client, vehicle_name: &str, running: &AtomicBool) -
             );
             last_log = std::time::Instant::now();
         }
-        std::thread::sleep(Duration::from_secs(1));
+        // Not a sleep: the node's services and subscriptions must answer while there is no
+        // ego (`pump_ros_for`). The tick wait above still blocks for up to 500 ms, so a call
+        // made now is answered within about that.
+        pump_ros_for(executor, Duration::from_secs(1));
     }
 }
 
@@ -831,7 +883,7 @@ fn main() -> Result<()> {
     loop {
         // === Connect to CARLA ===
         if reconnect_carla || client.is_none() {
-            client = match connect_to_carla(&params, &running) {
+            client = match connect_to_carla(&params, &running, &mut executor) {
                 Some(c) => Some(c),
                 None => return Ok(()), // Ctrl-C during connection
             };
@@ -852,7 +904,7 @@ fn main() -> Result<()> {
         // every poll, so a map reload between spawns (new episode) is picked up and the
         // sensors attach into the episode the vehicle actually lives in.
         let (mut world, hero_vehicle) =
-            match wait_for_vehicle(client, &params.vehicle_name, &running) {
+            match wait_for_vehicle(client, &params.vehicle_name, &running, &mut executor) {
                 WaitOutcome::Found(w, v) => (w, v),
                 WaitOutcome::Shutdown => return Ok(()),
                 WaitOutcome::Stale => {
@@ -872,7 +924,7 @@ fn main() -> Result<()> {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!("Failed to attach sensors to vehicle: {e}, reconnecting in 5s...");
-                std::thread::sleep(Duration::from_secs(5));
+                pump_ros_for(&mut executor, Duration::from_secs(5));
                 continue;
             }
         };
@@ -1526,6 +1578,33 @@ mod tests {
             reason: "socket closed".to_string(),
             source: None,
         })
+    }
+
+    /// The idle pump spins in bounded slices and stops at its deadline: a wait with no
+    /// vehicle keeps serving `/control/control_mode_request` without overrunning the wait.
+    #[test]
+    fn idle_spin_slices_are_bounded_and_end_at_the_deadline() {
+        let max = Duration::from_millis(100);
+        assert_eq!(idle_spin_slice(Duration::from_secs(5), max), Some(max));
+        assert_eq!(
+            idle_spin_slice(Duration::from_millis(30), max),
+            Some(Duration::from_millis(30))
+        );
+        assert_eq!(idle_spin_slice(max, max), Some(max));
+        assert_eq!(idle_spin_slice(Duration::ZERO, max), None);
+    }
+
+    /// A 1 s pump is ten slices of 100 ms, not one long blocking spin.
+    #[test]
+    fn a_one_second_pump_takes_ten_slices() {
+        let mut remaining = Duration::from_secs(1);
+        let mut slices = 0;
+        while let Some(slice) = idle_spin_slice(remaining, IDLE_SPIN_SLICE) {
+            assert!(slice <= IDLE_SPIN_SLICE);
+            remaining -= slice;
+            slices += 1;
+        }
+        assert_eq!(slices, 10);
     }
 
     /// Regression guard for gap 8. Whoever owns the tick pauses between frames routinely --
