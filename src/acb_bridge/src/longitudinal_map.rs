@@ -201,18 +201,38 @@ impl LongitudinalCalibration {
 
     /// Choose throttle or brake for a requested acceleration at the current speed.
     ///
-    /// The dividing line is what the car does with no brake at all. CARLA's drag and engine
-    /// braking are strong -- from 2.6 m/s^2 at rest to 8.8 m/s^2 at 24 m/s -- so a request
-    /// for mild deceleration at speed is already satisfied by lifting off, and adding brake
-    /// would overshoot it. Below that line the brake map decides how much.
+    /// The dividing line is what the car does with no pedal at all. CARLA's drag and engine
+    /// braking are strong -- 8.8 m/s^2 at 24 m/s -- so a request for mild deceleration at
+    /// speed is already satisfied by lifting off, and adding brake would overshoot it. Below
+    /// that line the brake map decides how much.
+    ///
+    /// Both maps carry a pedal-0 row, and both are the same physical quantity, but they are
+    /// not equally measured. A brake ramp ends in a stop, and its last ticks discretise the
+    /// stop rather than measure braking, so `build_longitudinal_maps.py` discards brake
+    /// samples below 5 m/s (`BRAKE_V_FLOOR`) and fills those columns by holding the nearest
+    /// measured one. The shipped brake map's coasting row therefore reads -2.55 m/s^2 at 0,
+    /// 2 and 4 m/s; the throttle map, measured down to rest, reads -0.28, -0.55 and -1.51,
+    /// and the car coasts at about -0.9 m/s^2 at 2 m/s in scenario runs. Taking the brake
+    /// row as the dividing line sent every request between those two to the throttle map,
+    /// which answered with pedal 0: Autoware asked for -2.5 m/s^2 to stop from 2 m/s, got
+    /// neither pedal and -0.8, and control_validator's acceleration check tripped the MRM.
+    ///
+    /// So the line is the *weaker* of the two coasting rows -- where both are measured they
+    /// agree to 0.1 m/s^2, and where one is filled it is the stronger one -- and the brake is
+    /// sized for the deceleration *beyond* coasting, read as an increment over the brake
+    /// map's own pedal-0 row. Where the rows agree that is exactly the old lookup; where the
+    /// brake map's low-speed columns are copies of 5 m/s, it applies the brake authority
+    /// measured there on top of the coasting that was actually measured here.
     pub fn command_for(&self, requested_accel: f64, speed: f64) -> PedalCommand {
-        let coasting = self.brake_map.passive_accel(speed);
+        let brake_coast = self.brake_map.passive_accel(speed);
+        let coasting = self.accel_map.passive_accel(speed).max(brake_coast);
 
         if requested_accel >= coasting {
             let throttle = self.accel_map.pedal_for(requested_accel, speed, true);
             PedalCommand { throttle: throttle.clamp(0.0, 1.0) as f32, brake: 0.0 }
         } else {
-            let brake = self.brake_map.pedal_for(requested_accel, speed, false);
+            let target = brake_coast + (requested_accel - coasting);
+            let brake = self.brake_map.pedal_for(target, speed, false);
             PedalCommand { throttle: 0.0, brake: brake.clamp(0.0, 1.0) as f32 }
         }
     }
@@ -225,7 +245,7 @@ mod tests {
     const ACCEL: &str = "\
 # comment
 default,0.0,10.0,20.0
-0.00,0.000,0.000,0.000
+0.00,-2.000,-4.000,-8.000
 0.50,3.000,1.000,0.000
 1.00,6.000,5.000,4.000
 ";
@@ -317,5 +337,61 @@ default,0.0,10.0,20.0
         let cmd = c.command_for(-10.0, 20.0);
         assert!((cmd.brake - 0.5).abs() < 1e-6, "{cmd:?}");
         assert_eq!(cmd.throttle, 0.0);
+    }
+    /// The shipped brake map fills its low-speed columns from 5 m/s, so its coasting row
+    /// claims -2.55 m/s^2 at 2 m/s where the car really coasts at about -0.5.
+    const ACCEL_LOW: &str = "\
+default,0.0,2.0,4.0,6.0
+0.00,-0.282,-0.550,-1.506,-2.724
+0.10,-0.168,-0.325,-0.765,-1.993
+1.00,6.000,6.000,6.000,6.000
+";
+    const BRAKE_FILLED: &str = "\
+default,0.0,2.0,4.0,6.0
+0.00,-2.553,-2.553,-2.553,-2.858
+0.50,-4.205,-4.205,-4.205,-4.205
+1.00,-5.170,-5.170,-5.170,-5.170
+";
+
+    fn shipped_shape() -> LongitudinalCalibration {
+        LongitudinalCalibration {
+            accel_map: PedalMap::parse(ACCEL_LOW).unwrap(),
+            brake_map: PedalMap::parse(BRAKE_FILLED).unwrap(),
+        }
+    }
+
+    /// The failure recorded in every scenario run: -2.5 m/s^2 requested at 2 m/s produced
+    /// neither pedal, the car coasted at -0.8, and control_validator raised the MRM.
+    #[test]
+    fn a_stop_from_low_speed_reaches_the_brake() {
+        let cmd = shipped_shape().command_for(-2.5, 2.0);
+        assert_eq!(cmd.throttle, 0.0, "{cmd:?}");
+        // 1.95 m/s^2 beyond the measured coasting of -0.55: -4.50 in the brake map, pedal 0.654.
+        assert!((cmd.brake - 0.654).abs() < 0.01, "{cmd:?}");
+    }
+
+    #[test]
+    fn deceleration_beyond_measured_coasting_brakes_at_every_low_speed() {
+        let c = shipped_shape();
+        for speed in [0.5, 1.0, 2.0, 3.0, 4.0] {
+            let coast = c.accel_map.passive_accel(speed);
+            let cmd = c.command_for(coast - 0.5, speed);
+            assert!(cmd.brake > 0.0, "{speed} m/s: {cmd:?}");
+        }
+    }
+
+    /// Where the two coasting rows agree, the increment lookup is the plain lookup.
+    #[test]
+    fn agreeing_coasting_rows_leave_the_brake_lookup_unchanged() {
+        let c = calibration();
+        let direct = c.brake_map.pedal_for(-5.0, 0.0, false) as f32;
+        assert!((c.command_for(-5.0, 0.0).brake - direct).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_request_between_the_coasting_rows_takes_throttle_zero_not_the_brake_row() {
+        // Above the measured coasting line (-0.55 at 2 m/s) it is still a throttle request.
+        let cmd = shipped_shape().command_for(-0.3, 2.0);
+        assert_eq!(cmd.brake, 0.0, "{cmd:?}");
     }
 }
