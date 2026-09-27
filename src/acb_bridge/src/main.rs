@@ -949,6 +949,8 @@ fn main() -> Result<()> {
         let vehicle = vehicle_guard.get_vehicle().clone();
         let vehicle_shared = Arc::new(Mutex::new(Some(vehicle.clone())));
         let vehicle_id = vehicle.id();
+        // For the VelocityReport, which is the rear axle's twist like the odometry's.
+        let base_link_in_actor = *vehicle_guard.base_link_in_actor();
         drop(vehicle_guard);
 
         tracing::info!("Sensors attached to hero vehicle successfully!");
@@ -992,7 +994,7 @@ fn main() -> Result<()> {
         // Optional: report CARLA's actors as perception output instead of deriving them
         // from the LiDAR. Off unless asked for, and only correct with Autoware's own
         // perception disabled -- see ground_truth_objects.
-        let ground_truth_objects = if params.publish_ground_truth_objects {
+        let mut ground_truth_objects = if params.publish_ground_truth_objects {
             match ground_truth_objects::GroundTruthObjectPublisher::new(
                 node.clone(),
                 params.vehicle_name.to_string(),
@@ -1113,6 +1115,7 @@ fn main() -> Result<()> {
             longitudinal,
             params.honor_emergency_cmd,
             control_trace.clone(),
+            base_link_in_actor,
         )?;
         tracing::info!("Vehicle control bridge created");
 
@@ -1478,8 +1481,8 @@ fn main() -> Result<()> {
                 tracing::warn!("Autoware tick failed: {}", e);
             }
 
-            if let Some(ref gt) = ground_truth_objects {
-                if let Err(e) = gt.publish(&world) {
+            if let Some(ref mut gt) = ground_truth_objects {
+                if let Err(e) = gt.publish(&world, &snapshot) {
                     tracing::warn!("Failed to publish ground-truth objects: {e}");
                 }
             }

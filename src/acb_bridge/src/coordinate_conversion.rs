@@ -542,6 +542,32 @@ pub fn base_link_in_actor_from_wheels(
     Some(r.transpose() * (rear_mid_world - actor_location))
 }
 
+/// Velocity of a point `offset` away from the actor origin on the same rigid body.
+///
+/// `v_point = v_origin + omega x offset`, all three in the actor's body frame and in
+/// **CARLA's axes**, with `omega` in **rad/s** (CARLA reports deg/s -- convert first). Used
+/// to move the ego twist from the actor origin to `base_link`, the rear axle, so the Y-flip
+/// to ROS stays in `carla_to_ros_velocity`.
+///
+/// The ordinary right-handed cross product is the right one here even though CARLA's frame
+/// is left-handed: `carla_to_ros_angular_velocity` treats angular velocity as the
+/// pseudovector it is (a reflection negates it on top of the axis flip), and under that
+/// convention `M(a x b) = (-M a) x (M b)` makes the formula come out the same in both
+/// frames. Checked in `test_offset_velocity_agrees_with_ros_frame`. A sanity case: positive
+/// CARLA yaw rate turns +x towards +y (to the right), so a point ahead of the rear axle
+/// moves right, i.e. +y -- which `omega_z * offset_x` in the y slot gives.
+///
+/// Longitudinal speed is unchanged by a pure yaw rate and an offset along x; only the
+/// lateral component moves, by `yaw_rate * offset_x`. See carla-scenario-bridge
+/// docs/roadmap/014 "Pose reference point".
+pub fn velocity_at_offset(
+    velocity: &Vector3<f64>,
+    angular_velocity_rad: &Vector3<f64>,
+    offset: &Vector3<f64>,
+) -> Vector3<f64> {
+    velocity + angular_velocity_rad.cross(offset)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,6 +578,65 @@ mod tests {
 
     fn assert_vec_close(a: &Vector3<f64>, b: &Vector3<f64>, tol: f64) {
         assert!((a - b).norm() < tol, "expected {b:?}, got {a:?}");
+    }
+
+    // --- twist at base_link ---
+
+    #[test]
+    fn test_pure_yaw_about_rear_axle_is_still_at_base_link() {
+        // Turning in place about the rear axle at 0.3 rad/s (CARLA sign: to the right).
+        // The rear axle does not move; the actor origin, 1.386 m ahead of it, sweeps
+        // right at 0.3 * 1.386 m/s.
+        let w = 0.3;
+        let omega = Vector3::new(0.0, 0.0, w);
+        let rear_axle = Vector3::new(MODEL3_REAR_AXLE, 0.0, 0.0);
+        // Origin velocity = rear-axle velocity (zero) + omega x (origin - rear_axle).
+        let v_origin = velocity_at_offset(&Vector3::zeros(), &omega, &(-rear_axle));
+        assert_vec_close(&v_origin, &Vector3::new(0.0, w * 1.386, 0.0), 1e-12);
+        // And back: what the bridge does, from the origin CARLA reports to base_link.
+        let v_base = velocity_at_offset(&v_origin, &omega, &rear_axle);
+        assert_vec_close(&v_base, &Vector3::zeros(), 1e-12);
+        // In ROS: origin moves right (-y) while yaw rate is clockwise (-z).
+        let v_origin_ros = carla_to_ros_velocity(&v_origin);
+        let omega_ros = carla_to_ros_angular_velocity(&omega);
+        assert!(v_origin_ros.y < 0.0 && omega_ros.z < 0.0);
+    }
+
+    #[test]
+    fn test_offset_velocity_keeps_longitudinal_speed() {
+        let v = velocity_at_offset(
+            &Vector3::new(8.0, 0.2, 0.0),
+            &Vector3::new(0.0, 0.0, 0.1),
+            &Vector3::new(MODEL3_REAR_AXLE, 0.0, 0.0),
+        );
+        assert!((v.x - 8.0).abs() < 1e-12);
+        assert!((v.y - (0.2 - 0.1 * 1.386)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_offset_velocity_matches_carla_rotation() {
+        // Independent of the cross-product argument: advance CARLA's own rotation by a
+        // small yaw and watch where an actor-frame point goes, in the body frame.
+        let (yaw0, dyaw_deg, dt) = (37.0_f64, 0.01_f64, 0.001_f64);
+        let r = Vector3::new(MODEL3_REAR_AXLE, 0.4, 0.3);
+        let r0 = carla_rotation_matrix(0.0, 0.0, yaw0);
+        let r1 = carla_rotation_matrix(0.0, 0.0, yaw0 + dyaw_deg);
+        let v_body_numeric = r0.transpose() * ((r1 - r0) * r / dt);
+        let omega = Vector3::new(0.0, 0.0, (dyaw_deg / dt).to_radians());
+        let v_body = velocity_at_offset(&Vector3::zeros(), &omega, &r);
+        assert_vec_close(&v_body, &v_body_numeric, 1e-4);
+    }
+
+    #[test]
+    fn test_offset_velocity_agrees_with_ros_frame() {
+        // Doing it in CARLA axes and flipping must equal flipping and doing it in ROS axes.
+        let v = Vector3::new(3.0, -0.7, 0.2);
+        let w = Vector3::new(0.05, -0.2, 0.4);
+        let r = Vector3::new(MODEL3_REAR_AXLE, 0.1, -0.3);
+        let carla_then_flip = carla_to_ros_velocity(&velocity_at_offset(&v, &w, &r));
+        let flip_then_ros = carla_to_ros_velocity(&v)
+            + carla_to_ros_angular_velocity(&w).cross(&carla_to_ros_position(&r));
+        assert_vec_close(&carla_then_flip, &flip_then_ros, 1e-12);
     }
 
     #[test]

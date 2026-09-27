@@ -510,6 +510,11 @@ pub struct VehicleControlBridge {
     /// (`compensate_steering_curve`, roadmap 014). Kept here as well as in the command
     /// callback so the echoed steering report can undo the same factor.
     compensate_steering_curve: bool,
+
+    /// `base_link` (the rear-axle centre) in the actor frame, CARLA axes, metres -- the
+    /// same offset `CarlaVehicle::base_link_in_actor` measured at spawn. The VelocityReport
+    /// is the rear axle's, not the actor origin's (roadmap 014, "Pose reference point").
+    base_link_in_actor: nalgebra::Vector3<f64>,
 }
 
 impl VehicleControlBridge {
@@ -529,6 +534,7 @@ impl VehicleControlBridge {
         longitudinal: Option<crate::longitudinal_map::LongitudinalCalibration>,
         honor_emergency_cmd: bool,
         control_trace: Option<Arc<crate::control_trace::ControlTrace>>,
+        base_link_in_actor: nalgebra::Vector3<f64>,
     ) -> Result<Self> {
         let steer_geometry = Self::read_steer_geometry(&vehicle);
 
@@ -751,6 +757,7 @@ impl VehicleControlBridge {
             steer_geometry,
             report_measured_steering,
             compensate_steering_curve,
+            base_link_in_actor,
         })
     }
 
@@ -1169,24 +1176,44 @@ impl VehicleControlBridge {
             let control = vehicle.control()?;
             let state = *self.state.lock().unwrap();
 
-            // Measured at the actor origin, not the rear axle that is base_link. Deliberately
-            // uncorrected: longitudinal speed is the same at both, and lateral velocity
-            // differs only by yaw_rate x the axle offset (see `CarlaVehicle::
-            // measure_base_link`).
-            //
             // VelocityReport is a base_link message. CARLA reports velocity in world
             // coordinates, so it has to be rotated into the vehicle's own frame before
             // publishing -- otherwise "lateral" is a world-Y component and "longitudinal"
             // is an unsigned magnitude that stays positive while reversing. See
             // `docs/issues/003-*`.
             let body_velocity = transform.rotation.inverse_rotate_vector(&velocity_vec);
-            let longitudinal_velocity = body_velocity.x;
+            // CARLA reports angular velocity in DEGREES per second (measured, see
+            // docs/issues/008); the cross product below and heading_rate want rad/s.
+            let body_angular = transform
+                .rotation
+                .inverse_rotate_vector(&angular_velocity_vec);
+            let body_angular = nalgebra::Vector3::new(
+                (body_angular.x as f64).to_radians(),
+                (body_angular.y as f64).to_radians(),
+                (body_angular.z as f64).to_radians(),
+            );
+            // CARLA measures at the actor origin; base_link is the rear axle, 1.386 m behind
+            // it on a model3. Longitudinal speed is the same at both, but lateral velocity
+            // differs by yaw_rate x offset -- published uncorrected, the rear axle appeared
+            // to slide sideways in every turn. Same correction as the odometry twist in
+            // `AutowareCoordinator::tick`; see `coordinate_conversion::velocity_at_offset`
+            // and roadmap 014.
+            let base_link_velocity = crate::coordinate_conversion::velocity_at_offset(
+                &nalgebra::Vector3::new(
+                    body_velocity.x as f64,
+                    body_velocity.y as f64,
+                    body_velocity.z as f64,
+                ),
+                &body_angular,
+                &self.base_link_in_actor,
+            );
+            let longitudinal_velocity = base_link_velocity.x as f32;
             // Negate: CARLA body Y = right (left-handed), ROS lateral = left (right-handed)
-            let lateral_velocity = -body_velocity.y;
-            // Negate: CARLA Z angular = clockwise, ROS yaw rate = counter-clockwise.
-            // Convert: CARLA reports angular velocity in DEGREES per second (measured,
-            // see docs/issues/008), while VelocityReport.heading_rate is rad/s.
-            let heading_rate = -angular_velocity_vec.z.to_radians();
+            let lateral_velocity = -base_link_velocity.y as f32;
+            // Negate: CARLA Z angular = clockwise, ROS yaw rate = counter-clockwise. The
+            // same at every point of a rigid body, so no offset term. Body-frame z rather
+            // than world z, which differ only on a slope.
+            let heading_rate = -body_angular.z as f32;
 
             // Publish VelocityReport
             let velocity_report = autoware_vehicle_msgs::msg::VelocityReport {

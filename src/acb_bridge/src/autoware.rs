@@ -634,10 +634,13 @@ impl Autoware {
         // measure_base_link` and carla-scenario-bridge docs/roadmap/014 "Pose reference
         // point". The same position feeds the `/initialpose` re-seed below.
         //
-        // The twist is deliberately left as the actor origin's. Longitudinal speed is the
-        // same everywhere on a rigid body; lateral velocity at the rear axle differs by
-        // yaw_rate x offset (1.386 m on a model3, so ~0.14 m/s at 0.1 rad/s), and that
-        // term is not corrected here.
+        // The twist moves there too: `child_frame_id` is base_link, so the twist is the rear
+        // axle's. Longitudinal speed is the same everywhere on a rigid body, but lateral
+        // velocity is not -- it differs by yaw_rate x offset (1.386 m on a model3, so
+        // ~0.14 m/s at 0.1 rad/s), and publishing the origin's told Autoware the rear axle
+        // slides sideways in every turn. Angular velocity is the same at every point.
+        // Corrected in the body frame and CARLA's axes, before the one Y-flip below; see
+        // `coordinate_conversion::velocity_at_offset` and roadmap 014.
         let base_link = coordinate_conversion::base_link_world_location(
             &nalgebra::Vector3::new(
                 transform.location.x as f64,
@@ -668,11 +671,20 @@ impl Autoware {
             pitch, -yaw, // Yaw sign flip for ROS right-handed system
         );
 
-        let linear_vel = coordinate_conversion::carla_to_ros_velocity(&nalgebra::Vector3::new(
-            na_velocity.x as f64,
-            na_velocity.y as f64,
-            na_velocity.z as f64,
-        ));
+        let base_link_velocity = coordinate_conversion::velocity_at_offset(
+            &nalgebra::Vector3::new(
+                na_velocity.x as f64,
+                na_velocity.y as f64,
+                na_velocity.z as f64,
+            ),
+            &nalgebra::Vector3::new(
+                na_angular_velocity.x as f64,
+                na_angular_velocity.y as f64,
+                na_angular_velocity.z as f64,
+            ),
+            vehicle_guard.base_link_in_actor(),
+        );
+        let linear_vel = coordinate_conversion::carla_to_ros_velocity(&base_link_velocity);
 
         let angular_vel =
             coordinate_conversion::carla_to_ros_angular_velocity(&nalgebra::Vector3::new(
