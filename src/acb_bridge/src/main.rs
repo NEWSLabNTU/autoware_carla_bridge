@@ -11,6 +11,7 @@ mod longitudinal_map;
 mod sensor_config;
 mod sensor_release;
 mod tf_bridge;
+mod tick_follower;
 mod types;
 mod urdf_parser;
 mod utils;
@@ -455,7 +456,12 @@ fn actor_still_exists(world: &carla::client::World, id: carla::rpc::ActorId) -> 
 /// Wait for one CARLA frame.
 ///
 /// `Ok(None)` is the wait expiring with no frame -- normal while the simulation is
-/// paused. `Ok(Some(snapshot))` is a frame that genuinely arrived.
+/// paused. `Ok(Some(snapshot))` is the newest frame not yet handled.
+///
+/// Frames come from an `on_tick` callback through a queue that the follower drains to the
+/// newest, not from `wait_for_tick_or_timeout`, which waits for the *next* tick after the
+/// call and so loses every frame that completes while this loop is busy publishing. See
+/// `tick_follower` and roadmap 014 (gap 7).
 ///
 /// **Read the world's state from the returned snapshot, never from `World::snapshot()`.**
 /// `World::snapshot()` answers from the client's cached episode state, so once frames
@@ -468,10 +474,10 @@ fn actor_still_exists(world: &carla::client::World, id: carla::rpc::ActorId) -> 
 ///
 /// `Err` does not necessarily mean CARLA is gone; classify it with [`classify_tick_error`].
 fn carla_tick(
-    world: &carla::client::World,
+    follower: &mut tick_follower::TickFollower,
     timeout: Duration,
 ) -> std::result::Result<Option<carla::client::WorldSnapshot>, carla::CarlaError> {
-    world.wait_for_tick_or_timeout(timeout)
+    follower.next_frame(timeout)
 }
 
 /// Poll CARLA actors until a vehicle with the given role_name is found.
@@ -690,6 +696,10 @@ fn main() -> Result<()> {
 
     // Create clock publisher (persists across reconnections)
     let simulator_clock = SimulatorClock::new(node.clone())?;
+
+    // `/control/control_mode_request`, answered as SSv2's stock ego simulation answers it.
+    // Node-lifetime, like the clock: it must not disappear between vehicle sessions.
+    let _control_mode_service = vehicle_control::ControlModeService::new(&node)?;
 
     // CARLA reports server uptime, not scenario time. Reset per CARLA connection: a
     // restarted server rewinds elapsed_seconds.
@@ -1102,11 +1112,30 @@ fn main() -> Result<()> {
         /// cheaper than the log it prevents.
         const IDLE_TICKS_BETWEEN_ACTOR_CHECKS: u64 = 10;
 
+        /// How often the main loop reports its frame counts while frames are arriving.
+        const STATUS_LOG_INTERVAL: Duration = Duration::from_secs(30);
+        let mut last_status_log = std::time::Instant::now();
+
+        // Follow frames through an `on_tick` callback from here on. Registered as late as
+        // possible so the first drain does not count the frames spent attaching sensors as
+        // skipped. Failing to register means the world handle is unusable: treat it as a
+        // lost connection.
+        let mut follower = match tick_follower::TickFollower::new(&world) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                tracing::error!("Cannot register the CARLA on_tick callback: {e}; reconnecting");
+                None
+            }
+        };
+
         // === Main Loop ===
         let exit_reason = loop {
             if !running.load(Ordering::SeqCst) {
                 break SessionExit::Shutdown;
             }
+            let Some(follower) = follower.as_mut() else {
+                break SessionExit::CarlaLost;
+            };
 
             let loop_start = std::time::Instant::now();
 
@@ -1173,10 +1202,20 @@ fn main() -> Result<()> {
                 clock_offset.observe(&node, snap.timestamp().elapsed_seconds);
             }
 
-            let snapshot = match carla_tick(&world, loop_duration) {
+            let snapshot = match carla_tick(follower, loop_duration) {
                 Ok(Some(snapshot)) => {
                     consecutive_failures = 0;
                     idle_ticks = 0;
+                    if last_status_log.elapsed() >= STATUS_LOG_INTERVAL {
+                        tracing::info!(
+                            "CARLA frames this session: {} processed, frames_skipped={} \
+                             (newest frame {})",
+                            follower.frames_processed(),
+                            follower.frames_skipped(),
+                            snapshot.frame()
+                        );
+                        last_status_log = std::time::Instant::now();
+                    }
                     snapshot
                 }
                 Ok(None) => {
@@ -1391,6 +1430,16 @@ fn main() -> Result<()> {
                 std::thread::sleep(next_iteration - now);
             }
         };
+
+        // Unregister the frame callback before the world handle goes away. Its counts are
+        // the session's last word on whether the loop kept up.
+        if let Some(f) = follower.take() {
+            tracing::info!(
+                "Frame follower stopped: {} frames processed, frames_skipped={}",
+                f.frames_processed(),
+                f.frames_skipped()
+            );
+        }
 
         // Clean up old vehicle before reconnecting or exiting
         tracing::info!("Cleaning up CARLA actors...");

@@ -302,6 +302,70 @@ impl AppliedState {
     }
 }
 
+/// Answer to a `/control/control_mode_request`, exactly as SSv2's stock ego simulation gives
+/// it (`concealer/src/autoware_universe.cpp`, the `control_mode_request_server`):
+/// AUTONOMOUS succeeds, MANUAL and everything else fail.
+///
+/// MANUAL fails in the stock simulation because it only arrives on a remote override, which
+/// scenario_simulator_v2 does not support; this bridge does not support one either. The
+/// reported mode on `/vehicle/status/control_mode` stays AUTONOMOUS regardless -- a request
+/// that succeeds asks for the mode the vehicle is already in, and one that fails changes
+/// nothing.
+pub fn control_mode_request_accepted(mode: u8) -> bool {
+    use autoware_vehicle_msgs::srv::control_mode_command::ControlModeCommand_Request as Req;
+    mode == Req::AUTONOMOUS
+}
+
+fn control_mode_name(mode: u8) -> &'static str {
+    use autoware_vehicle_msgs::srv::control_mode_command::ControlModeCommand_Request as Req;
+    match mode {
+        Req::NO_COMMAND => "NO_COMMAND",
+        Req::AUTONOMOUS => "AUTONOMOUS",
+        Req::AUTONOMOUS_STEER_ONLY => "AUTONOMOUS_STEER_ONLY",
+        Req::AUTONOMOUS_VELOCITY_ONLY => "AUTONOMOUS_VELOCITY_ONLY",
+        Req::MANUAL => "MANUAL",
+        _ => "UNKNOWN",
+    }
+}
+
+/// Server for `/control/control_mode_request` (autoware_vehicle_msgs/srv/ControlModeCommand).
+///
+/// The stock ego simulation serves this and nothing in a CARLA stack did, so Autoware's
+/// operation-mode transition asked a service that never answered (roadmap 014, gap 12).
+///
+/// It lives for the node's whole lifetime rather than one vehicle session: the service is
+/// part of the vehicle interface Autoware sees, not of any particular CARLA actor, and a
+/// per-session server would vanish between scenario runs. Requests are only answered while
+/// the executor spins, which is the main loop's job.
+pub struct ControlModeService {
+    _service: rclrs::Service<autoware_vehicle_msgs::srv::ControlModeCommand>,
+}
+
+impl ControlModeService {
+    pub const SERVICE_NAME: &'static str = "/control/control_mode_request";
+
+    pub fn new(node: &rclrs::Node) -> Result<Self> {
+        use autoware_vehicle_msgs::srv::control_mode_command::{
+            ControlModeCommand_Request, ControlModeCommand_Response,
+        };
+        let service = node.create_service::<autoware_vehicle_msgs::srv::ControlModeCommand, _>(
+            Self::SERVICE_NAME,
+            |request: ControlModeCommand_Request| {
+                let success = control_mode_request_accepted(request.mode);
+                tracing::info!(
+                    "{} {} ({}) -> success={success}",
+                    ControlModeService::SERVICE_NAME,
+                    control_mode_name(request.mode),
+                    request.mode,
+                );
+                ControlModeCommand_Response { success }
+            },
+        )?;
+        tracing::info!("  Serving: {}", Self::SERVICE_NAME);
+        Ok(Self { _service: service })
+    }
+}
+
 /// Vehicle control manager
 ///
 /// Handles bidirectional control between Autoware and CARLA.
@@ -1062,6 +1126,20 @@ impl VehicleControlBridge {
 mod tests {
     use super::*;
     use autoware_vehicle_msgs::msg::{GearReport, HazardLightsReport, TurnIndicatorsReport};
+
+    /// Matches stock `autoware_universe.cpp`: only AUTONOMOUS succeeds.
+    #[test]
+    fn control_mode_request_matches_the_stock_ego_simulation() {
+        use autoware_vehicle_msgs::srv::control_mode_command::ControlModeCommand_Request as Req;
+        assert!(control_mode_request_accepted(Req::AUTONOMOUS));
+        assert!(!control_mode_request_accepted(Req::MANUAL));
+        assert!(!control_mode_request_accepted(Req::NO_COMMAND));
+        assert!(!control_mode_request_accepted(Req::AUTONOMOUS_STEER_ONLY));
+        assert!(!control_mode_request_accepted(Req::AUTONOMOUS_VELOCITY_ONLY));
+        assert!(!control_mode_request_accepted(200));
+        assert_eq!(control_mode_name(Req::MANUAL), "MANUAL");
+        assert_eq!(control_mode_name(200), "UNKNOWN");
+    }
 
     #[test]
     fn a_fresh_bridge_reports_drive_and_no_lights() {
