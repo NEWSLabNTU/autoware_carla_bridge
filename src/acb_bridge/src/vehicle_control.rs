@@ -1157,6 +1157,32 @@ impl VehicleControlBridge {
 
     /// Publish vehicle status to Autoware
     ///
+    /// Report the vehicle at rest, once, as the last word on a vehicle that has gone.
+    ///
+    /// Called when the scenario runner has despawned the ego. Without it the last report
+    /// Autoware holds is the ego's final speed -- scenarios end on a position condition,
+    /// usually at 3 m/s -- and a long-lived stack carries that into the next scenario: its
+    /// first /clock tick resumes an EKF still moving at that speed while the new ego sits
+    /// still, which the pose-instability detector reports as an ERROR before
+    /// localization is re-initialized. The runner stops /clock before it despawns, so
+    /// this lands, stamped at that frozen time, ahead of the next scenario's first tick.
+    pub fn publish_standstill(&self, timestamp: f64) -> Result<()> {
+        self.velocity_pub
+            .publish(&autoware_vehicle_msgs::msg::VelocityReport {
+                header: std_msgs::msg::Header {
+                    stamp: builtin_interfaces::msg::Time {
+                        sec: timestamp.floor() as i32,
+                        nanosec: ((timestamp - timestamp.floor()) * 1e9) as u32,
+                    },
+                    frame_id: "base_link".to_string(),
+                },
+                longitudinal_velocity: 0.0,
+                lateral_velocity: 0.0,
+                heading_rate: 0.0,
+            })?;
+        Ok(())
+    }
+
     /// Should be called in the main loop at regular intervals (e.g., 20 Hz)
     ///
     /// # Arguments

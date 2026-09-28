@@ -1020,6 +1020,22 @@ fn main() -> Result<()> {
             )?;
         tracing::info!("Created {} sensor bridges", _sensor_bridges.len());
 
+        // A zero-rate IMU for each IMU topic, published once when the vehicle is gone,
+        // beside `VehicleControlBridge::publish_standstill`. gyro_odometer only emits a
+        // twist once it holds both a vehicle twist and an IMU sample, so a standstill
+        // velocity alone never reaches the EKF. Created here, at attach, so the
+        // subscribers have matched them long before the one message they carry.
+        let standstill_imu: Vec<(Arc<rclrs::Publisher<sensor_msgs::msg::Imu>>, String)> = autoware
+            .list_imu
+            .iter()
+            .filter_map(|(frame, topic)| {
+                node.create_publisher::<sensor_msgs::msg::Imu>(topic.as_str())
+                    .map_err(|e| tracing::warn!("No standstill IMU publisher on {topic}: {e}"))
+                    .ok()
+                    .map(|p| (Arc::new(p), frame.clone()))
+            })
+            .collect();
+
         // === Listen for release requests from the scenario runner ===
         // It owns the vehicle's lifetime and destroys these sensors with it. Being told
         // first is the difference between a clean teardown and this client retrying four
@@ -1499,6 +1515,75 @@ fn main() -> Result<()> {
                 std::thread::sleep(next_iteration - now);
             }
         };
+
+        // The vehicle is gone: leave Autoware believing it stopped, not still moving at
+        // its last speed. See `VehicleControlBridge::publish_standstill`.
+        //
+        // Several pairs, not one: the EKF blends each twist in with a gain of about a
+        // half, so a single zero sample measured only halved the carried speed (3.3 to
+        // 1.7 m/s) and the pose-instability ERROR at the next scenario's first tick
+        // remained. gyro_odometer turns each (velocity, IMU) pair into one twist only if
+        // it has processed the previous pair, hence the short pause between pairs.
+        //
+        // Skipped before any /clock: there is no stack running on time yet to mislead,
+        // and a sample stamped zero would only read as a timeout.
+        let stamp_sec = utils::ros_time_now_secs(&node);
+        if matches!(exit_reason, SessionExit::VehicleLost) && stamp_sec > 0.0 {
+            const STANDSTILL_SAMPLES: usize = 8;
+            let stamp = builtin_interfaces::msg::Time {
+                sec: stamp_sec.floor() as i32,
+                nanosec: ((stamp_sec - stamp_sec.floor()) * 1e9) as u32,
+            };
+            let mut failed = None;
+            for _ in 0..STANDSTILL_SAMPLES {
+                for (publisher, frame) in &standstill_imu {
+                    let msg = sensor_msgs::msg::Imu {
+                        header: std_msgs::msg::Header {
+                            stamp: stamp.clone(),
+                            frame_id: frame.clone(),
+                        },
+                        // Identity, flagged unknown (covariance[0] = -1, REP 145): nothing
+                        // downstream of gyro_odometer reads the orientation.
+                        orientation: geometry_msgs::msg::Quaternion {
+                            x: 0.0,
+                            y: 0.0,
+                            z: 0.0,
+                            w: 1.0,
+                        },
+                        orientation_covariance: [-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                        angular_velocity: geometry_msgs::msg::Vector3 {
+                            x: 0.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        angular_velocity_covariance: [0.0; 9],
+                        // At rest an accelerometer reads gravity, as the CARLA IMU does.
+                        linear_acceleration: geometry_msgs::msg::Vector3 {
+                            x: 0.0,
+                            y: 0.0,
+                            z: 9.81,
+                        },
+                        linear_acceleration_covariance: [0.0; 9],
+                    };
+                    if let Err(e) = publisher.publish(&msg) {
+                        failed = Some(format!("IMU: {e}"));
+                    }
+                }
+                if let Err(e) = vehicle_control.publish_standstill(stamp_sec) {
+                    failed = Some(format!("velocity: {e}"));
+                }
+                pump_ros_for(&mut executor, Duration::from_millis(20));
+            }
+            match failed {
+                None => tracing::info!(
+                    "Reported the departed vehicle at rest ({STANDSTILL_SAMPLES} velocity and \
+                     IMU samples on {} IMU topic(s)) at t={stamp_sec:.3}, so Autoware does not \
+                     carry its last speed into the next scenario",
+                    standstill_imu.len()
+                ),
+                Some(e) => tracing::warn!("Could not publish the standstill samples ({e})"),
+            }
+        }
 
         // Unregister the frame callback before the world handle goes away. Its counts are
         // the session's last word on whether the loop kept up.
