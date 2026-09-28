@@ -29,8 +29,24 @@ So each ramp now runs once, in one direction, on one stretch of road, with no te
 the measurement. The straight bounds how much of the range a single ramp covers; the car is
 reset between ramps, never during one.
 
+## Physics timing
+
+Ticks are DT = 0.05 s with physics substeps of DT/16 = 3.125 ms: the timing
+carla_scenario_bridge applies during a scenario since csb ddf64d7 (coordinator.rs
+`sync_timing`). The maps shipped before 2026-09-28 were measured under CARLA's default 10 ms
+substeps, and the substep is not a detail: at 6 m/s it moves coasting by 0.36 m/s^2 and full
+brake by 0.6, and under 10 ms substeps a braked car decelerates at about -27 m/s^2 for several
+ticks once it is below 5-6 m/s -- the artefact the brake floors below were written to avoid.
+`--carla-default-substeps` measures the old way, which reproduces the old maps.
+
+Below 5 m/s the brake map is measured by the companion `probe_brake_lowspeed.py`, which aims
+one short run at each speed instead of sweeping through them.
+
 Owns the tick deliberately -- it refuses to start if CARLA is already synchronous, because that
-means carla_scenario_bridge or another probe owns it.
+means carla_scenario_bridge or another probe owns it. The car's role_name is `acb_probe`: a
+running ego stack's acb_bridge adopts any vehicle named `hero`.
+
+    probe_longitudinal.py [BLUEPRINT] [OUT.json] [--carla-default-substeps]
 """
 import json, math, sys, time
 import carla
@@ -42,8 +58,11 @@ V_TOP = 27.0
 # ticks discretise the stop itself and produced apparent decelerations beyond 25 m/s^2.
 V_FLOOR_THROTTLE = 0.3
 V_FLOOR_BRAKE = 3.0
-BLUEPRINT = sys.argv[1] if len(sys.argv) > 1 else "vehicle.tesla.model3"
-OUT = sys.argv[2] if len(sys.argv) > 2 else "/tmp/longitudinal.json"
+DEFAULT_SUBSTEPS = "--carla-default-substeps" in sys.argv
+argv = [a for a in sys.argv[1:] if not a.startswith("--")]
+BLUEPRINT = argv[0] if len(argv) > 0 else "vehicle.tesla.model3"
+OUT = argv[1] if len(argv) > 1 else "/tmp/longitudinal.json"
+ROLE_NAME = "acb_probe"
 
 # The long straight on Town01: lanelet 6583, y = -129.8 (ROS), x from 325.6 down to 101.4.
 X_START, X_END, Y = 322.0, 108.0, 129.8
@@ -60,9 +79,17 @@ orig = world.get_settings()
 s = world.get_settings()
 s.synchronous_mode = True
 s.fixed_delta_seconds = DT
+s.substepping = True
+if DEFAULT_SUBSTEPS:
+    s.max_substep_delta_time, s.max_substeps = 0.01, 10
+else:
+    s.max_substep_delta_time, s.max_substeps = DT / 16, 16   # carla_scenario_bridge's
 world.apply_settings(s)
+timing = {"dt": DT, "max_substep_delta_time": s.max_substep_delta_time,
+          "max_substeps": s.max_substeps}
 
 bp = world.get_blueprint_library().find(BLUEPRINT)
+bp.set_attribute("role_name", ROLE_NAME)
 start, actor = None, None
 for offset in range(0, 60, 6):
     t = carla.Transform(carla.Location(x=X_START + offset, y=Y, z=0.5), carla.Rotation(yaw=180.0))
@@ -161,8 +188,9 @@ try:
                   flush=True)
 finally:
     actor.destroy()
+    orig.synchronous_mode = False
     world.apply_settings(orig)
 
 with open(OUT, "w") as f:
-    json.dump({"blueprint": BLUEPRINT, "dt": DT, "rows": rows}, f)
+    json.dump({"blueprint": BLUEPRINT, "dt": DT, "timing": timing, "rows": rows}, f)
 print("\n%d samples in %.0f s -> %s" % (len(rows), time.time() - t0, OUT))
