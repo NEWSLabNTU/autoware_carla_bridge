@@ -99,12 +99,16 @@ pub fn ros_time_now_secs(node: &rclrs::Node) -> f64 {
 /// spin happened to catch: two values a frame apart, in proportions that vary from run to
 /// run (72:28 in one, 5:95 in the next). Taking each reading as the offset made the stamps
 /// flip between the two, publishing some scans twice under one stamp and skipping the
-/// next (74 of 701 in one run). So the offset comes from the largest cluster of the last
-/// [`SimClockOffset::WINDOW`] readings, readings within a quarter tick counting as one
-/// value (the drift above would otherwise split the majority in two and hand the window to
-/// the minority, stamping a scan a whole frame ahead); a tie keeps the current cluster. A
-/// change of more than [`SimClockOffset::EPOCH_JUMP_NANOS`] is a new `/clock` epoch and is
-/// taken at once.
+/// next (74 of 701 in one run). A majority vote is no cure: when the split is near even the
+/// majority changes hands every few ticks, and each change mis-stamps a scan by a frame --
+/// measured 23-52 times per traffic_light run on an idle disk, each a "Couldn't interpolate
+/// pose" and 7-16 emergency stops per run. Only the correct pairing can read *high*, so the
+/// offset is the highest cluster of the last [`SimClockOffset::WINDOW`] readings that has at
+/// least [`SimClockOffset::MIN_SUPPORT`] of them (readings within a quarter tick count as one
+/// value, as CARLA's drift makes every reading distinct). The one-frame-low readings then
+/// never decide anything, whatever their share. A change of more than
+/// [`SimClockOffset::EPOCH_JUMP_NANOS`] is a new `/clock` epoch and is taken at once; a
+/// lasting one-frame drop is followed once the higher readings have left the window.
 #[derive(Clone, Debug)]
 pub struct SimClockOffset {
     /// `/clock` nanoseconds minus CARLA simulation nanoseconds. `i64::MIN` means unset.
@@ -133,6 +137,10 @@ impl SimClockOffset {
     /// How far before its frame's `/clock` a stamp is placed. `/clock` wobbles by 1 ns;
     /// a microsecond is a thousand times that and still moves a 20 m/s ego by 20 um.
     pub const MARGIN_NANOS: i64 = 1_000;
+    /// Readings a cluster needs before it can set the offset: enough that one stray reading
+    /// cannot move every stamp a frame ahead, few enough that a correct pairing seen in 3%
+    /// of the window still wins.
+    pub const MIN_SUPPORT: usize = 3;
     /// Cluster tolerance before a tick length is known.
     const DEFAULT_TOLERANCE_NANOS: i64 = 10_000_000;
 
@@ -199,18 +207,24 @@ impl SimClockOffset {
         self.offset_nanos.store(offset, Relaxed);
     }
 
-    /// The newest reading of the largest cluster (readings within `tolerance` of one
-    /// another); a tie goes to the cluster holding `current`, then to the newer reading.
+    /// The newest reading of the highest cluster (readings within `tolerance` of one
+    /// another) holding at least [`Self::MIN_SUPPORT`] readings, or the current one while any
+    /// of it remains; the highest reading if none qualifies yet.
     fn settle(recent: &std::collections::VecDeque<i64>, current: i64, tolerance: i64) -> i64 {
         let near = |a: i64, b: i64| (a - b).abs() <= tolerance;
+        let support = |r: i64| recent.iter().filter(|&&x| near(x, r)).count();
         let best = recent
             .iter()
-            .enumerate()
-            .max_by_key(|&(i, &r)| {
-                let n = recent.iter().filter(|&&x| near(x, r)).count();
-                (n, current != i64::MIN && near(r, current), i)
+            .copied()
+            // The current cluster stays eligible while any of it is left in the window, so a
+            // low cluster reaching MIN_SUPPORT first (the first ticks) cannot unseat it.
+            .filter(|&r| {
+                support(r) >= Self::MIN_SUPPORT || (current != i64::MIN && near(r, current))
             })
-            .map(|(_, &r)| r);
+            .max()
+            // Too few readings for any cluster to qualify (the first ticks of an epoch):
+            // the highest is still the likeliest correct pairing.
+            .or_else(|| recent.iter().copied().max());
         match best {
             Some(center) => recent
                 .iter()
@@ -435,6 +449,33 @@ mod tests {
             let steps: std::collections::BTreeSet<i64> =
                 stamps.windows(2).map(|w| w[1] - w[0]).collect();
             assert_eq!(steps, [STEP].into(), "1 in {every} readings low");
+        }
+    }
+
+    /// The low readings may be the majority, or split evenly with the correct ones, as
+    /// measured on an idle disk: stamps must still follow the correct pairing, one per tick.
+    #[test]
+    fn a_low_majority_or_even_split_does_not_move_the_stamps() {
+        for low_in_4 in [2u32, 3] {
+            let offset = SimClockOffset::new();
+            let base = 7_000.654_321_2;
+            let clock0: i64 = 80_000_000_000;
+            let mut prev = None;
+            for k in 0..3000u32 {
+                let clock = clock0 + i64::from(k) * STEP;
+                // A deterministic but irregular pattern: `low_in_4` of every 4 low.
+                let low = (k.wrapping_mul(2_654_435_761) >> 7) % 4 < low_in_4;
+                let seen = if low { clock - STEP } else { clock };
+                offset.observe_nanos(seen, carla_secs(base, k), TICK);
+                let s = offset.stamp_nanos(carla_secs(base, k)).unwrap();
+                if k >= 10 {
+                    assert_eq!(s, clock - M, "{low_in_4}/4 low, tick {k}");
+                }
+                if let Some(p) = prev {
+                    assert!(s > p, "{low_in_4}/4 low, tick {k}: stamp not increasing");
+                }
+                prev = Some(s);
+            }
         }
     }
 
