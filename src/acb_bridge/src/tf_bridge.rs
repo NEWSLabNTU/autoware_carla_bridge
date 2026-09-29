@@ -35,6 +35,7 @@ impl TFBuffer {
                 "/tf_static".reliable().transient_local(),
                 move |msg: tf2_msgs::msg::TFMessage| {
                     let mut tf_map = transforms_cb.lock().unwrap();
+                    let known = tf_map.len();
 
                     for transform in &msg.transforms {
                         tracing::debug!(
@@ -49,7 +50,15 @@ impl TFBuffer {
                         tf_map.insert(transform.child_frame_id.clone(), transform.clone());
                     }
 
-                    tracing::info!("TF Buffer updated: {} transforms", tf_map.len());
+                    // Only a change is news. SSv2 republishes its `ego` and `entities` frames
+                    // on /tf_static at the frame rate, so logging every message wrote ~40
+                    // lines a second from the main loop -- and each write could block on a
+                    // busy disk for seconds (see log_writer).
+                    if tf_map.len() != known {
+                        tracing::info!("TF Buffer updated: {} transforms", tf_map.len());
+                    } else {
+                        tracing::trace!("TF Buffer refreshed: {} transforms", tf_map.len());
+                    }
                 },
             )
             .map_err(|e| {

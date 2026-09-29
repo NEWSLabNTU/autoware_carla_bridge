@@ -7,6 +7,7 @@ mod coordinate_conversion;
 mod error;
 mod control_trace;
 mod ground_truth_objects;
+mod log_writer;
 mod longitudinal_map;
 mod sensor_config;
 mod sensor_release;
@@ -710,12 +711,18 @@ fn main() -> Result<()> {
     // Install color-eyre for better error reporting
     color_eyre::install().expect("Failed to install color-eyre");
 
-    // Initialize tracing subscriber with env filter
+    // Initialize tracing subscriber with env filter.
+    //
+    // Through a writer thread, never straight to stdout: stdout is a file on a disk that
+    // can hold a `write()` for seconds, and the main loop logs. See log_writer.
+    let (log, _log_guard) =
+        log_writer::NonBlockingLog::new(std::io::stdout(), log_writer::QUEUE_LINES);
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
+        .with_writer(log)
         .init();
 
     // Flag for graceful shutdown when Ctrl-C is pressed
