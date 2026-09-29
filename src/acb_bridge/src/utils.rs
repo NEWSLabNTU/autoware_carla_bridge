@@ -63,19 +63,33 @@ pub fn ros_time_now_secs(node: &rclrs::Node) -> f64 {
 /// jump of about 31 s was measured at one run boundary -- so a value learned once would be
 /// wrong for every run after the first.
 ///
-/// # Stamps must land exactly on the `/clock` grid
+/// # A stamp must never be later than its frame's `/clock`
 ///
-/// A sensor stamp has to equal, to the nanosecond, the `/clock` value of the frame it was
-/// taken in. NDT's pose buffer (`SmartPoseBuffer::pop_old`) drops every EKF pose stamped
-/// *strictly* before the scan it just matched. When a scan came out 1 ns after the EKF pose
-/// of its own frame -- `...800433` against `...800432`, from truncating CARLA's `f64` seconds
-/// with `as i64` at two different ticks -- that pop emptied the buffer, the next scan found
-/// `pose_buffer_.size() < 2`, and NDT warned "Couldn't interpolate pose" on alternate scans
-/// (135 of 427 in one ego_drive). The graph needs `/autoware/localization` at OK for the
-/// autonomous mode to count as available, so each warning that happened to be current when
-/// the graph was evaluated was an MRM emergency stop -- 26 of the 27 driving MRMs across one
-/// seven-run suite. So both CARLA readings are rounded to the microsecond (CARLA's step is a
-/// whole number of milliseconds; the `f64` noise is far below that) and the stamp is exact.
+/// NDT's pose buffer (`SmartPoseBuffer::pop_old`) drops every EKF pose stamped *strictly*
+/// before the scan it just matched, and the EKF stamps its poses with `/clock`. A scan stamped
+/// even 1 ns after the `/clock` of its own frame therefore drops that frame's pose, and the
+/// next scan -- which arrives before the EKF has published another -- finds
+/// `pose_buffer_.size() < 2`: "Couldn't interpolate pose". The diagnostic graph requires
+/// `/autoware/localization` at OK for the autonomous mode (Autoware counts a mode available
+/// only at OK, so a WARN is enough), and every such warning the graph caught was an MRM
+/// emergency stop. A stamp slightly *early* is harmless: the pose it interpolates is the
+/// frame's own to within a microsecond, and nothing is popped that is still needed.
+///
+/// Exact equality is not attainable, for two measured reasons:
+///
+/// - CARLA steps its clock by `fixed_delta_seconds` held as an `f32`: 0.05 becomes
+///   0.050000000745 s, so `elapsed_seconds` runs 0.745 ns per tick ahead of the 50 ms grid
+///   SSv2's `/clock` follows. Rounded to the microsecond (the previous scheme), the reading
+///   gained a whole microsecond every ~1340 ticks; the most-frequent-reading window then
+///   kept the old offset for half a window, ~2.5 s, stamping every scan 1 us *late* -- a
+///   2.5 s "Couldn't interpolate pose" episode and an emergency stop, 16 of 16 MRM onsets in
+///   one session (roadmap 014, 2026-09-29).
+/// - SSv2 computes `/clock` in floating point: its steps are 50 ms +- 1 ns, and the phase
+///   of the grid wobbles by a nanosecond from frame to frame.
+///
+/// So a stamp is placed on the grid of the newest `/clock` reading, one CARLA tick apart
+/// (snapping removes CARLA's drift entirely), and then [`SimClockOffset::MARGIN_NANOS`]
+/// before it, which covers the nanosecond wobble with room to spare.
 ///
 /// # One reading does not decide the offset
 ///
@@ -85,15 +99,21 @@ pub fn ros_time_now_secs(node: &rclrs::Node) -> f64 {
 /// spin happened to catch: two values a frame apart, in proportions that vary from run to
 /// run (72:28 in one, 5:95 in the next). Taking each reading as the offset made the stamps
 /// flip between the two, publishing some scans twice under one stamp and skipping the
-/// next (74 of 701 in one run). So the offset is the most frequent reading of the last
-/// [`SimClockOffset::WINDOW`], and a tie keeps the current one: it no longer flips, and a
-/// genuine change still wins within the window. A change of more than
-/// [`SimClockOffset::EPOCH_JUMP_NANOS`] is a new `/clock` epoch and is taken at once.
+/// next (74 of 701 in one run). So the offset comes from the largest cluster of the last
+/// [`SimClockOffset::WINDOW`] readings, readings within a quarter tick counting as one
+/// value (the drift above would otherwise split the majority in two and hand the window to
+/// the minority, stamping a scan a whole frame ahead); a tie keeps the current cluster. A
+/// change of more than [`SimClockOffset::EPOCH_JUMP_NANOS`] is a new `/clock` epoch and is
+/// taken at once.
 #[derive(Clone, Debug)]
 pub struct SimClockOffset {
     /// `/clock` nanoseconds minus CARLA simulation nanoseconds. `i64::MIN` means unset.
     offset_nanos: std::sync::Arc<std::sync::atomic::AtomicI64>,
-    /// The most recent readings, newest last; the offset is their most frequent value.
+    /// The newest `/clock` reading: the phase of the grid stamps are placed on.
+    clock_nanos: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    /// One CARLA tick in nanoseconds, the grid's spacing; 0 until a tick length is known.
+    step_nanos: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    /// The most recent readings, newest last.
     recent: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<i64>>>,
 }
 
@@ -104,48 +124,63 @@ impl Default for SimClockOffset {
 }
 
 impl SimClockOffset {
-    /// Readings the most frequent value is taken over: several seconds at the main loop's
-    /// 12-20 Hz.
+    /// Readings the offset is taken over: several seconds at the main loop's 12-20 Hz.
     pub const WINDOW: usize = 100;
     /// A reading this far from the current offset starts a new epoch (a new scenario).
     /// Far above the one-frame disagreement the window settles, far below the ~31 s
     /// measured at a run boundary.
     pub const EPOCH_JUMP_NANOS: i64 = 500_000_000;
+    /// How far before its frame's `/clock` a stamp is placed. `/clock` wobbles by 1 ns;
+    /// a microsecond is a thousand times that and still moves a 20 m/s ego by 20 um.
+    pub const MARGIN_NANOS: i64 = 1_000;
+    /// Cluster tolerance before a tick length is known.
+    const DEFAULT_TOLERANCE_NANOS: i64 = 10_000_000;
 
     pub fn new() -> Self {
         Self {
             offset_nanos: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(i64::MIN)),
+            clock_nanos: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(i64::MIN)),
+            step_nanos: std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0)),
             recent: std::sync::Arc::new(std::sync::Mutex::new(
                 std::collections::VecDeque::with_capacity(Self::WINDOW),
             )),
         }
     }
 
-    /// CARLA seconds as whole microseconds, in nanoseconds. See the type documentation.
+    /// CARLA seconds in nanoseconds. Deliberately unrounded: the grid snap in
+    /// [`Self::stamp_nanos`] is what makes stamps exact, not rounding here.
     fn carla_nanos(carla_secs: f64) -> i64 {
-        (carla_secs * 1e6).round() as i64 * 1_000
+        (carla_secs * 1e9).round() as i64
     }
 
     /// Re-learn the offset from a `/clock` reading and a CARLA reading taken together.
     ///
     /// Called once per tick from the main loop, which is where both clocks are in hand.
-    pub fn observe(&self, node: &rclrs::Node, carla_elapsed_secs: f64) {
-        self.observe_nanos(node.get_clock().now().nsec, carla_elapsed_secs);
+    /// `tick_secs` is CARLA's `delta_seconds`, the spacing of the grid stamps land on.
+    pub fn observe(&self, node: &rclrs::Node, carla_elapsed_secs: f64, tick_secs: f64) {
+        self.observe_nanos(node.get_clock().now().nsec, carla_elapsed_secs, tick_secs);
     }
 
     /// [`Self::observe`] with the `/clock` reading already taken.
-    pub fn observe_nanos(&self, ros_nanos: i64, carla_elapsed_secs: f64) {
+    pub fn observe_nanos(&self, ros_nanos: i64, carla_elapsed_secs: f64, tick_secs: f64) {
         if carla_elapsed_secs <= 0.0 {
             return; // no frame yet; nothing to anchor to
         }
         if ros_nanos <= 0 {
             return; // simulation clock not driven yet
         }
+        use std::sync::atomic::Ordering::Relaxed;
+        // CARLA's tick is a whole number of microseconds; its f32 excess is not a real step.
+        let step = if tick_secs > 0.0 {
+            (tick_secs * 1e6).round() as i64 * 1_000
+        } else {
+            self.step_nanos.load(Relaxed)
+        };
         let reading = ros_nanos - Self::carla_nanos(carla_elapsed_secs);
         // A poisoned lock only means another observer panicked mid-update; the readings
         // themselves are plain integers and still usable.
         let mut recent = self.recent.lock().unwrap_or_else(|e| e.into_inner());
-        let current = self.offset_nanos.load(std::sync::atomic::Ordering::Relaxed);
+        let current = self.offset_nanos.load(Relaxed);
         if current != i64::MIN && (reading - current).abs() > Self::EPOCH_JUMP_NANOS {
             recent.clear();
         }
@@ -153,24 +188,38 @@ impl SimClockOffset {
             recent.pop_front();
         }
         recent.push_back(reading);
-        let offset = Self::settle(&recent, current);
-        self.offset_nanos
-            .store(offset, std::sync::atomic::Ordering::Relaxed);
+        let tolerance = if step > 0 {
+            step / 4
+        } else {
+            Self::DEFAULT_TOLERANCE_NANOS
+        };
+        let offset = Self::settle(&recent, current, tolerance);
+        self.step_nanos.store(step, Relaxed);
+        self.clock_nanos.store(ros_nanos, Relaxed);
+        self.offset_nanos.store(offset, Relaxed);
     }
 
-    /// The most frequent reading; `current` wins a tie, then the larger value.
-    fn settle(recent: &std::collections::VecDeque<i64>, current: i64) -> i64 {
-        let mut counts: Vec<(i64, usize)> = Vec::new();
-        for &r in recent {
-            match counts.iter_mut().find(|(v, _)| *v == r) {
-                Some((_, n)) => *n += 1,
-                None => counts.push((r, 1)),
-            }
+    /// The newest reading of the largest cluster (readings within `tolerance` of one
+    /// another); a tie goes to the cluster holding `current`, then to the newer reading.
+    fn settle(recent: &std::collections::VecDeque<i64>, current: i64, tolerance: i64) -> i64 {
+        let near = |a: i64, b: i64| (a - b).abs() <= tolerance;
+        let best = recent
+            .iter()
+            .enumerate()
+            .max_by_key(|&(i, &r)| {
+                let n = recent.iter().filter(|&&x| near(x, r)).count();
+                (n, current != i64::MIN && near(r, current), i)
+            })
+            .map(|(_, &r)| r);
+        match best {
+            Some(center) => recent
+                .iter()
+                .rev()
+                .copied()
+                .find(|&x| near(x, center))
+                .unwrap_or(center),
+            None => current,
         }
-        counts
-            .into_iter()
-            .max_by_key(|&(v, n)| (n, v == current, v))
-            .map_or(current, |(v, _)| v)
     }
 
     /// Stamp for a CARLA sensor timestamp, or `None` before the offset is known.
@@ -179,13 +228,24 @@ impl SimClockOffset {
             .map(nanos_to_ros_time)
     }
 
-    /// [`Self::stamp`] as nanoseconds.
+    /// [`Self::stamp`] as nanoseconds: on the `/clock` grid, [`Self::MARGIN_NANOS`] early.
     pub fn stamp_nanos(&self, carla_timestamp_secs: f64) -> Option<i64> {
-        let offset = self.offset_nanos.load(std::sync::atomic::Ordering::Relaxed);
+        use std::sync::atomic::Ordering::Relaxed;
+        let offset = self.offset_nanos.load(Relaxed);
         if offset == i64::MIN {
             return None;
         }
-        Some(Self::carla_nanos(carla_timestamp_secs) + offset)
+        let raw = Self::carla_nanos(carla_timestamp_secs) + offset;
+        let step = self.step_nanos.load(Relaxed);
+        let clock = self.clock_nanos.load(Relaxed);
+        let on_grid = if step > 0 && clock != i64::MIN {
+            let d = raw - clock;
+            // Nearest grid point; `raw` is within microseconds of one.
+            clock + (d + d.signum() * step / 2) / step * step
+        } else {
+            raw
+        };
+        Some(on_grid - Self::MARGIN_NANOS)
     }
 }
 
@@ -292,32 +352,44 @@ mod tests {
         assert!((epoch.to_sim_time(13.5) - 1.5).abs() < 1e-9);
     }
 
-    /// CARLA's elapsed time accumulated in `f64` over a long uptime, as the server
-    /// reports it: `k` steps of 0.05 s past `base`, with the rounding noise that brings.
+    const TICK: f64 = 0.05;
+    const STEP: i64 = 50_000_000;
+    const M: i64 = SimClockOffset::MARGIN_NANOS;
+
+    /// CARLA's elapsed time as the server reports it: `k` ticks past `base`, each the
+    /// `f32` 0.05 (0.050000000745 s) accumulated in `f64` -- 0.745 ns per tick ahead of the
+    /// 50 ms grid, a whole microsecond every ~1340 ticks.
     fn carla_secs(base: f64, k: u32) -> f64 {
-        (0..k).fold(base, |t, _| t + 0.05)
+        (0..k).fold(base, |t, _| t + f64::from(0.05f32))
     }
 
-    /// The regression: a scan stamped even 1 ns after its frame's `/clock` value makes NDT
-    /// discard that frame's EKF pose and fail the next scan. Every tick's stamp must equal
-    /// the `/clock` value of that tick exactly, whichever tick the offset was learned at.
+    /// SSv2's `/clock` for tick `k`: a 50 ms grid whose phase wobbles by a nanosecond, as
+    /// measured (steps of 49999999, 50000000 and 50000001 ns).
+    fn clock_of(clock0: i64, k: u32) -> i64 {
+        clock0 + i64::from(k) * STEP + [0, -1, 0, 1][k as usize % 4]
+    }
+
+    /// The regression: a scan stamped even 1 ns after its frame's `/clock` makes NDT drop
+    /// that frame's EKF pose and fail the next scan. Over 5000 ticks -- CARLA's drift
+    /// crosses three microsecond boundaries, which used to stamp ~50 ticks each a
+    /// microsecond late -- every stamp must sit just before the `/clock` of its tick.
     #[test]
-    fn stamps_land_exactly_on_the_clock_grid() {
+    fn stamps_never_pass_the_clock_of_their_tick() {
         let clock0: i64 = 1_790_548_286_337_800_432;
         let base = 264_104.123_456_7;
         let offset = SimClockOffset::new();
-        for k in 0..400u32 {
-            let clock = clock0 + i64::from(k) * 50_000_000;
-            let carla = carla_secs(base, k);
-            offset.observe_nanos(clock, carla);
+        for k in 0..5000u32 {
+            let clock = clock_of(clock0, k);
+            offset.observe_nanos(clock, carla_secs(base, k), TICK);
             // The sensor of this tick, and of the tick the next reading will cover.
-            assert_eq!(offset.stamp_nanos(carla), Some(clock), "tick {k}");
-            let next = carla_secs(base, k + 1);
-            assert_eq!(
-                offset.stamp_nanos(next),
-                Some(clock + 50_000_000),
-                "tick {k}+1"
-            );
+            for (tick, truth) in [(k, clock), (k + 1, clock_of(clock0, k + 1))] {
+                let s = offset.stamp_nanos(carla_secs(base, tick)).unwrap();
+                assert!(s < truth, "tick {tick}: stamp {s} not before clock {truth}");
+                assert!(
+                    truth - s <= M + 2,
+                    "tick {tick}: stamp {s} too early for {truth}"
+                );
+            }
         }
     }
 
@@ -327,58 +399,63 @@ mod tests {
     fn a_reading_one_frame_low_is_ignored() {
         let offset = SimClockOffset::new();
         let base = 1000.0;
-        offset.observe_nanos(60_000_000_000, carla_secs(base, 0));
+        offset.observe_nanos(60_000_000_000, carla_secs(base, 0), TICK);
         // Next tick: CARLA advanced, /clock not yet.
-        offset.observe_nanos(60_000_000_000, carla_secs(base, 1));
+        offset.observe_nanos(60_000_000_000, carla_secs(base, 1), TICK);
         assert_eq!(
             offset.stamp_nanos(carla_secs(base, 1)),
-            Some(60_050_000_000)
+            Some(60_050_000_000 - M)
         );
     }
 
     /// Readings split between two values a frame apart, as measured live (5% one way in
-    /// one run, 28% the other way in another), must give one stamp per tick, never two.
+    /// one run, 28% the other way in another), must give one stamp per tick, never two --
+    /// also while CARLA's drift carries the majority across microsecond boundaries, which
+    /// used to split it in two and let the minority win the window.
     #[test]
     fn a_mixed_stream_of_readings_does_not_flip_the_stamps() {
         for every in [20u32, 4, 3] {
             let offset = SimClockOffset::new();
-            let base = 5000.0;
+            let base = 5_000.123_456_4;
             let clock0: i64 = 70_000_000_000;
             let mut stamps = Vec::new();
-            for k in 0..600u32 {
-                let clock = clock0 + i64::from(k) * 50_000_000;
+            for k in 0..4000u32 {
+                let clock = clock0 + i64::from(k) * STEP;
                 // The minority reading still pairs this tick with the previous /clock.
                 let seen = if (k + 1) % every == 0 {
-                    clock - 50_000_000
+                    clock - STEP
                 } else {
                     clock
                 };
-                offset.observe_nanos(seen, carla_secs(base, k));
-                stamps.push(offset.stamp_nanos(carla_secs(base, k)).unwrap());
+                offset.observe_nanos(seen, carla_secs(base, k), TICK);
+                let s = offset.stamp_nanos(carla_secs(base, k)).unwrap();
+                assert!(s < clock, "1 in {every}, tick {k}");
+                stamps.push(s);
             }
             let steps: std::collections::BTreeSet<i64> =
                 stamps.windows(2).map(|w| w[1] - w[0]).collect();
-            assert_eq!(steps, [50_000_000].into(), "1 in {every} readings low");
+            assert_eq!(steps, [STEP].into(), "1 in {every} readings low");
         }
     }
 
-    /// A lasting change is followed once the low readings fill the window.
+    /// A lasting change is followed once the new readings are the majority of the window.
     #[test]
     fn a_lasting_change_is_followed_within_the_window() {
         let offset = SimClockOffset::new();
         let base = 1000.0;
-        offset.observe_nanos(60_000_000_000, carla_secs(base, 0));
+        offset.observe_nanos(60_000_000_000, carla_secs(base, 0), TICK);
         for k in 1..=SimClockOffset::WINDOW as u32 {
             // CARLA ticks once more per frame than /clock advances.
             offset.observe_nanos(
-                60_000_000_000 + i64::from(k - 1) * 50_000_000,
+                60_000_000_000 + i64::from(k - 1) * STEP,
                 carla_secs(base, k),
+                TICK,
             );
         }
         let k = SimClockOffset::WINDOW as u32;
         assert_eq!(
             offset.stamp_nanos(carla_secs(base, k)),
-            Some(60_000_000_000 + i64::from(k - 1) * 50_000_000)
+            Some(60_000_000_000 + i64::from(k - 1) * STEP - M)
         );
     }
 
@@ -387,11 +464,11 @@ mod tests {
     fn a_new_epoch_is_taken_at_once() {
         let offset = SimClockOffset::new();
         let base = 1000.0;
-        offset.observe_nanos(90_000_000_000, carla_secs(base, 0));
-        offset.observe_nanos(59_000_000_000, carla_secs(base, 1));
+        offset.observe_nanos(90_000_000_000, carla_secs(base, 0), TICK);
+        offset.observe_nanos(59_000_000_000, carla_secs(base, 1), TICK);
         assert_eq!(
             offset.stamp_nanos(carla_secs(base, 1)),
-            Some(59_000_000_000)
+            Some(59_000_000_000 - M)
         );
     }
 
@@ -399,7 +476,7 @@ mod tests {
     fn no_stamp_before_the_first_reading() {
         let offset = SimClockOffset::new();
         assert_eq!(offset.stamp_nanos(12.0), None);
-        offset.observe_nanos(0, 12.0); // /clock not driven yet
+        offset.observe_nanos(0, 12.0, TICK); // /clock not driven yet
         assert_eq!(offset.stamp_nanos(12.0), None);
     }
 

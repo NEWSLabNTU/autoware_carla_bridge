@@ -1291,7 +1291,8 @@ fn main() -> Result<()> {
             // scenario, so an offset learned once would be wrong for every run after the
             // first. See utils::SimClockOffset and docs/issues/016.
             if let Ok(snap) = world.snapshot() {
-                clock_offset.observe(&node, snap.timestamp().elapsed_seconds);
+                let ts = snap.timestamp();
+                clock_offset.observe(&node, ts.elapsed_seconds, ts.delta_seconds);
             }
 
             let snapshot = match carla_tick(follower, loop_duration) {

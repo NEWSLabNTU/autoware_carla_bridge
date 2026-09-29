@@ -29,13 +29,27 @@
       trans_epsilon: 0.01
 
       # The newton line search maximum step length
-      step_size: 0.1
+      #
+      # 0.05 with 60 iterations, not upstream's 0.1 with 30: the same 3 m of reach, without
+      # the two-point cycle CARLA's geometry drives the solver into. On a noise-free CARLA
+      # scan and map the Newton step at some poses is longer than 0.1 m, so it is clamped
+      # to exactly 0.1 and flips back and forth -- measured as +-(74, 2, 65) mm in x, y, z
+      # every iteration until the limit, local_optimal_solution_oscillation_num 29 of 30.
+      # That is a WARN on scan_matching_status, which takes the autonomous mode away: an
+      # emergency stop mid-way through traffic_light's last left turn at (93, -58), and
+      # once the ego stopped there the cycle held for 2611 consecutive scans and the run
+      # timed out (roadmap 014, 2026-09-29). A standalone ndt_scan_matcher replaying CARLA
+      # scans from eight poses of that turn and two of the straight: 0.1 -> 75/520 scans at
+      # the limit; 0.05 -> 1/520, same mean iterations (~7) and transform probability.
+      # 0.05 alone recovers only 0.5 m of initial error, hence 60 iterations: from 2 m off
+      # it converges in 56, where 0.1 took 22-28.
+      step_size: 0.05
 
       # The ND voxel grid resolution
       resolution: 2.0
 
       # The number of iterations required to calculate alignment
-      max_iterations: 30
+      max_iterations: 60
 
       # Number of threads used for parallel computing
       num_threads: 12
