@@ -55,6 +55,12 @@
        description="Brake response table: pedal x speed -> acceleration"/>
   <arg name="publish_clock" default="true"
        description="Publish /clock from CARLA simulation time"/>
+  <!-- Signal state from CARLA's lights, on the arbiter's V2X input. The file is the table
+       carla_scenario_bridge writes beside the Lanelet2 map at every Initialize; it is re-read
+       when it changes. Empty turns the publisher off. Only one source may feed that topic:
+       with this on, SSv2's publish_conventional_traffic_signals must be off. -->
+  <arg name="traffic_light_map_path" default=""
+       description="traffic_lights.resolved.yaml to publish signals from; empty disables"/>
 
   <!-- Launch the bridge node with ROS parameters -->
   <node pkg="acb_bridge" name="acb_bridge" exec="acb_bridge" output="screen">
@@ -77,6 +83,7 @@
     <param name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)"/>
     <param name="seed_localization_on_attach" value="$(var seed_localization_on_attach)"/>
     <param name="ground_truth_range_m" value="$(var ground_truth_range_m)"/>
+    <param name="traffic_light_map_path" value="$(var traffic_light_map_path)"/>
     <param name="control_trace_path" value="$(var control_trace_path)"/>
     <param name="accel_map_path" value="$(var accel_map_path)"/>
     <param name="brake_map_path" value="$(var brake_map_path)"/>

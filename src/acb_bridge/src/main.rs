@@ -13,6 +13,7 @@ mod sensor_config;
 mod sensor_release;
 mod tf_bridge;
 mod tick_follower;
+mod traffic_light_publisher;
 mod types;
 mod urdf_parser;
 mod utils;
@@ -172,6 +173,9 @@ struct BridgeParams {
     /// Re-seed Autoware's pose estimator when attaching to a vehicle.
     pub seed_localization_on_attach: bool,
     pub ground_truth_range_m: f64,
+    /// carla_scenario_bridge's `traffic_lights.resolved.yaml`; empty (or `none`) turns the
+    /// signal publisher off. See `traffic_light_publisher`.
+    pub traffic_light_map_path: String,
     pub honor_emergency_cmd: bool,
     pub control_trace_path: String,
     pub accel_map_path: String,
@@ -293,6 +297,12 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        let traffic_light_map_path = node
+            .declare_parameter("traffic_light_map_path")
+            .default(Arc::from(""))
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         // Measured pedal response, in the shape Autoware's raw_vehicle_cmd_converter uses.
         // Empty means fall back to the single-constant conversion this replaced.
         let accel_map_path = node
@@ -330,6 +340,7 @@ impl BridgeParams {
         let publish_ground_truth_objects_val: bool = publish_ground_truth_objects.get();
         let seed_localization_on_attach_val: bool = seed_localization_on_attach.get();
         let ground_truth_range_m_val: f64 = ground_truth_range_m.get();
+        let traffic_light_map_path_val: Arc<str> = traffic_light_map_path.get();
         let honor_emergency_cmd_val: bool = honor_emergency_cmd.get();
         let control_trace_path_val: Arc<str> = control_trace_path.get();
         let accel_map_path_val: Arc<str> = accel_map_path.get();
@@ -357,6 +368,7 @@ impl BridgeParams {
             publish_ground_truth_objects: publish_ground_truth_objects_val,
             seed_localization_on_attach: seed_localization_on_attach_val,
             ground_truth_range_m: ground_truth_range_m_val,
+            traffic_light_map_path: traffic_light_map_path_val.to_string(),
             honor_emergency_cmd: honor_emergency_cmd_val,
             control_trace_path: control_trace_path_val.to_string(),
             accel_map_path: accel_map_path_val.to_string(),
@@ -780,6 +792,21 @@ fn main() -> Result<()> {
         sim_clock.clone(),
         running.clone(),
     );
+
+    // Signal state from CARLA's lights (roadmap 015). Like the clock: its own client, from
+    // node start, so it does not depend on a hero or on csb being up.
+    let _signal_thread = traffic_light_publisher::spawn(
+        &node,
+        sim_clock.clone(),
+        traffic_light_publisher::Config {
+            address: params.carla_address.clone(),
+            port: params.carla_port,
+            map_path: params.traffic_light_map_path.clone().into(),
+            vehicle_name: params.vehicle_name.clone(),
+            range_m: params.ground_truth_range_m,
+        },
+        running.clone(),
+    )?;
 
     // `/control/control_mode_request`, answered as SSv2's stock ego simulation answers it.
     // Node-lifetime, like the clock: it must not disappear between vehicle sessions.
