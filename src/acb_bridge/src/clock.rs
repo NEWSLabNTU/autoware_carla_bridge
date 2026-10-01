@@ -39,8 +39,10 @@ use std::{
 
 use crate::error::Result;
 
-/// Seconds to integer nanoseconds. The one conversion every stamp and `/clock` value goes
-/// through, which is what makes them bit-exact with one another.
+/// Seconds to integer nanoseconds: `round(secs * 1e9)`, half away from zero (`f64::round`).
+/// The one conversion every stamp and `/clock` value goes through, which is what makes them
+/// bit-exact with one another. carla-scenario-bridge's `episode_clock::nanos` must stay
+/// identical (it reports the same integer to SSv2); both carry the same table of cases.
 pub fn nanos(secs: f64) -> i64 {
     (secs * 1e9).round() as i64
 }
@@ -623,6 +625,64 @@ mod tests {
         assert_eq!(out.publish_ns, Some(published + delta));
         let next = c.on_frame(tick(99, 3.25 + f64::from(0.05f32)), wall(t0, 3));
         assert_eq!(next.publish_ns, Some(published + 2 * delta));
+    }
+
+    /// The shared table: carla-scenario-bridge's `episode_clock.rs` carries the same cases
+    /// and must give the same nanoseconds. Exact halves round away from zero (not to even);
+    /// CARLA's f32 step 0.050000000745 is accumulated in f64, as the server does.
+    const NANOS_CASES: &[(f64, i64)] = &[
+        (0.0, 0),
+        (0.05000000074505806, 50_000_001),
+        (5e-10, 1),
+        (1.5e-9, 2),
+        (2.5e-9, 3),
+        (-2.5e-9, -3),
+        (3.5e-9, 4),
+        (0.10000000149011612, 100_000_001),
+        (0.15000000223517418, 150_000_002),
+        (67.0000009983778, 67_000_000_998),
+        (171.60000255703926, 171_600_002_557),
+        (1000.0000149011612, 1_000_000_014_901),
+        (237000.05000000075, 237_000_050_000_001),
+        (237171.60000255704, 237_171_600_002_557),
+        (1790611998.05, 1_790_611_998_049_999_872),
+    ];
+
+    /// `(base seconds, steps of f32 0.05, ns)`: the accumulations behind the table rows.
+    const STEP_CASES: &[(f64, u32, i64)] = &[
+        (0.0, 1, 50_000_001),
+        (0.0, 3, 150_000_002),
+        (0.0, 1340, 67_000_000_998),
+        (0.0, 3432, 171_600_002_557),
+        (0.0, 20000, 1_000_000_014_901),
+        (237000.0, 1, 237_000_050_000_001),
+        (237000.0, 3432, 237_171_600_002_557),
+    ];
+
+    #[test]
+    fn nanos_matches_the_shared_table() {
+        for &(secs, ns) in NANOS_CASES {
+            assert_eq!(nanos(secs), ns, "nanos({secs:?})");
+        }
+        for &(base, k, ns) in STEP_CASES {
+            assert_eq!(nanos(carla_secs(base, k)), ns, "{k} f32 steps from {base}");
+        }
+    }
+
+    /// The epoch is the sum of the rounded terms, the same as csb's: after an episode change
+    /// the sim time is `nanos(elapsed) + nanos(E_last) + nanos(Δ_last)`.
+    #[test]
+    fn epoch_sums_rounded_terms_like_csb() {
+        let mut c = EpisodeClock::new();
+        let t0 = Instant::now();
+        let e_last = carla_secs(0.0, 3432);
+        c.on_frame(tick(1, e_last), t0);
+        let elapsed = carla_secs(0.0, 1340);
+        c.on_frame(tick(2, elapsed), t0 + Duration::from_secs(1));
+        assert_eq!(
+            c.sim_ns(elapsed),
+            67_000_000_998 + 171_600_002_557 + 50_000_001
+        );
     }
 
     #[test]
