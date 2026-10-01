@@ -3,9 +3,9 @@ use std::{convert::Infallible, mem, str::FromStr, sync::Arc};
 use bytemuck::{Pod, Zeroable};
 use carla::{
     client::{ActorBase, Sensor},
-    // `SensorDataBase` gives `SensorData::timestamp()`, the simulation time the measurement
-    // was taken. That is mapped onto Autoware's `/clock` epoch by `utils::SimClockOffset`;
-    // reading the node clock inside the callback instead stamps the tick, not the sample.
+    // `SensorDataBase` gives `SensorData::timestamp()`, the CARLA frame time the measurement
+    // was taken at. `SimClock::stamp` adds the episode epoch and nothing else, so the stamp
+    // is bit-exact with that frame's `/clock` (roadmap 015).
     sensor::SensorDataBase,
     sensor::data::{
         Color, GnssMeasurement, Image as CarlaImage, ImuMeasurement, LidarMeasurement,
@@ -129,7 +129,7 @@ impl SensorBridge {
         actor: Sensor,
         bridge_type: BridgeType,
         autoware: &Autoware,
-        clock_offset: utils::SimClockOffset,
+        clock: crate::clock::SimClock,
     ) -> Result<SensorBridge> {
         let (sensor_type, sensor_name) = match bridge_type {
             BridgeType::Sensor(t, s) => (t, s),
@@ -142,19 +142,19 @@ impl SensorBridge {
 
         match sensor_type {
             SensorType::CameraRgb => {
-                register_camera_rgb(node.clone(), &actor, key_list, &sensor_name, clock_offset.clone())?;
+                register_camera_rgb(node.clone(), &actor, key_list, &sensor_name, clock.clone())?;
             }
             SensorType::LidarRayCast => {
-                register_lidar_raycast(node.clone(), &actor, key_list, &sensor_name, clock_offset.clone())?;
+                register_lidar_raycast(node.clone(), &actor, key_list, &sensor_name, clock.clone())?;
             }
             SensorType::LidarRayCastSemantic => {
-                register_lidar_raycast_semantic(node.clone(), &actor, key_list, &sensor_name, clock_offset.clone())?;
+                register_lidar_raycast_semantic(node.clone(), &actor, key_list, &sensor_name, clock.clone())?;
             }
             SensorType::Imu => {
-                register_imu(node.clone(), &actor, key_list, &sensor_name, clock_offset.clone())?;
+                register_imu(node.clone(), &actor, key_list, &sensor_name, clock.clone())?;
             }
             SensorType::Gnss => {
-                register_gnss(node.clone(), &actor, key_list, &sensor_name, clock_offset.clone())?;
+                register_gnss(node.clone(), &actor, key_list, &sensor_name, clock.clone())?;
             }
             SensorType::Collision => {
                 tracing::warn!("Collision sensor is not supported yet");
@@ -197,7 +197,7 @@ fn register_camera_rgb(
     actor: &Sensor,
     key_list: Option<Vec<String>>,
     frame_id: &str,
-    clock_offset: utils::SimClockOffset,
+    clock: crate::clock::SimClock,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let raw_topic = key_list[0].clone();
@@ -252,21 +252,15 @@ fn register_camera_rgb(
         Some(namespace) => format!("{namespace}/camera_optical_link"),
         None => frame_id.to_string(),
     };
-    let clock_node = node.clone();
 
     // Setup CARLA listener
     actor.listen(move |data| {
-        // Stamp with the simulation time the measurement was taken, mapped onto `/clock`.
-        // Falling back to the node clock covers the first callbacks, before the main loop
-        // has seen a frame to anchor the offset against.
-        let mut header = match clock_offset.stamp(data.timestamp()) {
-            Some(stamp) => std_msgs::msg::Header {
-                stamp,
-                frame_id: String::new(),
-            },
-            None => utils::create_ros_header_from_node(&clock_node),
+        // The CARLA frame time of the measurement, plus the episode epoch: the same value
+        // as that frame's `/clock`.
+        let header = std_msgs::msg::Header {
+            stamp: clock.stamp(data.timestamp()),
+            frame_id: frame_id.clone(),
         };
-        header.frame_id = frame_id.clone();
 
         if let Ok(carla_image) = data.try_into() {
             // Publish image
@@ -291,7 +285,7 @@ fn register_lidar_raycast(
     actor: &Sensor,
     key_list: Option<Vec<String>>,
     frame_id: &str,
-    clock_offset: utils::SimClockOffset,
+    clock: crate::clock::SimClock,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
@@ -302,20 +296,14 @@ fn register_lidar_raycast(
 
     // Clone frame_id for closure
     let frame_id = frame_id.to_string();
-    let clock_node = node.clone();
 
     actor.listen(move |data| {
-        // Stamp with the simulation time the measurement was taken, mapped onto `/clock`.
-        // Falling back to the node clock covers the first callbacks, before the main loop
-        // has seen a frame to anchor the offset against.
-        let mut header = match clock_offset.stamp(data.timestamp()) {
-            Some(stamp) => std_msgs::msg::Header {
-                stamp,
-                frame_id: String::new(),
-            },
-            None => utils::create_ros_header_from_node(&clock_node),
+        // The CARLA frame time of the measurement, plus the episode epoch: the same value
+        // as that frame's `/clock`.
+        let header = std_msgs::msg::Header {
+            stamp: clock.stamp(data.timestamp()),
+            frame_id: frame_id.clone(),
         };
-        header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
             if let Err(e) = publish_lidar(&publisher, header, measure) {
@@ -334,7 +322,7 @@ fn register_lidar_raycast_semantic(
     actor: &Sensor,
     key_list: Option<Vec<String>>,
     frame_id: &str,
-    clock_offset: utils::SimClockOffset,
+    clock: crate::clock::SimClock,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
@@ -345,20 +333,14 @@ fn register_lidar_raycast_semantic(
 
     // Clone frame_id for closure
     let frame_id = frame_id.to_string();
-    let clock_node = node.clone();
 
     actor.listen(move |data| {
-        // Stamp with the simulation time the measurement was taken, mapped onto `/clock`.
-        // Falling back to the node clock covers the first callbacks, before the main loop
-        // has seen a frame to anchor the offset against.
-        let mut header = match clock_offset.stamp(data.timestamp()) {
-            Some(stamp) => std_msgs::msg::Header {
-                stamp,
-                frame_id: String::new(),
-            },
-            None => utils::create_ros_header_from_node(&clock_node),
+        // The CARLA frame time of the measurement, plus the episode epoch: the same value
+        // as that frame's `/clock`.
+        let header = std_msgs::msg::Header {
+            stamp: clock.stamp(data.timestamp()),
+            frame_id: frame_id.clone(),
         };
-        header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
             if let Err(e) = publish_semantic_lidar(&publisher, header, measure) {
@@ -377,7 +359,7 @@ fn register_imu(
     actor: &Sensor,
     key_list: Option<Vec<String>>,
     frame_id: &str,
-    clock_offset: utils::SimClockOffset,
+    clock: crate::clock::SimClock,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
@@ -386,21 +368,14 @@ fn register_imu(
 
     // Clone frame_id for closure
     let frame_id = frame_id.to_string();
-    let clock_node = node.clone();
 
     actor.listen(move |data| {
-        // Stamp with the simulation time the measurement was taken, mapped onto `/clock`.
-        // Falling back to the node clock covers the first callbacks, before the main loop
-        // has seen a frame to anchor the offset against.
-        let carla_stamp = data.timestamp();
-        let mut header = match clock_offset.stamp(carla_stamp) {
-            Some(stamp) => std_msgs::msg::Header {
-                stamp,
-                frame_id: String::new(),
-            },
-            None => utils::create_ros_header_from_node(&clock_node),
+        // The CARLA frame time of the measurement, plus the episode epoch: the same value
+        // as that frame's `/clock`.
+        let header = std_msgs::msg::Header {
+            stamp: clock.stamp(data.timestamp()),
+            frame_id: frame_id.clone(),
         };
-        header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
             if let Err(e) = publish_imu(&publisher, header, measure) {
@@ -419,7 +394,7 @@ fn register_gnss(
     actor: &Sensor,
     key_list: Option<Vec<String>>,
     frame_id: &str,
-    clock_offset: utils::SimClockOffset,
+    clock: crate::clock::SimClock,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
@@ -428,20 +403,14 @@ fn register_gnss(
 
     // Clone frame_id for closure
     let frame_id = frame_id.to_string();
-    let clock_node = node.clone();
 
     actor.listen(move |data| {
-        // Stamp with the simulation time the measurement was taken, mapped onto `/clock`.
-        // Falling back to the node clock covers the first callbacks, before the main loop
-        // has seen a frame to anchor the offset against.
-        let mut header = match clock_offset.stamp(data.timestamp()) {
-            Some(stamp) => std_msgs::msg::Header {
-                stamp,
-                frame_id: String::new(),
-            },
-            None => utils::create_ros_header_from_node(&clock_node),
+        // The CARLA frame time of the measurement, plus the episode epoch: the same value
+        // as that frame's `/clock`.
+        let header = std_msgs::msg::Header {
+            stamp: clock.stamp(data.timestamp()),
+            frame_id: frame_id.clone(),
         };
-        header.frame_id = frame_id.clone();
 
         if let Ok(measure) = data.try_into() {
             if let Err(e) = publish_gnss(&publisher, header, measure) {

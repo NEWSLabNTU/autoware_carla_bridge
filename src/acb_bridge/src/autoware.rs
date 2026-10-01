@@ -591,11 +591,11 @@ impl Autoware {
     /// 4. Handling localization initialization/re-initialization
     ///
     /// # Arguments
-    /// * `sim_time` - CARLA simulation time in seconds
+    /// * `stamp` - the frame's CARLA time plus the episode epoch (`SimClock::stamp`)
     ///
     /// # Returns
     /// Result indicating success or error
-    pub fn tick(&self, sim_time: f64) -> Result<()> {
+    pub fn tick(&self, stamp: &builtin_interfaces::msg::Time) -> Result<()> {
         // Get vehicle from stored reference
         let vehicle_arc = self.vehicle.as_ref().ok_or_else(|| {
             BridgeError::AutowareIssue("Vehicle not set - call set_vehicle() first".to_string())
@@ -693,11 +693,8 @@ impl Autoware {
                 na_angular_velocity.z as f64,
             ));
 
-        // Create ROS timestamp
-        let ros_timestamp = builtin_interfaces::msg::Time {
-            sec: sim_time as i32,
-            nanosec: ((sim_time - sim_time.floor()) * 1e9) as u32,
-        };
+        // The frame's own time, not the node clock: bit-exact with that frame's `/clock`.
+        let ros_timestamp = stamp.clone();
 
         // Publish ground truth
         self.publish_ground_truth(

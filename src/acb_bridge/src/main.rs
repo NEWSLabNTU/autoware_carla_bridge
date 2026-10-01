@@ -30,7 +30,7 @@ use std::{
 
 use carla::client::{ActorBase, Client};
 use carla_vehicle::CarlaVehicle;
-use clock::SimulatorClock;
+use clock::SimClock;
 use error::Result;
 use rclrs::CreateBasicExecutor;
 
@@ -76,7 +76,7 @@ fn create_sensor_bridges(
     node: rclrs::Node,
     carla_vehicle: &CarlaVehicle,
     autoware: &autoware::Autoware,
-    clock_offset: utils::SimClockOffset,
+    clock: SimClock,
 ) -> Result<Vec<SensorBridge>> {
     let sensor_types = carla_vehicle.get_sensor_types();
     let sensors = carla_vehicle.get_sensors();
@@ -104,7 +104,7 @@ fn create_sensor_bridges(
         let bridge_type = BridgeType::Sensor(mapped_type, link_name.clone());
 
         // Create sensor bridge
-        match SensorBridge::new(node.clone(), sensor, bridge_type, autoware, clock_offset.clone()) {
+        match SensorBridge::new(node.clone(), sensor, bridge_type, autoware, clock.clone()) {
             Ok(bridge) => {
                 tracing::info!(
                     "Created sensor bridge for '{}' (type: {:?})",
@@ -136,12 +136,14 @@ struct BridgeParams {
     /// Publish pose directly to /localization/kinematic_state (bypasses Autoware localization)
     /// Set to true for testing without Autoware localization pipeline
     pub publish_direct_localization: bool,
-    /// Publish `/clock` from CARLA simulation time.
+    /// Publish `/clock` (CARLA `elapsed_seconds` plus the episode epoch, see `clock`).
     ///
-    /// Must be `false` in the scenario ego's ROS domain, where SSv2's `traffic_simulator`
-    /// already owns `/clock` — two publishers make every localization node log
-    /// "Detected jump back in time. Clearing TF buffer". Stays `true` in background-AV
-    /// domains, which have no SSv2 and would otherwise have no simulation clock at all.
+    /// An emergency off, not a mode switch: this bridge owns `/clock` in every domain
+    /// (roadmap 015). Turning it off leaves every stamp unchanged -- they are CARLA frame
+    /// times either way -- and only silences the topic, for a domain where something else
+    /// still publishes one (an SSv2 that has not been switched to `clock_source:
+    /// simulator`); two publishers make every localization node log "Detected jump back in
+    /// time. Clearing TF buffer".
     pub publish_clock: bool,
     /// Scenario runner's release-notice PUB socket, or empty to disable the channel.
     ///
@@ -763,19 +765,25 @@ fn main() -> Result<()> {
     if params.publish_clock {
         tracing::info!("publish_clock: true (this bridge owns /clock in its ROS domain)");
     } else {
-        tracing::info!("publish_clock: false (something else owns /clock, e.g. SSv2)");
+        tracing::warn!(
+            "publish_clock: false -- /clock is OFF. Stamps are still CARLA frame times;              whatever publishes /clock here must publish the same time base"
+        );
     }
 
-    // Create clock publisher (persists across reconnections)
-    let simulator_clock = SimulatorClock::new(node.clone())?;
+    // Simulation time: CARLA frame time plus the episode epoch, for every stamp and for
+    // /clock. /clock runs on a client of its own from the moment CARLA answers -- not from
+    // hero attach -- and keeps running across vehicle sessions and reconnects. See clock.rs.
+    let sim_clock = SimClock::new(&node, params.publish_clock)?;
+    let _clock_thread = clock::spawn_clock_source(
+        params.carla_address.clone(),
+        params.carla_port,
+        sim_clock.clone(),
+        running.clone(),
+    );
 
     // `/control/control_mode_request`, answered as SSv2's stock ego simulation answers it.
     // Node-lifetime, like the clock: it must not disappear between vehicle sessions.
     let _control_mode_service = vehicle_control::ControlModeService::new(&node)?;
-
-    // CARLA reports server uptime, not scenario time. Reset per CARLA connection: a
-    // restarted server rewinds elapsed_seconds.
-    let mut clock_epoch = utils::ClockEpoch::new();
 
     // === Step 3: Create Autoware coordinator and wait for Autoware ===
     tracing::info!("Creating Autoware coordinator...");
@@ -890,14 +898,9 @@ fn main() -> Result<()> {
     // ========================================================================
     // CARLA connection loop: connect → spawn → run → reconnect on disconnect
     // ========================================================================
-    // False when only Autoware restarted: CARLA is still healthy, so its connection and
-    // simulation clock must be preserved.
+    // False when only Autoware restarted: CARLA is still healthy, so its connection is
+    // kept. (The simulation clock is not tied to this connection at all; see clock.rs.)
     let mut reconnect_carla = true;
-    // Whether the coming reconnect is because CARLA went away. A reconnect made purely to
-    // drop stale sensor streams (see SessionExit::VehicleLost) talks to the same server,
-    // whose uptime never paused -- rebasing the clock there would rewind `/clock` under a
-    // background AV that owns it, which is the "Detected jump back in time" failure.
-    let mut carla_may_have_restarted = true;
     let mut client: Option<Client> = None;
 
     loop {
@@ -907,11 +910,6 @@ fn main() -> Result<()> {
                 Some(c) => Some(c),
                 None => return Ok(()), // Ctrl-C during connection
             };
-
-            // A reconnected (possibly restarted) server may have rewound its uptime.
-            if carla_may_have_restarted {
-                clock_epoch.reset();
-            }
         }
         let client = client.as_ref().expect("client connected above");
 
@@ -992,11 +990,8 @@ fn main() -> Result<()> {
 
         // === Create sensor bridges ===
         //
-        // The sensor clock is shared with every bridge and re-anchored each frame by the
-        // main loop, so sensor stamps carry the simulation time a measurement was taken
-        // rather than whichever `/clock` tick happened to be current when the CARLA
-        // callback ran. See utils::SimClockOffset and docs/issues/016.
-        let clock_offset = utils::SimClockOffset::new();
+        // Each sensor stamps with its measurement's own CARLA frame time plus the episode
+        // epoch (`SimClock::stamp`): the same nanoseconds as that frame's `/clock`.
 
         // Optional: report CARLA's actors as perception output instead of deriving them
         // from the LiDAR. Off unless asked for, and only correct with Autoware's own
@@ -1023,7 +1018,7 @@ fn main() -> Result<()> {
                 node.clone(),
                 &carla_vehicle.lock().unwrap(),
                 &autoware,
-                clock_offset.clone(),
+                sim_clock.clone(),
             )?;
         tracing::info!("Created {} sensor bridges", _sensor_bridges.len());
 
@@ -1180,14 +1175,8 @@ fn main() -> Result<()> {
         // Consecutive ticks with no frame. Only used to rate-limit the log; a paused
         // simulation is a normal state that can last minutes.
         let mut idle_ticks: u64 = 0;
-        // Last CARLA frame whose time was published on /clock. Used to emit the frames a
-        // slow loop iteration skipped over -- see the publish site below.
-        let mut last_clock_frame: Option<usize> = None;
-        let clock_decimate: usize = std::env::var("ACB_CLOCK_DECIMATE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|n| *n >= 1)
-            .unwrap_or(1);
+        // The stamp of the last frame published, for the despawn standstill samples.
+        let mut last_frame_stamp: Option<builtin_interfaces::msg::Time> = None;
         /// Roughly one loop period each, so this is ~2s of silence before the first note.
         const IDLE_TICKS_BEFORE_FIRST_LOG: u64 = 40;
         /// After that, roughly every 30s at a 50ms loop.
@@ -1286,14 +1275,6 @@ fn main() -> Result<()> {
                     );
                 }
             };
-
-            // Re-anchor the sensor clock every frame. `/clock` restarts with each
-            // scenario, so an offset learned once would be wrong for every run after the
-            // first. See utils::SimClockOffset and docs/issues/016.
-            if let Ok(snap) = world.snapshot() {
-                let ts = snap.timestamp();
-                clock_offset.observe(&node, ts.elapsed_seconds, ts.delta_seconds);
-            }
 
             let snapshot = match carla_tick(follower, loop_duration) {
                 Ok(Some(snapshot)) => {
@@ -1396,68 +1377,12 @@ fn main() -> Result<()> {
                 break SessionExit::VehicleLost;
             }
 
-            let sec = snapshot.timestamp().elapsed_seconds;
+            // Everything this frame publishes carries the frame's own CARLA time plus the
+            // episode epoch -- the value of its `/clock`, to the nanosecond -- never the node
+            // clock, which is that `/clock` echoed back a frame late (roadmap 015).
+            let stamp = sim_clock.stamp(snapshot.timestamp().elapsed_seconds);
 
-            // Publish clock, but only if we own it in this domain. `sec` is CARLA server
-            // uptime, so it is rebased onto scenario time before publishing.
-            //
-            // One message per CARLA FRAME, not per loop iteration. `wait_for_tick_or_timeout`
-            // returns the newest frame, not the next one, so an iteration slower than the
-            // server's tick silently swallows the frames in between -- and this loop is
-            // slower: it turns at ~14 Hz against a 20 Hz server. Measured, the clock that
-            // came out advanced in a mix of 50 ms and 100 ms steps, median 50 and mean
-            // 67.79, which puts about a third of its messages at double size. SSv2's clock,
-            // by contrast, is a metronome (median 99.97 ms, mean 100.01).
-            //
-            // So fill in what the iteration jumped over. The frames are real frames that
-            // happened on the server; their times are exact, not interpolated, because
-            // `delta_seconds` is the server's own fixed step.
-            if params.publish_clock {
-                let ts = snapshot.timestamp();
-                let sim_sec = clock_epoch.to_sim_time(sec);
-                // Experiment hook (ACB_CLOCK_DECIMATE, default 1 = every frame).
-                //
-                // Autoware's control timers run on simulation time, so the /clock rate sets
-                // the rate at which it recomputes: measured 11.03 Hz of control_cmd against
-                // SSv2's 10 Hz clock, and 21.43 Hz against this bridge's 20 Hz one. The
-                // bridge's own loop turns at ~14 Hz, so at 21 Hz the commands arrive faster
-                // than they can be consumed. This exists to test whether that is what makes
-                // an unmanaged ego track worse than a managed one; it is not a setting
-                // anyone should need.
-                if clock_decimate > 1 && ts.frame % clock_decimate != 0 {
-                    // Skipped deliberately. Record the frame anyway: leaving it unrecorded
-                    // makes the catch-up below re-publish exactly what was just skipped,
-                    // which is how the first attempt at this defeated itself -- the clock
-                    // came out at 20 Hz again, merely delivered in pairs.
-                    last_clock_frame = Some(ts.frame);
-                } else {
-                if let (Some(prev), true) =
-                    (last_clock_frame, ts.delta_seconds > 0.0 && clock_decimate == 1)
-                {
-                    // Cap the catch-up. Between scenario runs the simulation pauses and the
-                    // frame counter can jump by thousands; replaying all of those would
-                    // flood the topic with backdated instants and stall the loop. A run that
-                    // is merely keeping up skips at most one.
-                    const MAX_CATCHUP_FRAMES: usize = 4;
-                    let skipped = ts.frame.saturating_sub(prev + 1).min(MAX_CATCHUP_FRAMES);
-                    for back in (1..=skipped).rev() {
-                        let t = sim_sec - (back as f64) * ts.delta_seconds;
-                        if let Err(e) = simulator_clock.publish_clock(Some(t)) {
-                            tracing::warn!("Failed to publish skipped-frame clock: {e}");
-                            break;
-                        }
-                    }
-                }
-                if let Err(e) = simulator_clock.publish_clock(Some(sim_sec)) {
-                    tracing::warn!("Failed to publish clock: {e}");
-                }
-                last_clock_frame = Some(ts.frame);
-                }
-            }
-
-            // Spin executor to process ROS callbacks (subscriptions). This is also what
-            // feeds /clock into the node's ROS clock, so it must happen before anything
-            // reads a timestamp below.
+            // Spin executor to process ROS callbacks (subscriptions).
             //
             // Drain the ready callbacks, rather than one per iteration.
             //
@@ -1496,25 +1421,22 @@ fn main() -> Result<()> {
                 last_loop_at = now;
             }
 
-            // Every published stamp comes from the node's ROS clock, never from CARLA's
-            // own timestamps -- see utils::ros_time_now.
-            let stamp_sec = utils::ros_time_now_secs(&node);
-
             // Main tick: ground truth publishing
-            if let Err(e) = autoware.tick(stamp_sec) {
+            if let Err(e) = autoware.tick(&stamp) {
                 tracing::warn!("Autoware tick failed: {}", e);
             }
 
             if let Some(ref mut gt) = ground_truth_objects {
-                if let Err(e) = gt.publish(&world, &snapshot) {
+                if let Err(e) = gt.publish(&world, &snapshot, &stamp) {
                     tracing::warn!("Failed to publish ground-truth objects: {e}");
                 }
             }
 
             // Publish vehicle status (velocity, steering, control mode)
-            if let Err(e) = vehicle_control.publish_status(stamp_sec) {
+            if let Err(e) = vehicle_control.publish_status(&stamp) {
                 tracing::warn!("Failed to publish vehicle status: {e}");
             }
+            last_frame_stamp = Some(stamp);
 
             // Rate limiting
             let next_iteration = loop_start + loop_duration;
@@ -1533,15 +1455,11 @@ fn main() -> Result<()> {
         // remained. gyro_odometer turns each (velocity, IMU) pair into one twist only if
         // it has processed the previous pair, hence the short pause between pairs.
         //
-        // Skipped before any /clock: there is no stack running on time yet to mislead,
-        // and a sample stamped zero would only read as a timeout.
-        let stamp_sec = utils::ros_time_now_secs(&node);
-        if matches!(exit_reason, SessionExit::VehicleLost) && stamp_sec > 0.0 {
+        // Stamped with the last frame time seen: the vehicle's last instant. Skipped if no
+        // frame was ever published for it.
+        if let (SessionExit::VehicleLost, Some(stamp)) = (exit_reason, last_frame_stamp.clone()) {
             const STANDSTILL_SAMPLES: usize = 8;
-            let stamp = builtin_interfaces::msg::Time {
-                sec: stamp_sec.floor() as i32,
-                nanosec: ((stamp_sec - stamp_sec.floor()) * 1e9) as u32,
-            };
+            let stamp_sec = f64::from(stamp.sec) + f64::from(stamp.nanosec) / 1e9;
             let mut failed = None;
             for _ in 0..STANDSTILL_SAMPLES {
                 for (publisher, frame) in &standstill_imu {
@@ -1577,7 +1495,7 @@ fn main() -> Result<()> {
                         failed = Some(format!("IMU: {e}"));
                     }
                 }
-                if let Err(e) = vehicle_control.publish_standstill(stamp_sec) {
+                if let Err(e) = vehicle_control.publish_standstill(&stamp) {
                     failed = Some(format!("velocity: {e}"));
                 }
                 pump_ros_for(&mut executor, Duration::from_millis(20));
@@ -1627,12 +1545,9 @@ fn main() -> Result<()> {
             SessionExit::CarlaLost => {
                 tracing::info!("Attempting to reconnect to CARLA...");
                 reconnect_carla = true;
-                carla_may_have_restarted = true;
             }
             SessionExit::AutowareRestarted => {
-                // CARLA is healthy, so the connection and the simulation clock are kept.
-                // Resetting the clock epoch here would rewind /clock under a simulation
-                // that never paused.
+                // CARLA is healthy, so the connection is kept.
                 tracing::info!("Rebuilding for the restarted Autoware; CARLA connection kept");
                 reconnect_carla = false;
             }
@@ -1664,7 +1579,6 @@ fn main() -> Result<()> {
                      the sensor streams the scenario runner destroyed underneath us"
                 );
                 reconnect_carla = true;
-                carla_may_have_restarted = false;
             }
         }
     }

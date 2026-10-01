@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use carla::client::{ActorBase, World, WorldSnapshot};
 
-use crate::{coordinate_conversion, error::Result, utils};
+use crate::{coordinate_conversion, error::Result};
 
 /// Horizon of the constant-velocity prediction, and the spacing of its samples.
 ///
@@ -235,7 +235,6 @@ fn wrap_angle(a: f64) -> f64 {
 
 pub struct GroundTruthObjectPublisher {
     publisher: Arc<rclrs::Publisher<autoware_perception_msgs::msg::PredictedObjects>>,
-    node: rclrs::Node,
     /// CARLA `role_name` of the ego, so it is not published as an obstacle to itself.
     ego_role_name: String,
     range_m: f64,
@@ -264,7 +263,6 @@ impl GroundTruthObjectPublisher {
         );
         Ok(Self {
             publisher,
-            node,
             ego_role_name,
             range_m,
             velocities: PoseVelocityEstimator::default(),
@@ -276,7 +274,12 @@ impl GroundTruthObjectPublisher {
     /// `snapshot` is the frame the main loop just received. Poses and velocities come from
     /// it rather than from `Actor::transform()`, so each pose is paired with the simulation
     /// time it was taken at -- the velocity estimate divides by that time.
-    pub fn publish(&mut self, world: &World, snapshot: &WorldSnapshot) -> Result<()> {
+    pub fn publish(
+        &mut self,
+        world: &World,
+        snapshot: &WorldSnapshot,
+        stamp: &builtin_interfaces::msg::Time,
+    ) -> Result<()> {
         let actors = world.actors()?;
         let sim_time = snapshot.timestamp().elapsed_seconds;
 
@@ -337,7 +340,8 @@ impl GroundTruthObjectPublisher {
 
         let msg = autoware_perception_msgs::msg::PredictedObjects {
             header: std_msgs::msg::Header {
-                stamp: utils::ros_time_now(&self.node),
+                // The frame's time, the same as its `/clock` (roadmap 015).
+                stamp: stamp.clone(),
                 frame_id: "map".to_string(),
             },
             objects,

@@ -1164,16 +1164,13 @@ impl VehicleControlBridge {
     /// usually at 3 m/s -- and a long-lived stack carries that into the next scenario: its
     /// first /clock tick resumes an EKF still moving at that speed while the new ego sits
     /// still, which the pose-instability detector reports as an ERROR before
-    /// localization is re-initialized. The runner stops /clock before it despawns, so
-    /// this lands, stamped at that frozen time, ahead of the next scenario's first tick.
-    pub fn publish_standstill(&self, timestamp: f64) -> Result<()> {
+    /// localization is re-initialized. Stamped with the last frame time the bridge saw for
+    /// the vehicle, so it lands ahead of the next scenario's first tick.
+    pub fn publish_standstill(&self, stamp: &builtin_interfaces::msg::Time) -> Result<()> {
         self.velocity_pub
             .publish(&autoware_vehicle_msgs::msg::VelocityReport {
                 header: std_msgs::msg::Header {
-                    stamp: builtin_interfaces::msg::Time {
-                        sec: timestamp.floor() as i32,
-                        nanosec: ((timestamp - timestamp.floor()) * 1e9) as u32,
-                    },
+                    stamp: stamp.clone(),
                     frame_id: "base_link".to_string(),
                 },
                 longitudinal_velocity: 0.0,
@@ -1186,14 +1183,11 @@ impl VehicleControlBridge {
     /// Should be called in the main loop at regular intervals (e.g., 20 Hz)
     ///
     /// # Arguments
-    /// * `timestamp` - Current simulation timestamp
-    pub fn publish_status(&self, timestamp: f64) -> Result<()> {
+    /// * `stamp` - the frame's CARLA time plus the episode epoch (`SimClock::stamp`)
+    pub fn publish_status(&self, stamp: &builtin_interfaces::msg::Time) -> Result<()> {
         let vehicle_guard = self.vehicle.lock().unwrap();
         if let Some(ref vehicle) = *vehicle_guard {
-            let ros_timestamp = builtin_interfaces::msg::Time {
-                sec: timestamp.floor() as i32,
-                nanosec: ((timestamp - timestamp.floor()) * 1e9) as u32,
-            };
+            let ros_timestamp = stamp.clone();
 
             // Get vehicle state from CARLA
             let transform = vehicle.transform()?;
