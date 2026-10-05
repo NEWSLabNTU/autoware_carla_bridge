@@ -134,6 +134,11 @@ struct BridgeParams {
     pub carla_port: u16,
     pub vehicle_name: String,
     pub vehicle_config: String,
+    /// Sensor frames from `vehicle_config` not to spawn, comma-separated (e.g.
+    /// `camera6/camera_link`). Lets a launch drop a sensor nothing consumes -- the traffic
+    /// light camera when signals come from CARLA (carla-scenario-bridge roadmap 015) --
+    /// without a second copy of the config. Unknown names are warned about and ignored.
+    pub disabled_sensors: String,
     /// Publish pose directly to /localization/kinematic_state (bypasses Autoware localization)
     /// Set to true for testing without Autoware localization pipeline
     pub publish_direct_localization: bool,
@@ -212,6 +217,12 @@ impl BridgeParams {
 
         let vehicle_config = node
             .declare_parameter("vehicle_config")
+            .default("".into())
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
+        let disabled_sensors = node
+            .declare_parameter("disabled_sensors")
             .default("".into())
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
@@ -358,6 +369,10 @@ impl BridgeParams {
             carla_port: carla_port_val as u16,
             vehicle_name: vehicle_name_val.to_string(),
             vehicle_config: vehicle_config_val.to_string(),
+            disabled_sensors: {
+                let v: Arc<str> = disabled_sensors.get();
+                v.to_string()
+            },
             publish_direct_localization: publish_direct_localization_val,
             publish_clock: publish_clock_val,
             release_notify_endpoint: release_notify_val.to_string(),
@@ -907,7 +922,14 @@ fn main() -> Result<()> {
         "Loading vehicle configuration from: {}",
         params.vehicle_config
     );
-    let vehicle_config = sensor_config::VehicleConfig::from_file(&params.vehicle_config)?;
+    let mut vehicle_config = sensor_config::VehicleConfig::from_file(&params.vehicle_config)?;
+    for name in params.disabled_sensors.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        if vehicle_config.sensors.remove(name).is_some() {
+            tracing::info!("Sensor {name} disabled by disabled_sensors; not spawning it");
+        } else {
+            tracing::warn!("disabled_sensors names {name}, which vehicle_config does not define");
+        }
+    }
 
     tracing::info!(
         "Vehicle config loaded: {} sensors to spawn",

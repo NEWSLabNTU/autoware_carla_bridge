@@ -62,12 +62,18 @@
   <arg name="traffic_light_map_path" default=""
        description="traffic_lights.resolved.yaml to publish signals from; empty disables"/>
 
+  <!-- Sensor frames of vehicle_config not to spawn, comma-separated. The ego and background
+       launches set camera6/camera_link when traffic light recognition is fusion-only: the
+       camera then feeds nothing, and rendering it every tick is CARLA's largest cost. -->
+  <arg name="disabled_sensors" default="" description="comma-separated vehicle_config sensor frames not to spawn"/>
+
   <!-- Launch the bridge node with ROS parameters -->
   <node pkg="acb_bridge" name="acb_bridge" exec="acb_bridge" output="screen">
     <param name="carla_address" value="$(var carla_address)"/>
     <param name="carla_port" value="$(var carla_port)"/>
     <param name="vehicle_name" value="$(var vehicle_name)"/>
     <param name="vehicle_config" value="$(var vehicle_config)"/>
+    <param name="disabled_sensors" value="$(var disabled_sensors)"/>
     <param name="publish_clock" value="$(var publish_clock)"/>
     <param name="release_notify_endpoint" value="$(var release_notify_endpoint)"/>
     <param name="release_ack_endpoint" value="$(var release_ack_endpoint)"/>
