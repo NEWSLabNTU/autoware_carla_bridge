@@ -7,7 +7,7 @@
 #   CARLA_DIR      CARLA installation      (default ~/Downloads/CARLA_0.9.16)
 #   CARLA_PORT     RPC port                (default 2000)
 #   CARLA_MAP      town to boot into       (default Town01; empty leaves the install's own)
-#   CARLA_QUALITY  -quality-level          (default Low)
+#   CARLA_QUALITY  -quality-level          (default Epic; Low cannot change maps, below)
 #   CARLA_RENDER   offscreen | window      (default offscreen)
 #
 # Why CARLA_MAP matters: the package boots Town10HD_Opt, the heaviest map it ships,
@@ -33,7 +33,12 @@ set -e
 CARLA_DIR="${CARLA_DIR:-$HOME/Downloads/CARLA_0.9.16}"
 PORT="${CARLA_PORT:-2000}"
 MAP="${CARLA_MAP-Town01}"
-QUALITY="${CARLA_QUALITY:-Low}"
+# Epic, not Low. With -quality-level=Low, CARLA 0.9.16 segfaults on load_world to another
+# town (and reload_world hangs): UE 4.26's FLandscapeRenderSystem::FGetSectionLODBiasesTask
+# reads UTexture2D::GetNumResidentMips on a texture freed by the level swap. Reproduced five
+# times on an RTX 5090, headless or not, with no client but the loader; at Epic the same
+# server loaded Town02, Town01 and reload_world in 44 / 4 / 4.5 s. carla-simulator/carla#4940.
+QUALITY="${CARLA_QUALITY:-Epic}"
 RENDER="${CARLA_RENDER:-offscreen}"
 
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
