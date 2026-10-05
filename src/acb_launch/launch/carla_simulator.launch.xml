@@ -61,6 +61,16 @@
   <arg name="lanelet2_map_file" default="lanelet2_map.osm" description="lanelet2 map file name"/>
   <arg name="pointcloud_map_file" default="pointcloud_map.pcd" description="pointcloud map file name"/>
   <!-- Perception -->
+  <!-- Signal state reaches Autoware from CARLA's lights, published by acb_bridge on
+       external/traffic_signals (carla-scenario-bridge roadmap 015, after 009 chose V2X over
+       vision). true drops the camera branch of traffic light recognition (camera_info
+       relay, map-based detector, TensorRT classifier) and keeps multi-camera fusion, the
+       arbiter and the crosswalk estimator, so the arbiter only ever sees acb's input. That
+       ends its "Published traffic signal messages are not latest" warning (the camera
+       path's stamps always lag acb's) and frees the classifier's GPU, CPU and ~45 s start.
+       false restores camera-based recognition (009 gap 7). -->
+  <arg name="traffic_light_fusion_only" default="true"
+       description="skip camera-based traffic light recognition; signals come from acb (V2X)"/>
   <arg name="traffic_light_namespace" default="[traffic_light]" description="traffic light recognition namespace"/>
   <arg name="traffic_light_camera_namespaces" default="[camera6]"
        description="camera namespaces feeding traffic light recognition. Must name a
@@ -189,7 +199,11 @@
 
          If this is revisited, the lever is the head's apparent size (a longer focal
          length, or a scenario that gets closer), not the padding. -->
-    <include file="$(find-pkg-share autoware_launch)/launch/components/tier4_perception_component.launch.xml">
+    <!-- acb_launch's copy of autoware_launch's component (scripts/sync_perception_component.sh;
+         run it with check after an Autoware upgrade): identical except that
+         traffic_light_recognition/fusion_only is an argument, which upstream hard-codes. -->
+    <include file="$(find-pkg-share acb_launch)/launch/components/tier4_perception_component.launch.xml">
+      <arg name="traffic_light_recognition/fusion_only" value="$(var traffic_light_fusion_only)"/>
       <arg name="data_path" value="$(var data_path)"/>
       <arg name="pointcloud_container_name" value="pointcloud_container"/>
       <arg name="use_sim_time" value="$(var use_sim_time)"/>
