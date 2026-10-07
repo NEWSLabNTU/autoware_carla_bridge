@@ -14,6 +14,7 @@ setup(
         ('share/' + package_name + '/config/poses', ['config/poses/Town01.yaml']),
     ],
     install_requires=['setuptools'],
+    tests_require=['pytest'],
     zip_safe=True,
     maintainer='User',
     maintainer_email='user@example.com',
@@ -23,6 +24,7 @@ setup(
         'console_scripts': [
             'auto_drive = acb_pilot.auto_drive:main',
             'capture_poses = acb_pilot.capture_poses:main',
+            'agent = acb_pilot.agent:main',
         ],
     },
 )

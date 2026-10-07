@@ -3,7 +3,7 @@
 <package format="3">
   <name>acb_pilot</name>
   <version>0.2.0</version>
-  <description>Autonomous driving pilot and pose capture for CARLA-Autoware</description>
+  <description>Autoware vehicle agent (agent protocol), autonomous driving pilot and pose capture</description>
   <maintainer email="user@example.com">User</maintainer>
   <license>Apache-2.0</license>
 
@@ -11,7 +11,13 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>autoware_adapi_v1_msgs</exec_depend>
+  <exec_depend>autoware_vehicle_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>tier4_external_api_msgs</exec_depend>
+  <exec_depend>tier4_rtc_msgs</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
 
   <export>
     <build_type>ament_python</build_type>
