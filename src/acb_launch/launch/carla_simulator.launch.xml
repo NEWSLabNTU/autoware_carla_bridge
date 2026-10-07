@@ -85,7 +85,30 @@
   <arg name="occupancy_grid_map_method" default="pointcloud_based"
        description="'laserscan_based' avoids the CUDA occupancy grid node"/>
   <!-- Vehicle - bridge + monitor launched via acb_vehicle_launch/vehicle_interface.launch.xml -->
+  <!-- The vehicle interface is acb_bridge, started here (below) rather than through
+       autoware.launch.xml's vehicle_model include, so this file is the one place it is
+       configured. false: no bridge (another process attaches to the CARLA vehicle). -->
   <arg name="launch_vehicle_interface" default="true"/>
+  <arg name="vehicle_name" default="hero" description="CARLA role_name of the vehicle acb_bridge attaches to"/>
+  <arg name="carla_host" default="localhost"/>
+  <arg name="carla_port" default="2000"/>
+  <arg name="publish_clock" default="true" description="acb publishes /clock from CARLA in this domain"/>
+  <arg name="seed_localization_on_attach" default="true"/>
+  <arg name="traffic_light_map_path" default="$(var map_path)/carla/traffic_lights.yaml"
+       description="the map dir's CARLA signal table (carla_scenario_bridge --generate-signal-table); empty disables V2X signals"/>
+  <arg name="accel_map_path" default="$(find-pkg-share acb_vehicle_description)/config/accel_map.csv"/>
+  <arg name="brake_map_path" default="$(find-pkg-share acb_vehicle_description)/config/brake_map.csv"/>
+  <arg name="report_measured_steering" default="false"/>
+  <arg name="steering_multiplier" default="1.0"/>
+  <arg name="publish_ground_truth_objects" default="false"/>
+  <arg name="ground_truth_range_m" default="100.0"/>
+  <arg name="control_trace_path" default=""/>
+  <!-- CARLA profile overrides, each switchable (roadmap 017). true: this file launches the
+       component with CARLA settings (below). false: the user's autoware.launch.xml launches
+       it, unchanged, so a customised component is not replaced. -->
+  <arg name="carla_localization" default="true" description="CARLA-tuned localization params"/>
+  <arg name="carla_perception" default="true" description="selectable lidar model, fusion-only traffic lights"/>
+  <arg name="carla_system" default="true" description="CARLA component-state topics, MRM params, diagnostic graph"/>
   <!-- System -->
   <arg name="launch_system_monitor" default="false" description="launch system monitor"/>
   <arg name="launch_dummy_diag_publisher" default="false" description="launch dummy diag publisher"/>
@@ -129,15 +152,15 @@
       <!-- Modules to be launched -->
       <arg name="launch_vehicle" value="$(var vehicle)"/>
       <!-- CRITICAL - Disable system here, launch separately with CARLA topics config -->
-      <arg name="launch_system" value="false"/>
+      <arg name="launch_system" value="$(eval &quot;'$(var system)' == 'true' and '$(var carla_system)' != 'true'&quot;)"/>
       <arg name="launch_map" value="$(var map)"/>
       <arg name="launch_sensing" value="$(var sensing)"/>
       <!-- CRITICAL - Disable localization here, launch separately with CARLA config -->
-      <arg name="launch_localization" value="false"/>
+      <arg name="launch_localization" value="$(eval &quot;'$(var localization)' == 'true' and '$(var carla_localization)' != 'true'&quot;)"/>
       <!-- CRITICAL - Disable perception here, launch separately below so
            lidar_detection_model can be chosen (autoware.launch.xml does not
            forward it, hardwiring centerpoint) -->
-      <arg name="launch_perception" value="false"/>
+      <arg name="launch_perception" value="$(eval &quot;'$(var perception)' == 'true' and '$(var carla_perception)' != 'true'&quot;)"/>
       <arg name="launch_planning" value="$(var planning)"/>
       <arg name="launch_control" value="$(var control)"/>
       <!-- Global parameters -->
@@ -145,7 +168,7 @@
       <!-- CRITICAL - Set logging_simulation mode to disable stop_check in pose_initializer -->
       <arg name="system_run_mode" value="logging_simulation"/>
       <!-- Vehicle -->
-      <arg name="launch_vehicle_interface" value="$(var launch_vehicle_interface)"/>
+      <arg name="launch_vehicle_interface" value="false"/>
       <!-- Map -->
       <arg name="lanelet2_map_file" value="$(var lanelet2_map_file)"/>
       <arg name="pointcloud_map_file" value="$(var pointcloud_map_file)"/>
@@ -180,7 +203,7 @@
        launch_perception=false above) so lidar_detection_model is selectable.
        The high-accuracy traffic light detector stays off, as it was when
        autoware.launch.xml launched perception. -->
-  <group if="$(var perception)">
+  <group if="$(eval &quot;'$(var perception)' == 'true' and '$(var carla_perception)' == 'true'&quot;)">
     <!-- The vibration margins are left at upstream's defaults, and it is worth knowing
          why, because shrinking them is the obvious idea and it is wrong.
 
@@ -236,7 +259,7 @@
 
   <!-- Include localization with CARLA-optimized config
        This uses acb_launch/config/localization with lowered NDT threshold -->
-  <group if="$(var localization)">
+  <group if="$(eval &quot;'$(var localization)' == 'true' and '$(var carla_localization)' == 'true'&quot;)">
     <include file="$(find-pkg-share autoware_launch)/launch/components/tier4_localization_component.launch.xml">
       <!-- Use CARLA-optimized localization config path -->
       <arg name="loc_config_path" value="$(var carla_loc_config_path)"/>
@@ -249,7 +272,7 @@
 
   <!-- Include system with CARLA-optimized topics config
        This uses acb_launch topics.yaml which excludes traffic light monitoring -->
-  <group if="$(var system)">
+  <group if="$(eval &quot;'$(var system)' == 'true' and '$(var carla_system)' == 'true'&quot;)">
     <include file="$(find-pkg-share tier4_system_launch)/launch/system.launch.xml">
       <arg name="run_mode" value="logging_simulation"/>
       <arg name="launch_system_monitor" value="$(var launch_system_monitor)"/>
@@ -277,6 +300,28 @@
       <arg name="diagnostic_graph_aggregator_param_path" value="$(find-pkg-share autoware_diagnostic_graph_aggregator)/config/default.param.yaml"/>
       <!-- Use our CARLA-specific diagnostic graph with corrected node names for Autoware 1.5.0 -->
       <arg name="diagnostic_graph_aggregator_graph_path" value="$(find-pkg-share acb_launch)/config/system/diagnostics/autoware-carla.yaml"/>
+    </include>
+  </group>
+
+  <!-- The vehicle interface: acb_bridge attaches to the CARLA vehicle named vehicle_name and
+       publishes its sensors, vehicle status, /clock and V2X signals, and applies Autoware's
+       control. With fusion-only traffic lights the traffic light camera is not spawned. -->
+  <group if="$(var launch_vehicle_interface)">
+    <include file="$(find-pkg-share acb_bridge)/launch/acb_bridge.launch.xml">
+      <arg name="disabled_sensors" value="$(eval &quot;'camera6/camera_link' if '$(var traffic_light_fusion_only)' == 'true' else ''&quot;)"/>
+      <arg name="carla_address" value="$(var carla_host)"/>
+      <arg name="carla_port" value="$(var carla_port)"/>
+      <arg name="vehicle_name" value="$(var vehicle_name)"/>
+      <arg name="publish_clock" value="$(var publish_clock)"/>
+      <arg name="report_measured_steering" value="$(var report_measured_steering)"/>
+      <arg name="steering_multiplier" value="$(var steering_multiplier)"/>
+      <arg name="seed_localization_on_attach" value="$(var seed_localization_on_attach)"/>
+      <arg name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)"/>
+      <arg name="ground_truth_range_m" value="$(var ground_truth_range_m)"/>
+      <arg name="traffic_light_map_path" value="$(var traffic_light_map_path)"/>
+      <arg name="control_trace_path" value="$(var control_trace_path)"/>
+      <arg name="accel_map_path" value="$(var accel_map_path)"/>
+      <arg name="brake_map_path" value="$(var brake_map_path)"/>
     </include>
   </group>
 </launch>

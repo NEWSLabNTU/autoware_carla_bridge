@@ -60,7 +60,7 @@
        when it changes. Empty turns the publisher off. Only one source may feed that topic:
        with this on, SSv2's publish_conventional_traffic_signals must be off. -->
   <arg name="traffic_light_map_path" default=""
-       description="traffic_lights.resolved.yaml to publish signals from; empty disables"/>
+       description="the map dir's carla/traffic_lights.yaml (carla_scenario_bridge --generate-signal-table) to publish signals from; empty disables"/>
 
   <!-- Sensor frames of vehicle_config not to spawn, comma-separated. The ego and background
        launches set camera6/camera_link when traffic light recognition is fusion-only: the

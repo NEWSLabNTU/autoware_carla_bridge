@@ -9,8 +9,9 @@
 //! signals`) must be off wherever this is on.
 //!
 //! Which CARLA light is which Lanelet2 signal is not worked out here. carla_scenario_bridge
-//! resolves it at every Initialize and writes `traffic_lights.resolved.yaml` beside the map
-//! (`resolved_signals.rs` there); this reads that file from `traffic_light_map_path` (empty =
+//! resolves it once per map (`--generate-signal-table`) into the map dir's
+//! `carla/traffic_lights.yaml` and checks it at every Initialize (`resolved_signals.rs`
+//! there); this reads that file from `traffic_light_map_path` (empty =
 //! off, as is `none`) and reads it again whenever its mtime changes. Each group is one Lanelet2
 //! regulatory element, which is what Autoware's `TrafficLightGroup` id means.
 //!
