@@ -208,8 +208,11 @@ class AutowarePort(AutopilotPort):
                                and self.clients["rtc_auto_mode"].service_is_ready())
         with self._lock:
             s = Snapshot(**vars(self._s))
-            s.ready = self._services_ready and {"localization", "route",
-                                                "mode"} <= self._have
+            # Services alone, not the state topics: Autoware's ADAPI state is latched but
+            # only published once /clock runs, and /clock runs only once a scenario ticks
+            # CARLA -- a scenario the relay would not start while this reported UNAVAILABLE.
+            # Until the states arrive the phase is INITIALIZING (localization unknown).
+            s.ready = self._services_ready
             s.rtc = self._rtc_ready
             if not s.rtc:
                 s.rtc_status = None

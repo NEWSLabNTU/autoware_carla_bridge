@@ -145,6 +145,10 @@
 
   <!-- Include autoware.launch.xml with localization DISABLED
        Localization is launched separately below with CARLA-optimized config -->
+  <!-- Captured before the unscoped include below: autoware.launch.xml's own
+       launch_vehicle_interface arg (set false there) leaks out of an unscoped group and
+       would overwrite this file's value, so acb_bridge would silently never start. -->
+  <let name="acb_start_bridge" value="$(var launch_vehicle_interface)"/>
   <group scoped="false">
     <include file="$(var autoware_launch)">
       <!-- Common -->
@@ -324,7 +328,7 @@
     <param name="goal_poses_file" value="$(var goal_poses_file)"/>
   </node>
 
-  <group if="$(var launch_vehicle_interface)">
+  <group if="$(var acb_start_bridge)">
     <include file="$(find-pkg-share acb_bridge)/launch/acb_bridge.launch.xml">
       <arg name="disabled_sensors" value="$(eval &quot;'camera6/camera_link' if '$(var traffic_light_fusion_only)' == 'true' else ''&quot;)"/>
       <arg name="carla_address" value="$(var carla_host)"/>

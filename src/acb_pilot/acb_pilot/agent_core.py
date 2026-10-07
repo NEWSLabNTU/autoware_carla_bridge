@@ -42,14 +42,14 @@ SCAN_WAIT = 10.0
 CONVERGE_TIMEOUT = 30.0
 INITIALIZE_ATTEMPTS = 5
 ENGAGE_RETRY = 3.0
-SETTLE = 3.0  # how long a command waits for Autoware's state to show its effect
+SETTLE = 2.0  # how long a command waits for its effect; below the relay's 2.5 s reply window
 
 
 @dataclass
 class Snapshot:
     """What the autopilot reports, at one instant. Stamps are in the autopilot's time."""
 
-    ready: bool = False  # ADAPI services callable and state topics received
+    ready: bool = False  # the autopilot's core services are callable
     localization: int = LOC_UNKNOWN
     route: int = ROUTE_UNKNOWN
     mode: int = MODE_UNKNOWN
@@ -192,7 +192,15 @@ class AgentCore:
                        rtc_status=s.rtc_status if s.rtc else None)
 
     def _wait_for(self, predicate, timeout=SETTLE):
-        """Let Autoware's state show a command's effect before replying (bounded)."""
+        """Let Autoware's state show a command's effect before replying (bounded).
+
+        Not at all while Autoware has published no state yet: its ADAPI state is latched
+        but only appears once /clock runs, i.e. once a scenario ticks CARLA, and a command
+        that waited for it here would outlive the relay's reply timeout every time.
+        """
+        first = self.port.snapshot()
+        if first.mode == MODE_UNKNOWN and first.route == ROUTE_UNKNOWN:
+            return predicate(first)
         end = self.clock() + timeout
         while self.clock() < end:
             if predicate(self.port.snapshot()):
