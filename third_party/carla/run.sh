@@ -73,4 +73,13 @@ if [ -n "${CARLA_EXTRA_ARGS:-}" ]; then
     args+=($CARLA_EXTRA_ARGS)
 fi
 
+# Pin Vulkan to the NVIDIA driver on hosts that also have an iGPU or a software renderer:
+# left to choose, a restarted CARLA came up on the AMD iGPU / lavapipe (18 MiB on the NVIDIA
+# card), took 4-8 min to serve RPC, and froze in apply_settings(synchronous)
+# (carla-scenario-bridge roadmap 016, gap 13). Set VK_ICD_FILENAMES yourself to override.
+nvidia_icd=/usr/share/vulkan/icd.d/nvidia_icd.json
+if [ -z "${VK_ICD_FILENAMES:-}" ] && [ -f "$nvidia_icd" ]; then
+    export VK_ICD_FILENAMES="$nvidia_icd"
+fi
+
 exec ./CarlaUE4.sh "${args[@]}"
