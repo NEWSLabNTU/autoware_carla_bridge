@@ -103,6 +103,12 @@
   <arg name="publish_ground_truth_objects" default="false"/>
   <arg name="ground_truth_range_m" default="100.0"/>
   <arg name="control_trace_path" default=""/>
+  <!-- The vehicle agent (acb_pilot agent): takes goals from a scenario's agent relay and
+       drives Autoware's API locally, so the scenario needs no access to this ROS domain
+       (roadmap 017). relay empty and goal_poses_file set: drive to a local goal instead. -->
+  <arg name="relay" default="" description="tcp://host:port of the scenario's agent relay; empty = no relay"/>
+  <arg name="entity" default="ego" description="the scenario entity this vehicle is"/>
+  <arg name="goal_poses_file" default="" description="local goal(s) when there is no relay; empty = none"/>
   <!-- CARLA profile overrides, each switchable (roadmap 017). true: this file launches the
        component with CARLA settings (below). false: the user's autoware.launch.xml launches
        it, unchanged, so a customised component is not replaced. -->
@@ -306,6 +312,18 @@
   <!-- The vehicle interface: acb_bridge attaches to the CARLA vehicle named vehicle_name and
        publishes its sensors, vehicle status, /clock and V2X signals, and applies Autoware's
        control. With fusion-only traffic lights the traffic light camera is not spawned. -->
+  <!-- Two node blocks rather than one with optional params: an empty string parameter is
+       written as "-p name:=", which rcl rejects. -->
+  <node pkg="acb_pilot" exec="agent" name="acb_agent" output="screen" respawn="true"
+        if="$(eval '&quot;$(var relay)&quot; != &quot;&quot;')">
+    <param name="relay" value="$(var relay)"/>
+    <param name="entity" value="$(var entity)"/>
+  </node>
+  <node pkg="acb_pilot" exec="agent" name="acb_agent" output="screen"
+        if="$(eval '&quot;$(var relay)&quot; == &quot;&quot; and &quot;$(var goal_poses_file)&quot; != &quot;&quot;')">
+    <param name="goal_poses_file" value="$(var goal_poses_file)"/>
+  </node>
+
   <group if="$(var launch_vehicle_interface)">
     <include file="$(find-pkg-share acb_bridge)/launch/acb_bridge.launch.xml">
       <arg name="disabled_sensors" value="$(eval &quot;'camera6/camera_link' if '$(var traffic_light_fusion_only)' == 'true' else ''&quot;)"/>
