@@ -24,10 +24,13 @@
 //! scenario bridge applies the same rule to the same frame stream, so the two agree
 //! bit-exactly without talking to each other.
 //!
-//! A reconnect to a server whose previous last frame this bridge may not have seen (CARLA
-//! restarted) cannot apply the rule. It continues instead from the last `/clock` it
-//! published plus one step, which keeps the clock monotonic, and says that the scenario
-//! bridge's epoch will not match until the stack is restarted.
+//! A reconnect to a restarted CARLA applies the same rule to the last frame this bridge
+//! received from the old server, anchored, like any episode, at the new episode's
+//! `elapsed = 0`: the new server's uptime before we reached it shows as time that passed,
+//! never as time going back. The scenario bridge does the same with the last frame it
+//! ticked (csb roadmap 016), so the two still agree unless the crash swallowed that
+//! frame's callback here -- then they differ by one step. Anchoring at the first frame we
+//! happen to see instead would make the epoch depend on when each bridge reconnected.
 
 use std::{
     sync::{
@@ -141,25 +144,16 @@ impl EpisodeClock {
         let change = match self.last {
             Some(last) if tick.episode != last.episode || tick.elapsed_ns < last.elapsed_ns => {
                 let old = self.epoch_ns;
+                // The same rule either way; a reconnect is only logged differently, because
+                // the old server's last frame may not have reached us.
+                self.epoch_ns += last.elapsed_ns + last.delta_ns;
                 if reconnected {
-                    // The old episode's last frame may never have reached us.
-                    let base = self
-                        .last_published_ns
-                        .unwrap_or(last.elapsed_ns + old)
-                        .max(last.elapsed_ns + old);
-                    let step = if tick.delta_ns > 0 {
-                        tick.delta_ns
-                    } else {
-                        last.delta_ns
-                    };
-                    self.epoch_ns = base + step - tick.elapsed_ns;
                     Some(EpochChange::Reconnect {
                         old,
                         new: self.epoch_ns,
                         sim_ns: tick.elapsed_ns + self.epoch_ns,
                     })
                 } else {
-                    self.epoch_ns += last.elapsed_ns + last.delta_ns;
                     Some(EpochChange::Episode {
                         old,
                         new: self.epoch_ns,
@@ -292,10 +286,10 @@ impl SimClock {
             ),
             Some(EpochChange::Reconnect { old, new, sim_ns }) => tracing::warn!(
                 "Episode change: epoch {:.9} -> {:.9}, sim_time continues at {:.9} -- after a \
-                 reconnect, so the previous episode's last frame may not have been seen: \
-                 continued from the last /clock published plus one step. A running \
-                 carla_scenario_bridge applies the episode rule to the frames it saw and its \
-                 epoch may differ from this one until the ego stack is restarted",
+                 reconnect (CARLA restarted?): the episode rule was applied to the last frame \
+                 received from the old server. carla_scenario_bridge does the same with the \
+                 last frame it ticked; the epochs differ by one step if that frame's callback \
+                 never arrived here",
                 old as f64 / 1e9,
                 new as f64 / 1e9,
                 sim_ns as f64 / 1e9
@@ -598,9 +592,10 @@ mod tests {
         assert!(again.publish_ns.unwrap() > expected + delta);
     }
 
-    /// After a reconnect to a server whose episode is new (CARLA restarted), continue from
-    /// the last /clock published plus one step; a reconnect to the same episode changes
-    /// nothing.
+    /// After a reconnect to a server whose episode is new (CARLA restarted), apply the
+    /// episode rule to the last frame received: the new episode's elapsed 0 lands one step
+    /// after it, whatever uptime the new server had when we reached it. A reconnect to the
+    /// same episode changes nothing.
     #[test]
     fn reconnect_continues_from_the_last_published_clock() {
         let mut c = EpisodeClock::new();
@@ -619,12 +614,17 @@ mod tests {
         let out = c.on_frame(tick(99, 3.25), wall(t0, 2));
         let delta = nanos(f64::from(0.05f32));
         match out.change {
-            Some(EpochChange::Reconnect { sim_ns, .. }) => assert_eq!(sim_ns, published + delta),
+            Some(EpochChange::Reconnect { sim_ns, .. }) => {
+                assert_eq!(sim_ns, published + delta + nanos(3.25))
+            }
             other => panic!("expected a reconnect epoch, got {other:?}"),
         }
-        assert_eq!(out.publish_ns, Some(published + delta));
+        assert_eq!(out.publish_ns, Some(published + delta + nanos(3.25)));
         let next = c.on_frame(tick(99, 3.25 + f64::from(0.05f32)), wall(t0, 3));
-        assert_eq!(next.publish_ns, Some(published + 2 * delta));
+        assert_eq!(
+            next.publish_ns,
+            Some(published + delta + nanos(3.25 + f64::from(0.05f32)))
+        );
     }
 
     /// The shared table: carla-scenario-bridge's `episode_clock.rs` carries the same cases
