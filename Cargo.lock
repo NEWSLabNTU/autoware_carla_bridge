@@ -42,7 +42,7 @@ dependencies = [
 
 [[package]]
 name = "action_msgs"
-version = "1.2.3"
+version = "0.0.0"
 dependencies = [
  "builtin_interfaces",
  "rosidl_runtime_rs",
@@ -504,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "autoware_adapi_v1_msgs"
-version = "1.9.1"
+version = "0.0.0"
 dependencies = [
  "builtin_interfaces",
  "geographic_msgs",
@@ -517,14 +517,14 @@ dependencies = [
 
 [[package]]
 name = "autoware_common_msgs"
-version = "1.11.0"
+version = "0.0.0"
 dependencies = [
  "rosidl_runtime_rs",
 ]
 
 [[package]]
 name = "autoware_control_msgs"
-version = "1.11.0"
+version = "0.0.0"
 dependencies = [
  "builtin_interfaces",
  "rosidl_runtime_rs",
@@ -543,7 +543,7 @@ dependencies = [
 
 [[package]]
 name = "autoware_vehicle_msgs"
-version = "1.11.0"
+version = "0.0.0"
 dependencies = [
  "builtin_interfaces",
  "rosidl_runtime_rs",
@@ -686,7 +686,7 @@ checksum = "f4ad8f11f288f48ca24471bbd51ac257aaeaaa07adae295591266b792902ae64"
 
 [[package]]
 name = "builtin_interfaces"
-version = "1.2.3"
+version = "0.0.0"
 dependencies = [
  "rosidl_runtime_rs",
 ]
@@ -1648,7 +1648,7 @@ dependencies = [
 
 [[package]]
 name = "geographic_msgs"
-version = "1.0.6"
+version = "0.0.0"
 dependencies = [
  "geometry_msgs",
  "rosidl_runtime_rs",
@@ -2524,7 +2524,7 @@ dependencies = [
 
 [[package]]
 name = "nav_msgs"
-version = "4.9.1"
+version = "0.0.0"
 dependencies = [
  "builtin_interfaces",
  "geometry_msgs",
@@ -3462,7 +3462,7 @@ checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 
 [[package]]
 name = "sensor_msgs"
-version = "4.9.1"
+version = "0.0.0"
 dependencies = [
  "builtin_interfaces",
  "geometry_msgs",
@@ -3548,7 +3548,7 @@ dependencies = [
 
 [[package]]
 name = "shape_msgs"
-version = "4.9.1"
+version = "0.0.0"
 dependencies = [
  "geometry_msgs",
  "rosidl_runtime_rs",
@@ -3641,7 +3641,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "std_msgs"
-version = "4.9.1"
+version = "0.0.0"
 dependencies = [
  "builtin_interfaces",
  "rosidl_runtime_rs",
@@ -3735,7 +3735,7 @@ dependencies = [
 
 [[package]]
 name = "tf2_msgs"
-version = "0.25.20"
+version = "0.0.0"
 dependencies = [
  "action_msgs",
  "builtin_interfaces",
@@ -3795,7 +3795,7 @@ dependencies = [
 
 [[package]]
 name = "tier4_control_msgs"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "autoware_common_msgs",
  "builtin_interfaces",
@@ -3804,7 +3804,7 @@ dependencies = [
 
 [[package]]
 name = "tier4_vehicle_msgs"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "builtin_interfaces",
  "rosidl_runtime_rs",
@@ -3994,7 +3994,7 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
 name = "unique_identifier_msgs"
-version = "2.2.1"
+version = "0.0.0"
 dependencies = [
  "rosidl_runtime_rs",
 ]
@@ -4683,12 +4683,12 @@ dependencies = [
 
 [[patch.unused]]
 name = "autoware_planning_msgs"
-version = "1.11.0"
+version = "0.0.0"
 
 [[patch.unused]]
 name = "rcl_interfaces"
-version = "1.2.3"
+version = "0.0.0"
 
 [[patch.unused]]
 name = "rmw_dds_common"
-version = "1.6.0"
+version = "0.0.0"
