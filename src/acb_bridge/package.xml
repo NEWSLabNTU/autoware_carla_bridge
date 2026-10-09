@@ -9,10 +9,10 @@
 
   <!-- Build dependencies -->
   <build_depend>libclang-dev</build_depend>
-  <build_depend>rosidl_runtime_rs</build_depend>
 
   <!-- Runtime dependencies -->
-  <depend>rclrs</depend>
+  <!-- rclrs and rosidl_runtime_rs are crates (Cargo.toml), not ROS packages or rosdep
+       keys: listing them here makes `rosdep install` fail to resolve. -->
   <depend>rcl</depend>
   <depend>builtin_interfaces</depend>
   <depend>std_msgs</depend>

@@ -2,6 +2,7 @@ mod autoware;
 mod autoware_detection;
 mod bridge;
 mod carla_vehicle;
+mod carla_version;
 mod clock;
 mod coordinate_conversion;
 mod error;
@@ -459,11 +460,14 @@ fn pump_ros_for(executor: &mut rclrs::Executor, duration: Duration) {
 /// between attempts to allow graceful shutdown via Ctrl-C. The back-off between attempts
 /// keeps the ROS executor spinning (`pump_ros_for`), so the node's services answer while
 /// CARLA is down.
+///
+/// A server of another CARLA release than this binary was built for is an error, not a
+/// retry: the bridge exits with both versions in the message.
 fn connect_to_carla(
     params: &BridgeParams,
     running: &AtomicBool,
     executor: &mut rclrs::Executor,
-) -> Option<Client> {
+) -> Result<Option<Client>> {
     tracing::info!(
         "Connecting to CARLA at {}:{}...",
         params.carla_address,
@@ -478,10 +482,29 @@ fn connect_to_carla(
                     pump_ros_for(executor, Duration::from_secs(5));
                     continue;
                 }
+                match client.server_version() {
+                    Ok(server) => {
+                        if let Err(e) = carla_version::check(carla_version::BUILT_FOR, &server) {
+                            tracing::error!("{e}");
+                            return Err(error::BridgeError::ConfigError(e));
+                        }
+                        tracing::info!(
+                            "CARLA server version {server} matches this build ({})",
+                            carla_version::BUILT_FOR
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Cannot read the CARLA server version: {e}, retrying in 5 seconds..."
+                        );
+                        pump_ros_for(executor, Duration::from_secs(5));
+                        continue;
+                    }
+                }
                 match client.world() {
                     Ok(_) => {
                         tracing::info!("Connected to CARLA successfully");
-                        return Some(client);
+                        return Ok(Some(client));
                     }
                     Err(e) => {
                         tracing::warn!("CARLA not ready: {e}, retrying in 5 seconds...");
@@ -495,7 +518,7 @@ fn connect_to_carla(
 
         if !running.load(Ordering::SeqCst) {
             tracing::info!("Shutdown requested while connecting to CARLA");
-            return None;
+            return Ok(None);
         }
 
         pump_ros_for(executor, Duration::from_secs(5));
@@ -977,7 +1000,7 @@ fn main() -> Result<()> {
     loop {
         // === Connect to CARLA ===
         if reconnect_carla || client.is_none() {
-            client = match connect_to_carla(&params, &running, &mut executor) {
+            client = match connect_to_carla(&params, &running, &mut executor)? {
                 Some(c) => Some(c),
                 None => return Ok(()), // Ctrl-C during connection
             };
