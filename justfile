@@ -1,7 +1,6 @@
 # Autoware-CARLA Bridge
 set dotenv-load
 
-carla_version := env_var_or_default('CARLA_VERSION', '0.9.16')
 carla_port := env_var_or_default('CARLA_PORT', '2000')
 map_name := env_var_or_default('MAP_NAME', 'Town01')
 # Autoware's writable model directory (populate once: ros2 run acb_launch setup_autoware_data)
@@ -66,7 +65,6 @@ _check-setuptools:
 build: _check-setuptools
     #!/usr/bin/env bash
     set -e
-    export CARLA_VERSION={{carla_version}}
     source "{{autoware_setup}}"
     colcon build \
         --base-paths src \
@@ -92,7 +90,6 @@ package:
     rm -rf pkg_install .cargo/config.toml build/.colcon/bindgen.lock
 
     # Build all packages with merge-install
-    export CARLA_VERSION={{carla_version}}
     source "{{autoware_setup}}"
     colcon build \
         --base-paths src \
