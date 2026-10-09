@@ -11,7 +11,7 @@
   <arg name="carla_port" default="2000" description="CARLA RPC port"/>
   <arg name="map_name" default="Town01" description="CARLA map to load"/>
   <arg name="spawn_index" default="0" description="Spawn point index"/>
-  <arg name="data_path" default="/opt/autoware/1.5.0/data" description="Autoware ML models and data directory"/>
+  <arg name="data_path" default="$(env HOME)/autoware_data" description="Autoware ML models and data directory; must be writable, populate with: ros2 run acb_launch setup_autoware_data"/>
 
   <!-- Autoware + bridge + monitor (via vehicle interface) -->
   <include file="$(find-pkg-share acb_launch)/launch/carla_simulator.launch.xml">

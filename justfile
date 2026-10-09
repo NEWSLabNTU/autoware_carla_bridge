@@ -4,7 +4,8 @@ set dotenv-load
 carla_version := env_var_or_default('CARLA_VERSION', '0.9.16')
 carla_port := env_var_or_default('CARLA_PORT', '2000')
 map_name := env_var_or_default('MAP_NAME', 'Town01')
-data_path := env_var_or_default('AUTOWARE_DATA_PATH', justfile_directory() + '/data')
+# Autoware's writable model directory (populate once: ros2 run acb_launch setup_autoware_data)
+data_path := env_var_or_default('AUTOWARE_DATA_PATH', env_var('HOME') + '/autoware_data')
 project := justfile_directory()
 # Where Autoware's own setup.bash lives. The NEWSLabNTU 1.5.0 Debian installs under
 # /opt/autoware/1.5.0; other hosts install the same packages straight into the ROS
@@ -261,7 +262,7 @@ build-engines:
     #!/usr/bin/env bash
     set -e
     source "{{autoware_setup}}"
-    MODEL_PATH="{{project}}/data/lidar_centerpoint"
+    MODEL_PATH="{{data_path}}/lidar_centerpoint"
     if [ -f "$MODEL_PATH/pts_voxel_encoder_centerpoint_tiny.engine" ] && \
        [ -f "$MODEL_PATH/pts_backbone_neck_head_centerpoint_tiny.engine" ]; then
         echo "TensorRT engines already exist, skipping build"
@@ -271,7 +272,7 @@ build-engines:
     echo "Building TensorRT engines (this takes 2-5 minutes on first run)..."
     ros2 launch autoware_lidar_centerpoint lidar_centerpoint.launch.xml \
         build_only:=true \
-        data_path:="{{project}}/data" \
+        data_path:="{{data_path}}" \
         model_name:=centerpoint_tiny
     echo "TensorRT engines built:"
     ls -lh "$MODEL_PATH"/*.engine

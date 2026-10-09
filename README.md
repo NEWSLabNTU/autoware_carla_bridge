@@ -31,6 +31,20 @@ Download the latest release tarball from [GitHub Releases](https://github.com/NE
 tar -xzf autoware-carla-bridge-0.12.0-x86_64.tar.gz
 ```
 
+### Autoware data directory (once per machine)
+
+Autoware's TensorRT nodes write their built engines next to the model files, so
+`data_path` (default `~/autoware_data`) must be a writable directory. Mirror the packaged
+models into it once:
+
+```bash
+ros2 run acb_launch setup_autoware_data            # /opt/autoware/1.5.0/data -> ~/autoware_data
+ros2 run acb_launch setup_autoware_data SRC DST    # other locations
+```
+
+`carla_simulator.launch.xml` refuses to start, naming this command, when `data_path` is
+missing or read-only -- otherwise those nodes would silently never load.
+
 ### Run
 
 Start CARLA, then in another terminal:

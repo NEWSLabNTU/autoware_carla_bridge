@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Mirror Autoware's packaged model directory into a writable one.
 #
+#     ros2 run acb_launch setup_autoware_data [SRC] [DST]
+#
+# SRC defaults to /opt/autoware/1.5.0/data, DST to ~/autoware_data (the default
+# data_path of carla_simulator.launch.xml, which refuses to start without it).
+# Safe to re-run: existing links are refreshed, built engines are kept.
+#
 # TensorRT nodes build their engine from the ONNX on first use and then write the result
 # *next to the ONNX*. The packaged data directory is root-owned, so that write fails --
 # and it fails after a successful 33 s build, with a one-line
@@ -17,6 +23,12 @@
 # then written beside the symlinks, in the writable copy, and survive to the next launch
 # instead of being rebuilt every time.
 set -euo pipefail
+
+case "${1:-}" in
+    -h|--help)
+        sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+        exit 0 ;;
+esac
 
 SRC="${1:-/opt/autoware/1.5.0/data}"
 DST="${2:-$HOME/autoware_data}"
