@@ -174,6 +174,12 @@ struct BridgeParams {
     /// 20 km/h on the Tesla), which the Ackermann inverse alone does not know about; false
     /// restores the standstill-only mapping for A/B runs. See roadmap 014, "Steering".
     pub compensate_steering_curve: bool,
+    /// Steering actuator rate limit in deg/s; 0 = off (the default). With
+    /// `steer_time_constant_s`, models a production actuator in place of CARLA's ~150 deg/s
+    /// wheels; 20 deg/s is tier4/scenario_simulator_v2#1849's value. Roadmap 014.
+    pub steer_rate_limit_deg_s: f64,
+    /// Steering first-order lag time constant in s; 0 = off (the default); #1849: 0.2.
+    pub steer_time_constant_s: f64,
     pub publish_ground_truth_objects: bool,
     /// Re-seed Autoware's pose estimator when attaching to a vehicle.
     pub seed_localization_on_attach: bool,
@@ -269,6 +275,18 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        let steer_rate_limit_deg_s = node
+            .declare_parameter("steer_rate_limit_deg_s")
+            .default(0.0)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
+        let steer_time_constant_s = node
+            .declare_parameter("steer_time_constant_s")
+            .default(0.0)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         let publish_ground_truth_objects = node
             .declare_parameter("publish_ground_truth_objects")
             .default(false)
@@ -348,6 +366,8 @@ impl BridgeParams {
         let report_measured_steering_val: bool = report_measured_steering.get();
         let steering_multiplier_val: f64 = steering_multiplier.get();
         let compensate_steering_curve_val: bool = compensate_steering_curve.get();
+        let steer_rate_limit_deg_s_val: f64 = steer_rate_limit_deg_s.get();
+        let steer_time_constant_s_val: f64 = steer_time_constant_s.get();
         let publish_ground_truth_objects_val: bool = publish_ground_truth_objects.get();
         let seed_localization_on_attach_val: bool = seed_localization_on_attach.get();
         let ground_truth_range_m_val: f64 = ground_truth_range_m.get();
@@ -380,6 +400,8 @@ impl BridgeParams {
             report_measured_steering: report_measured_steering_val,
             steering_multiplier: steering_multiplier_val,
             compensate_steering_curve: compensate_steering_curve_val,
+            steer_rate_limit_deg_s: steer_rate_limit_deg_s_val,
+            steer_time_constant_s: steer_time_constant_s_val,
             publish_ground_truth_objects: publish_ground_truth_objects_val,
             seed_localization_on_attach: seed_localization_on_attach_val,
             ground_truth_range_m: ground_truth_range_m_val,
@@ -1179,6 +1201,10 @@ fn main() -> Result<()> {
             params.report_measured_steering,
             params.steering_multiplier as f32,
             params.compensate_steering_curve,
+            vehicle_control::SteerDynamics {
+                rate_limit: (params.steer_rate_limit_deg_s as f32).to_radians(),
+                time_constant: params.steer_time_constant_s as f32,
+            },
             longitudinal,
             params.honor_emergency_cmd,
             control_trace.clone(),

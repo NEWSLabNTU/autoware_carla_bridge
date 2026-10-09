@@ -132,6 +132,59 @@ fn compensate_steer(steer: f32, factor: f32) -> (f32, bool) {
     (clamped, clamped != raw)
 }
 
+/// Optional steering actuator dynamics applied to Autoware's commanded tire angle before it
+/// reaches CARLA: a first-order lag, then a rate limit (roadmap 014, "Steering").
+///
+/// CARLA's wheels slew at ~150 deg/s (measured), far faster than a production steering
+/// actuator, so Autoware's commands land almost instantly. These two knobs let a run model a
+/// slower actuator; both default off. Starting values from tier4/scenario_simulator_v2#1849
+/// are 20 deg/s and tau = 0.2 s.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SteerDynamics {
+    /// Maximum tire-angle rate, rad/s; 0 (or less) disables the limit.
+    pub rate_limit: f32,
+    /// First-order lag time constant, s; 0 (or less) disables the lag.
+    pub time_constant: f32,
+}
+
+impl SteerDynamics {
+    pub fn is_off(&self) -> bool {
+        self.rate_limit <= 0.0 && self.time_constant <= 0.0
+    }
+}
+
+/// The longest gap integrated in one step. Commands arrive at ~30 Hz; a longer gap is a
+/// paused simulation or a new run, and integrating it whole would only jump to the target.
+const MAX_STEER_DYNAMICS_DT: f64 = 0.5;
+
+/// One step of the actuator: from the angle it last produced (`previous`: angle, sim time)
+/// towards `target`, at simulation time `now`. Off, or with no previous step, it passes the
+/// target through.
+fn steer_dynamics_step(
+    dynamics: &SteerDynamics,
+    previous: Option<(f32, f64)>,
+    target: f32,
+    now: f64,
+) -> f32 {
+    let Some((angle, at)) = previous else {
+        return target;
+    };
+    if dynamics.is_off() {
+        return target;
+    }
+    let dt = (now - at).clamp(0.0, MAX_STEER_DYNAMICS_DT) as f32;
+    let mut next = if dynamics.time_constant > 0.0 {
+        angle + (target - angle) * (1.0 - (-dt / dynamics.time_constant).exp())
+    } else {
+        target
+    };
+    if dynamics.rate_limit > 0.0 {
+        let max_step = dynamics.rate_limit * dt;
+        next = angle + (next - angle).clamp(-max_step, max_step);
+    }
+    next
+}
+
 /// The bicycle-model tire angle CARLA actually delivers for a normalized steer command.
 ///
 /// CARLA drives the *inner* wheel to `cmd * max_steer_angle` and places the outer wheel by
@@ -323,6 +376,9 @@ struct AppliedState {
     /// `set_light_state` on every one would add 20 round trips a second per vehicle to a
     /// server that several stacks already share.
     last_lights: Option<VehicleLightState>,
+    /// The tire angle the steering dynamics last produced and the simulation time of that
+    /// step (`SteerDynamics`); `None` until the first control command.
+    steer_actuator: Option<(f32, f64)>,
 }
 
 impl Default for AppliedState {
@@ -338,6 +394,7 @@ impl Default for AppliedState {
             // hold the vehicle whenever the topic is absent, which is most bench setups.
             emergency: false,
             last_lights: None,
+            steer_actuator: None,
         }
     }
 }
@@ -531,6 +588,7 @@ impl VehicleControlBridge {
         report_measured_steering: bool,
         steering_multiplier: f32,
         compensate_steering_curve: bool,
+        steer_dynamics: SteerDynamics,
         longitudinal: Option<crate::longitudinal_map::LongitudinalCalibration>,
         honor_emergency_cmd: bool,
         control_trace: Option<Arc<crate::control_trace::ControlTrace>>,
@@ -591,6 +649,7 @@ impl VehicleControlBridge {
                     &geometry_for_control,
                     trim,
                     compensate_steering_curve,
+                    &steer_dynamics,
                     calibration.as_ref(),
                     trace.as_deref(),
                     &stall_for_control,
@@ -717,6 +776,26 @@ impl VehicleControlBridge {
                 "not compensated (compensate_steering_curve:=false); the ego under-steers \
                  at speed by CARLA's steering_curve"
                     .to_string()
+            }
+        );
+        tracing::info!(
+            "  Steering dynamics: {}",
+            if steer_dynamics.is_off() {
+                "off (commands applied as received)".to_string()
+            } else {
+                format!(
+                    "rate limit {}, lag {}",
+                    if steer_dynamics.rate_limit > 0.0 {
+                        format!("{:.1} deg/s", steer_dynamics.rate_limit.to_degrees())
+                    } else {
+                        "off".to_string()
+                    },
+                    if steer_dynamics.time_constant > 0.0 {
+                        format!("tau {:.3} s", steer_dynamics.time_constant)
+                    } else {
+                        "off".to_string()
+                    }
+                )
             }
         );
         tracing::info!(
@@ -924,6 +1003,7 @@ impl VehicleControlBridge {
         geometry: &SteerGeometry,
         steering_multiplier: f32,
         compensate_steering_curve: bool,
+        steer_dynamics: &SteerDynamics,
         longitudinal: Option<&crate::longitudinal_map::LongitudinalCalibration>,
         trace: Option<&crate::control_trace::ControlTrace>,
         stall: &Mutex<StallWatch>,
@@ -946,8 +1026,16 @@ impl VehicleControlBridge {
                 };
             }
             state.braking = accel < -0.01;
-            *state
+            let tire_angle = steer_dynamics_step(
+                steer_dynamics,
+                state.steer_actuator,
+                cmd.lateral.steering_tire_angle,
+                now_sim_s,
+            );
+            state.steer_actuator = Some((tire_angle, now_sim_s));
+            (*state, tire_angle)
         };
+        let (applied, tire_angle) = applied;
 
         let vehicle_guard = vehicle.lock().unwrap();
         if let Some(ref v) = *vehicle_guard {
@@ -980,7 +1068,7 @@ impl VehicleControlBridge {
                 .unwrap_or(0.0);
             let factor = steer_speed_factor(geometry, compensate_steering_curve, longitudinal_mps);
             let (steer, clamped) = compensate_steer(
-                -steer_command_for(cmd.lateral.steering_tire_angle, geometry) * steering_multiplier,
+                -steer_command_for(tire_angle, geometry) * steering_multiplier,
                 factor,
             );
             if clamped {
@@ -1332,6 +1420,50 @@ impl VehicleControlBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dyn_(rate_deg_s: f32, tau: f32) -> SteerDynamics {
+        SteerDynamics {
+            rate_limit: rate_deg_s.to_radians(),
+            time_constant: tau,
+        }
+    }
+
+    #[test]
+    fn steer_dynamics_off_or_first_command_passes_through() {
+        assert_eq!(steer_dynamics_step(&SteerDynamics::default(), Some((0.0, 1.0)), 0.3, 1.05), 0.3);
+        assert_eq!(steer_dynamics_step(&dyn_(20.0, 0.2), None, 0.3, 1.0), 0.3);
+    }
+
+    #[test]
+    fn steer_rate_limit_caps_the_step() {
+        // 20 deg/s for 0.05 s = 1 deg.
+        let next = steer_dynamics_step(&dyn_(20.0, 0.0), Some((0.0, 10.0)), 0.5, 10.05);
+        assert!((next - 1f32.to_radians()).abs() < 1e-6, "{next}");
+        let back = steer_dynamics_step(&dyn_(20.0, 0.0), Some((0.0, 10.0)), -0.5, 10.05);
+        assert!((back + 1f32.to_radians()).abs() < 1e-6, "{back}");
+        // A small change inside the limit lands exactly.
+        assert_eq!(steer_dynamics_step(&dyn_(20.0, 0.0), Some((0.0, 10.0)), 0.01, 10.05), 0.01);
+    }
+
+    #[test]
+    fn steer_lag_reaches_63_percent_after_one_time_constant() {
+        let d = dyn_(0.0, 0.2);
+        let (mut angle, mut t) = (0.0f32, 0.0f64);
+        for _ in 0..4 {
+            angle = steer_dynamics_step(&d, Some((angle, t)), 0.1, t + 0.05);
+            t += 0.05;
+        }
+        let expected = 0.1 * (1.0 - (-1.0f32).exp());
+        assert!((angle - expected).abs() < 1e-5, "{angle} vs {expected}");
+    }
+
+    #[test]
+    fn steer_dynamics_bounds_a_long_gap_and_ignores_time_going_back() {
+        let d = dyn_(20.0, 0.0);
+        let after_pause = steer_dynamics_step(&d, Some((0.0, 0.0)), 1.0, 600.0);
+        assert!((after_pause - (20f32.to_radians() * MAX_STEER_DYNAMICS_DT as f32)).abs() < 1e-6);
+        assert_eq!(steer_dynamics_step(&d, Some((0.2, 5.0)), 1.0, 4.0), 0.2);
+    }
     use autoware_vehicle_msgs::msg::{GearReport, HazardLightsReport, TurnIndicatorsReport};
 
     /// Matches stock `autoware_universe.cpp`: only AUTONOMOUS succeeds.

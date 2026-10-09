@@ -30,6 +30,12 @@
        Ackermann inverse comes from physics_control, so a blueprint whose tyres or steering
        curve differ from the geometry can still under- or over-steer against it. Calibrate
        against measured wheel angles, not scenario outcomes. See docs/issues/006. -->
+  <!-- Coerced to float below: "20" would arrive as an integer, and a double parameter
+       given an integer stops the node at startup (OverrideValueTypeMismatch). -->
+  <arg name="steer_rate_limit_deg_s" default="0.0"
+       description="steering actuator rate limit, deg/s; 0 = off. 20 is tier4/scenario_simulator_v2#1849's value"/>
+  <arg name="steer_time_constant_s" default="0.0"
+       description="steering first-order lag time constant, s; 0 = off. #1849: 0.2"/>
   <arg name="steering_multiplier" default="1.0"
        description="Scale factor on the normalized steering command (1.0 = no trim)"/>
   <!-- Report CARLA's actors as perception output instead of deriving them from the LiDAR.
@@ -79,6 +85,8 @@
     <param name="release_ack_endpoint" value="$(var release_ack_endpoint)"/>
     <param name="report_measured_steering" value="$(var report_measured_steering)"/>
     <param name="steering_multiplier" value="$(var steering_multiplier)"/>
+    <param name="steer_rate_limit_deg_s" value="$(eval 'float($(var steer_rate_limit_deg_s))')"/>
+    <param name="steer_time_constant_s" value="$(eval 'float($(var steer_time_constant_s))')"/>
     <!-- CARLA multiplies the achieved wheel angle by the blueprint's steering_curve at the
          vehicle's speed (0.9 at 20 km/h, 0.8 at 60 on a model3; roadmap 014, "Steering"),
          and the bridge divides the steer command by the same factor so the wheels reach

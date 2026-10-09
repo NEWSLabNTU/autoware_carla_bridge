@@ -100,6 +100,8 @@
   <arg name="brake_map_path" default="$(find-pkg-share acb_vehicle_description)/config/brake_map.csv"/>
   <arg name="report_measured_steering" default="false"/>
   <arg name="steering_multiplier" default="1.0"/>
+  <arg name="steer_rate_limit_deg_s" default="0.0" description="steering actuator rate limit, deg/s; 0 = off"/>
+  <arg name="steer_time_constant_s" default="0.0" description="steering first-order lag, s; 0 = off"/>
   <arg name="publish_ground_truth_objects" default="false"/>
   <arg name="ground_truth_range_m" default="100.0"/>
   <arg name="control_trace_path" default=""/>
@@ -337,6 +339,8 @@
       <arg name="publish_clock" value="$(var publish_clock)"/>
       <arg name="report_measured_steering" value="$(var report_measured_steering)"/>
       <arg name="steering_multiplier" value="$(var steering_multiplier)"/>
+      <arg name="steer_rate_limit_deg_s" value="$(var steer_rate_limit_deg_s)"/>
+      <arg name="steer_time_constant_s" value="$(var steer_time_constant_s)"/>
       <arg name="seed_localization_on_attach" value="$(var seed_localization_on_attach)"/>
       <arg name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)"/>
       <arg name="ground_truth_range_m" value="$(var ground_truth_range_m)"/>
