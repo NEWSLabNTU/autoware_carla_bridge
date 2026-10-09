@@ -64,7 +64,11 @@ impl PedalMap {
         let speeds: Vec<f64> = header
             .split(',')
             .skip(1) // the corner cell is a label, not a speed
-            .map(|s| s.trim().parse::<f64>().map_err(|e| format!("bad speed '{s}': {e}")))
+            .map(|s| {
+                s.trim()
+                    .parse::<f64>()
+                    .map_err(|e| format!("bad speed '{s}': {e}"))
+            })
             .collect::<std::result::Result<_, _>>()?;
         if speeds.len() < 2 {
             return Err("a map needs at least two speed columns to interpolate".into());
@@ -81,7 +85,11 @@ impl PedalMap {
                 .parse::<f64>()
                 .map_err(|e| format!("bad pedal value: {e}"))?;
             let values: Vec<f64> = cells
-                .map(|s| s.trim().parse::<f64>().map_err(|e| format!("bad cell '{s}': {e}")))
+                .map(|s| {
+                    s.trim()
+                        .parse::<f64>()
+                        .map_err(|e| format!("bad cell '{s}': {e}"))
+                })
                 .collect::<std::result::Result<_, _>>()?;
             if values.len() != speeds.len() {
                 return Err(format!(
@@ -102,7 +110,11 @@ impl PedalMap {
         if !pedals.windows(2).all(|w| w[0] < w[1]) {
             return Err("pedal rows must ascend".into());
         }
-        Ok(Self { speeds, pedals, accel })
+        Ok(Self {
+            speeds,
+            pedals,
+            accel,
+        })
     }
 
     /// The acceleration this pedal row produces at `speed`, interpolated across speed and
@@ -133,11 +145,19 @@ impl PedalMap {
         let last = self.pedals.len() - 1;
 
         // Outside the table's reach in either direction.
-        let beyond_end = if rising { target >= at(last) } else { target <= at(last) };
+        let beyond_end = if rising {
+            target >= at(last)
+        } else {
+            target <= at(last)
+        };
         if beyond_end {
             return self.pedals[last];
         }
-        let below_start = if rising { target <= at(0) } else { target >= at(0) };
+        let below_start = if rising {
+            target <= at(0)
+        } else {
+            target >= at(0)
+        };
         if below_start {
             return self.pedals[0];
         }
@@ -233,11 +253,17 @@ impl LongitudinalCalibration {
 
         if requested_accel >= coasting {
             let throttle = self.accel_map.pedal_for(requested_accel, speed, true);
-            PedalCommand { throttle: throttle.clamp(0.0, 1.0) as f32, brake: 0.0 }
+            PedalCommand {
+                throttle: throttle.clamp(0.0, 1.0) as f32,
+                brake: 0.0,
+            }
         } else {
             let target = brake_coast + (requested_accel - coasting);
             let brake = self.brake_map.pedal_for(target, speed, false);
-            PedalCommand { throttle: 0.0, brake: brake.clamp(0.0, 1.0) as f32 }
+            PedalCommand {
+                throttle: 0.0,
+                brake: brake.clamp(0.0, 1.0) as f32,
+            }
         }
     }
 }
@@ -315,7 +341,10 @@ default,0.0,10.0,20.0
         let at_rest = c.command_for(3.0, 0.0);
         let at_speed = c.command_for(3.0, 20.0);
         assert!((at_rest.throttle - 0.5).abs() < 1e-6, "got {at_rest:?}");
-        assert!(at_speed.throttle > at_rest.throttle, "{at_speed:?} vs {at_rest:?}");
+        assert!(
+            at_speed.throttle > at_rest.throttle,
+            "{at_speed:?} vs {at_rest:?}"
+        );
     }
 
     #[test]
@@ -323,7 +352,10 @@ default,0.0,10.0,20.0
         let c = calibration();
         for (accel, speed) in [(3.0, 0.0), (-1.0, 0.0), (-9.0, 10.0), (0.0, 20.0)] {
             let cmd = c.command_for(accel, speed);
-            assert!(cmd.throttle == 0.0 || cmd.brake == 0.0, "{accel} at {speed}: {cmd:?}");
+            assert!(
+                cmd.throttle == 0.0 || cmd.brake == 0.0,
+                "{accel} at {speed}: {cmd:?}"
+            );
         }
     }
 
@@ -412,9 +444,17 @@ default,0.0,2.0,4.0,6.0
     #[test]
     fn shipped_maps_agree_on_coasting() {
         let c = shipped();
-        for speed in [0.0, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 11.0, 14.0, 17.0, 20.0] {
-            let (a, b) = (c.accel_map.passive_accel(speed), c.brake_map.passive_accel(speed));
-            assert!((a - b).abs() < 0.02, "{speed} m/s: accel map {a}, brake map {b}");
+        for speed in [
+            0.0, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 11.0, 14.0, 17.0, 20.0,
+        ] {
+            let (a, b) = (
+                c.accel_map.passive_accel(speed),
+                c.brake_map.passive_accel(speed),
+            );
+            assert!(
+                (a - b).abs() < 0.02,
+                "{speed} m/s: accel map {a}, brake map {b}"
+            );
         }
     }
 
@@ -429,7 +469,10 @@ default,0.0,2.0,4.0,6.0
                 let cmd = c.command_for(req, speed);
                 let direct = c.brake_map.pedal_for(req, speed, false) as f32;
                 assert_eq!(cmd.throttle, 0.0, "{req} at {speed}: {cmd:?}");
-                assert!((cmd.brake - direct).abs() < 0.01, "{req} at {speed}: {cmd:?} vs {direct}");
+                assert!(
+                    (cmd.brake - direct).abs() < 0.01,
+                    "{req} at {speed}: {cmd:?} vs {direct}"
+                );
             }
         }
     }
@@ -450,7 +493,10 @@ default,0.0,2.0,4.0,6.0
             for &speed in &map.speeds {
                 for i in 1..map.pedals.len() {
                     let (a0, a1) = (map.accel_at(i - 1, speed), map.accel_at(i, speed));
-                    assert!(if rising { a1 >= a0 } else { a1 <= a0 }, "{speed} m/s, row {i}");
+                    assert!(
+                        if rising { a1 >= a0 } else { a1 <= a0 },
+                        "{speed} m/s, row {i}"
+                    );
                 }
             }
         }

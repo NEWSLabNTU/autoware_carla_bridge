@@ -7,7 +7,6 @@
 //! bridges were removed; see docs/roadmap/9-gap-analysis.md gap 2.
 #![allow(dead_code)]
 
-
 use super::sensor_bridge::SensorType;
 use crate::error::Result;
 
@@ -24,5 +23,3 @@ pub enum BridgeType {
 pub trait ActorBridge {
     fn step(&mut self, timestamp: f64) -> Result<()>;
 }
-
-

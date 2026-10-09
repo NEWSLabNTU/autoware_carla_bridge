@@ -27,9 +27,9 @@
 use std::{
     io::{self, Write},
     sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
+        Arc,
     },
     thread::JoinHandle,
 };

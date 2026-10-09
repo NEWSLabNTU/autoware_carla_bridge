@@ -4,9 +4,9 @@ mod bridge;
 mod carla_vehicle;
 mod carla_version;
 mod clock;
+mod control_trace;
 mod coordinate_conversion;
 mod error;
-mod control_trace;
 mod ground_truth_objects;
 mod log_writer;
 mod longitudinal_map;
@@ -968,7 +968,12 @@ fn main() -> Result<()> {
         params.vehicle_config
     );
     let mut vehicle_config = sensor_config::VehicleConfig::from_file(&params.vehicle_config)?;
-    for name in params.disabled_sensors.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+    for name in params
+        .disabled_sensors
+        .split(',')
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    {
         if vehicle_config.sensors.remove(name).is_some() {
             tracing::info!("Sensor {name} disabled by disabled_sensors; not spawning it");
         } else {
@@ -1107,13 +1112,12 @@ fn main() -> Result<()> {
         };
 
         tracing::info!("Creating sensor bridges...");
-        let _sensor_bridges =
-            create_sensor_bridges(
-                node.clone(),
-                &carla_vehicle.lock().unwrap(),
-                &autoware,
-                sim_clock.clone(),
-            )?;
+        let _sensor_bridges = create_sensor_bridges(
+            node.clone(),
+            &carla_vehicle.lock().unwrap(),
+            &autoware,
+            sim_clock.clone(),
+        )?;
         tracing::info!("Created {} sensor bridges", _sensor_bridges.len());
 
         // A zero-rate IMU for each IMU topic, published once when the vehicle is gone,
@@ -1201,9 +1205,9 @@ fn main() -> Result<()> {
         let control_trace = if params.control_trace_path.is_empty() {
             None
         } else {
-            match control_trace::ControlTrace::create(
-                std::path::Path::new(&params.control_trace_path),
-            ) {
+            match control_trace::ControlTrace::create(std::path::Path::new(
+                &params.control_trace_path,
+            )) {
                 Ok(t) => {
                     tracing::info!("Control latency trace -> {}", params.control_trace_path);
                     Some(std::sync::Arc::new(t))
@@ -1515,7 +1519,10 @@ fn main() -> Result<()> {
             executor.spin(rclrs::SpinOptions::default().timeout(Duration::from_millis(1)));
             if let Some(t) = &loop_trace {
                 let now = std::time::Instant::now();
-                t.record_loop(now.duration_since(last_loop_at), now.duration_since(spin_start));
+                t.record_loop(
+                    now.duration_since(last_loop_at),
+                    now.duration_since(spin_start),
+                );
                 last_loop_at = now;
             }
 

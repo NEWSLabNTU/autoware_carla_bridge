@@ -15,8 +15,10 @@ use carla::{
     rpc::{VehicleControl, VehicleLightState, VehicleWheelLocation},
 };
 use rclrs::IntoPrimitiveOptions;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 /// Fall back maximum steering tire angle in radians (~70 degrees).
 ///
@@ -874,10 +876,8 @@ impl VehicleControlBridge {
 
         // CARLA reports max_steer_angle per wheel, in degrees. Only the steered wheels
         // carry a non-zero value, which is also how the axles are told apart here.
-        let (steered, fixed): (Vec<_>, Vec<_>) = physics
-            .wheels
-            .iter()
-            .partition(|w| w.max_steer_angle > 0.0);
+        let (steered, fixed): (Vec<_>, Vec<_>) =
+            physics.wheels.iter().partition(|w| w.max_steer_angle > 0.0);
 
         let max_degrees = steered
             .iter()
@@ -1179,9 +1179,9 @@ impl VehicleControlBridge {
                         cmd.longitudinal.velocity,
                         speed
                     ),
-                    StallEvent::Recovered { seconds } => tracing::info!(
-                        "Moving again after {seconds:.0}s commanded-but-stationary"
-                    ),
+                    StallEvent::Recovered { seconds } => {
+                        tracing::info!("Moving again after {seconds:.0}s commanded-but-stationary")
+                    }
                 }
             }
             if let Some(t) = trace {
@@ -1189,7 +1189,13 @@ impl VehicleControlBridge {
                 // Both in simulation time, so the difference is the command's real staleness
                 // when the bridge finally acted on it -- queueing included.
                 let age_ms = (now_sim_s - stamp) * 1e3;
-                t.record(stamp, received, converted, std::time::Instant::now(), age_ms);
+                t.record(
+                    stamp,
+                    received,
+                    converted,
+                    std::time::Instant::now(),
+                    age_ms,
+                );
             }
 
             tracing::debug!(
@@ -1430,7 +1436,10 @@ mod tests {
 
     #[test]
     fn steer_dynamics_off_or_first_command_passes_through() {
-        assert_eq!(steer_dynamics_step(&SteerDynamics::default(), Some((0.0, 1.0)), 0.3, 1.05), 0.3);
+        assert_eq!(
+            steer_dynamics_step(&SteerDynamics::default(), Some((0.0, 1.0)), 0.3, 1.05),
+            0.3
+        );
         assert_eq!(steer_dynamics_step(&dyn_(20.0, 0.2), None, 0.3, 1.0), 0.3);
     }
 
@@ -1442,7 +1451,10 @@ mod tests {
         let back = steer_dynamics_step(&dyn_(20.0, 0.0), Some((0.0, 10.0)), -0.5, 10.05);
         assert!((back + 1f32.to_radians()).abs() < 1e-6, "{back}");
         // A small change inside the limit lands exactly.
-        assert_eq!(steer_dynamics_step(&dyn_(20.0, 0.0), Some((0.0, 10.0)), 0.01, 10.05), 0.01);
+        assert_eq!(
+            steer_dynamics_step(&dyn_(20.0, 0.0), Some((0.0, 10.0)), 0.01, 10.05),
+            0.01
+        );
     }
 
     #[test]
@@ -1474,7 +1486,9 @@ mod tests {
         assert!(!control_mode_request_accepted(Req::MANUAL));
         assert!(!control_mode_request_accepted(Req::NO_COMMAND));
         assert!(!control_mode_request_accepted(Req::AUTONOMOUS_STEER_ONLY));
-        assert!(!control_mode_request_accepted(Req::AUTONOMOUS_VELOCITY_ONLY));
+        assert!(!control_mode_request_accepted(
+            Req::AUTONOMOUS_VELOCITY_ONLY
+        ));
         assert!(!control_mode_request_accepted(200));
         assert_eq!(control_mode_name(Req::MANUAL), "MANUAL");
         assert_eq!(control_mode_name(200), "UNKNOWN");
@@ -1681,7 +1695,10 @@ mod tests {
         for cmd in [0.05_f32, 0.2, 0.5, 0.8, 1.0] {
             let angle = effective_tire_angle(cmd, &tesla());
             let back = steer_command_for(angle, &tesla());
-            assert!((back - cmd).abs() < 1e-3, "cmd {cmd} round tripped to {back}");
+            assert!(
+                (back - cmd).abs() < 1e-3,
+                "cmd {cmd} round tripped to {back}"
+            );
         }
     }
 
@@ -1778,7 +1795,11 @@ mod stall_watch_tests {
         for s in 0..STALL_AFTER.as_secs() {
             assert_eq!(w.observe(at(t0, s), true, false), None);
         }
-        assert_eq!(w.observe(at(t0, 1), false, true), None, "recovered before reporting");
+        assert_eq!(
+            w.observe(at(t0, 1), false, true),
+            None,
+            "recovered before reporting"
+        );
     }
 
     #[test]
@@ -1810,12 +1831,18 @@ mod stall_watch_tests {
         let recovered = w.observe(at(t0, STALL_AFTER.as_secs() + 3), false, true);
         match recovered {
             Some(StallEvent::Recovered { seconds }) => {
-                assert!((seconds - (STALL_AFTER.as_secs_f64() + 3.0)).abs() < 0.5, "{seconds}")
+                assert!(
+                    (seconds - (STALL_AFTER.as_secs_f64() + 3.0)).abs() < 0.5,
+                    "{seconds}"
+                )
             }
             other => panic!("expected recovery, got {other:?}"),
         }
         // And the watcher is clean again: the next quiet command says nothing.
-        assert_eq!(w.observe(at(t0, STALL_AFTER.as_secs() + 4), false, true), None);
+        assert_eq!(
+            w.observe(at(t0, STALL_AFTER.as_secs() + 4), false, true),
+            None
+        );
     }
 
     #[test]
@@ -1846,6 +1873,9 @@ mod stall_watch_tests {
         // One moving command resets the run, so the next stall has to earn its own
         // STALL_AFTER rather than inheriting the previous one's.
         assert_eq!(w.observe(at(t0, STALL_AFTER.as_secs()), false, true), None);
-        assert_eq!(w.observe(at(t0, STALL_AFTER.as_secs() + 1), true, false), None);
+        assert_eq!(
+            w.observe(at(t0, STALL_AFTER.as_secs() + 1), true, false),
+            None
+        );
     }
 }

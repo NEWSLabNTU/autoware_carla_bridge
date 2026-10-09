@@ -3,14 +3,14 @@ use std::{convert::Infallible, mem, str::FromStr, sync::Arc};
 use bytemuck::{Pod, Zeroable};
 use carla::{
     client::{ActorBase, Sensor},
-    // `SensorDataBase` gives `SensorData::timestamp()`, the CARLA frame time the measurement
-    // was taken at. `SimClock::stamp` adds the episode epoch and nothing else, so the stamp
-    // is bit-exact with that frame's `/clock` (roadmap 015).
-    sensor::SensorDataBase,
     sensor::data::{
         Color, GnssMeasurement, Image as CarlaImage, ImuMeasurement, LidarMeasurement,
         SemanticLidarMeasurement,
     },
+    // `SensorDataBase` gives `SensorData::timestamp()`, the CARLA frame time the measurement
+    // was taken at. `SimClock::stamp` adds the episode epoch and nothing else, so the stamp
+    // is bit-exact with that frame's `/clock` (roadmap 015).
+    sensor::SensorDataBase,
 };
 use nalgebra::{coordinates::XYZ, UnitQuaternion};
 use rclrs::IntoPrimitiveOptions;
@@ -123,7 +123,6 @@ pub struct SensorBridge {
 }
 
 impl SensorBridge {
-
     pub fn new(
         node: rclrs::Node,
         actor: Sensor,
@@ -145,10 +144,22 @@ impl SensorBridge {
                 register_camera_rgb(node.clone(), &actor, key_list, &sensor_name, clock.clone())?;
             }
             SensorType::LidarRayCast => {
-                register_lidar_raycast(node.clone(), &actor, key_list, &sensor_name, clock.clone())?;
+                register_lidar_raycast(
+                    node.clone(),
+                    &actor,
+                    key_list,
+                    &sensor_name,
+                    clock.clone(),
+                )?;
             }
             SensorType::LidarRayCastSemantic => {
-                register_lidar_raycast_semantic(node.clone(), &actor, key_list, &sensor_name, clock.clone())?;
+                register_lidar_raycast_semantic(
+                    node.clone(),
+                    &actor,
+                    key_list,
+                    &sensor_name,
+                    clock.clone(),
+                )?;
             }
             SensorType::Imu => {
                 register_imu(node.clone(), &actor, key_list, &sensor_name, clock.clone())?;
@@ -748,7 +759,6 @@ fn publish_gnss(
     publisher.publish(&gnss_msg)?;
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {

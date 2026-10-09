@@ -16,8 +16,10 @@
 //! including ones no sensor could see -- through buildings, behind the ego, at any range.
 //! Planning that looks good on this may not survive real perception.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use carla::client::{ActorBase, World, WorldSnapshot};
 
@@ -394,16 +396,33 @@ impl GroundTruthObjectPublisher {
         obj.kinematics.initial_pose_with_covariance.pose.position.x = pos.x;
         obj.kinematics.initial_pose_with_covariance.pose.position.y = pos.y;
         obj.kinematics.initial_pose_with_covariance.pose.position.z = pos.z;
-        obj.kinematics.initial_pose_with_covariance.pose.orientation.x = q.i;
-        obj.kinematics.initial_pose_with_covariance.pose.orientation.y = q.j;
-        obj.kinematics.initial_pose_with_covariance.pose.orientation.z = q.k;
-        obj.kinematics.initial_pose_with_covariance.pose.orientation.w = q.w;
+        obj.kinematics
+            .initial_pose_with_covariance
+            .pose
+            .orientation
+            .x = q.i;
+        obj.kinematics
+            .initial_pose_with_covariance
+            .pose
+            .orientation
+            .y = q.j;
+        obj.kinematics
+            .initial_pose_with_covariance
+            .pose
+            .orientation
+            .z = q.k;
+        obj.kinematics
+            .initial_pose_with_covariance
+            .pose
+            .orientation
+            .w = q.w;
         // Autoware's twist is in the object's own frame, as a tracker would produce it.
         obj.kinematics.initial_twist_with_covariance.twist.linear.x = twist.longitudinal;
         obj.kinematics.initial_twist_with_covariance.twist.linear.y = twist.lateral;
         obj.kinematics.initial_twist_with_covariance.twist.linear.z = twist.vertical;
         obj.kinematics.initial_twist_with_covariance.twist.angular.z = twist.yaw_rate;
-        obj.kinematics.predicted_paths = vec![self.constant_velocity_path(&pos, &q, vx_ros, vy_ros)];
+        obj.kinematics.predicted_paths =
+            vec![self.constant_velocity_path(&pos, &q, vx_ros, vy_ros)];
         obj.shape.type_ = autoware_perception_msgs::msg::Shape::BOUNDING_BOX;
         obj.shape.dimensions.x = (bb.extent.x * 2.0) as f64;
         obj.shape.dimensions.y = (bb.extent.y * 2.0) as f64;

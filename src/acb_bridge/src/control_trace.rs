@@ -19,8 +19,10 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     path::Path,
-    sync::Mutex,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
     time::Instant,
 };
 
