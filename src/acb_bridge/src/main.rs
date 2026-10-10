@@ -1036,7 +1036,9 @@ fn main() -> Result<()> {
             hero_vehicle,
             &vehicle_config,
             autoware.get_tf_buffer(),
-            params.base_link_offset_x,
+            params
+                .base_link_offset_x
+                .or(vehicle_config.vehicle.base_link_offset_x),
         ) {
             Ok(v) => v,
             Err(e) => {

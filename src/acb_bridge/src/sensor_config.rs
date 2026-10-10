@@ -57,12 +57,22 @@ pub struct VehicleConfig {
 pub struct VehicleSettings {
     /// CARLA vehicle blueprint ID (e.g., "vehicle.tesla.model3")
     pub blueprint: String,
+
+    /// Rear-axle centre (`base_link`) along the actor's x axis, metres, CARLA axes.
+    /// Unset: measured from the wheels, which works wherever CARLA reports wheel
+    /// positions. CARLA 0.10 does not, so a 0.10 vehicle config states it here
+    /// (vehicle.lincoln.mkz: -1.478, measured from the zero-lateral-velocity point in a
+    /// low-speed slalom, carla-scenario-bridge roadmap 019). The `base_link_offset_x`
+    /// node parameter, when set, takes precedence.
+    #[serde(default)]
+    pub base_link_offset_x: Option<f64>,
 }
 
 impl Default for VehicleSettings {
     fn default() -> Self {
         Self {
             blueprint: "vehicle.tesla.model3".to_string(),
+            base_link_offset_x: None,
         }
     }
 }
