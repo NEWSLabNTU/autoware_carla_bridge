@@ -36,6 +36,8 @@ pub struct CarlaVehicle {
 
 /// A rear axle further than this from the actor origin is a bad reading, not a vehicle.
 /// Half the length of a long bus; a car's is under 2 m.
+// Only the wheel-based measurement uses it, and CARLA 0.10 has no wheel positions.
+#[cfg_attr(carla_0100, allow(dead_code))]
 const MAX_PLAUSIBLE_BASE_LINK_OFFSET_M: f64 = 6.0;
 
 impl CarlaVehicle {
@@ -143,72 +145,89 @@ impl CarlaVehicle {
             nalgebra::Vector3::zeros()
         };
 
-        let transform = match vehicle.transform() {
-            Ok(t) => t,
-            Err(e) => return fallback(format!("no actor transform: {e}")),
-        };
-        let physics = match vehicle.physics_control() {
-            Ok(p) => p,
-            Err(e) => return fallback(format!("physics_control failed: {e}")),
-        };
-
-        // `position` is world centimetres at the actor's current pose.
-        let rear: Vec<nalgebra::Vector3<f64>> = physics
-            .wheels
-            .iter()
-            .filter(|w| w.max_steer_angle <= 0.0)
-            .map(|w| {
-                nalgebra::Vector3::new(
-                    w.position.x as f64,
-                    w.position.y as f64,
-                    w.position.z as f64,
-                )
-            })
-            .collect();
-        if rear.len() != 2 {
-            return fallback(format!(
-                "expected 2 fixed (rear) wheels, found {} of {}",
-                rear.len(),
-                physics.wheels.len()
-            ));
+        // CARLA 0.10's physics control carries no wheel world position: the Python API's
+        // `offset`, `location` and `old_location` all read zero on 0.10.0 (measured
+        // 2026-10-11, carla-scenario-bridge roadmap 019), and carla-rust has no `position`.
+        // There the rear axle has to come from `base_link_offset_x`.
+        #[cfg(carla_0100)]
+        {
+            let _ = vehicle;
+            fallback(
+                "CARLA 0.10 exposes no wheel positions; set base_link_offset_x for this \
+                 blueprint"
+                    .to_string(),
+            )
         }
 
-        let location = nalgebra::Vector3::new(
-            transform.location.x as f64,
-            transform.location.y as f64,
-            transform.location.z as f64,
-        );
-        let rotation = (
-            transform.rotation.roll as f64,
-            transform.rotation.pitch as f64,
-            transform.rotation.yaw as f64,
-        );
-        let Some(measured) =
-            coordinate_conversion::base_link_in_actor_from_wheels(&rear, &location, rotation)
-        else {
-            return fallback("no rear wheels".to_string());
-        };
+        #[cfg(not(carla_0100))]
+        {
+            let transform = match vehicle.transform() {
+                Ok(t) => t,
+                Err(e) => return fallback(format!("no actor transform: {e}")),
+            };
+            let physics = match vehicle.physics_control() {
+                Ok(p) => p,
+                Err(e) => return fallback(format!("physics_control failed: {e}")),
+            };
 
-        let horizontal = measured.x.hypot(measured.y);
-        if !horizontal.is_finite() || horizontal > MAX_PLAUSIBLE_BASE_LINK_OFFSET_M {
-            // Wheels read before the vehicle's first physics step can report the world
-            // origin, which lands here as an offset of hundreds of metres.
-            return fallback(format!(
-                "measured ({:.3}, {:.3}) m from the actor origin, which is not a car",
-                measured.x, measured.y
-            ));
+            // `position` is world centimetres at the actor's current pose.
+            let rear: Vec<nalgebra::Vector3<f64>> = physics
+                .wheels
+                .iter()
+                .filter(|w| w.max_steer_angle <= 0.0)
+                .map(|w| {
+                    nalgebra::Vector3::new(
+                        w.position.x as f64,
+                        w.position.y as f64,
+                        w.position.z as f64,
+                    )
+                })
+                .collect();
+            if rear.len() != 2 {
+                return fallback(format!(
+                    "expected 2 fixed (rear) wheels, found {} of {}",
+                    rear.len(),
+                    physics.wheels.len()
+                ));
+            }
+
+            let location = nalgebra::Vector3::new(
+                transform.location.x as f64,
+                transform.location.y as f64,
+                transform.location.z as f64,
+            );
+            let rotation = (
+                transform.rotation.roll as f64,
+                transform.rotation.pitch as f64,
+                transform.rotation.yaw as f64,
+            );
+            let Some(measured) =
+                coordinate_conversion::base_link_in_actor_from_wheels(&rear, &location, rotation)
+            else {
+                return fallback("no rear wheels".to_string());
+            };
+
+            let horizontal = measured.x.hypot(measured.y);
+            if !horizontal.is_finite() || horizontal > MAX_PLAUSIBLE_BASE_LINK_OFFSET_M {
+                // Wheels read before the vehicle's first physics step can report the world
+                // origin, which lands here as an offset of hundreds of metres.
+                return fallback(format!(
+                    "measured ({:.3}, {:.3}) m from the actor origin, which is not a car",
+                    measured.x, measured.y
+                ));
+            }
+
+            let offset = nalgebra::Vector3::new(measured.x, measured.y, 0.0);
+            tracing::info!(
+                "base_link (rear-axle centre) at ({:.3}, {:.3}, 0.000) m in the actor frame \
+                 (CARLA axes, x forward, y right); wheels put it {:.3} m below the origin, \
+                 ignored",
+                offset.x,
+                offset.y,
+                -measured.z
+            );
+            offset
         }
-
-        let offset = nalgebra::Vector3::new(measured.x, measured.y, 0.0);
-        tracing::info!(
-            "base_link (rear-axle centre) at ({:.3}, {:.3}, 0.000) m in the actor frame \
-             (CARLA axes, x forward, y right); wheels put it {:.3} m below the origin, \
-             ignored",
-            offset.x,
-            offset.y,
-            -measured.z
-        );
-        offset
     }
 
     /// Where `base_link` (the rear-axle centre) sits in the actor's own frame, in CARLA
