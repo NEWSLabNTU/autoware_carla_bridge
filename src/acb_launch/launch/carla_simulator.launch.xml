@@ -9,6 +9,15 @@
      - Points traffic light recognition at acb's single camera, published as camera6
        because that is a namespace upstream ships a detector parameter file for
      - autoware_carla_interface disabled (replaced by native Rust bridge)
+
+     Start it as carla-scenario-bridge's user guide does (the vehicle side):
+       ROS_DOMAIN_ID=1 play_launch launch FLAGS acb_launch carla_simulator.launch.xml
+           map_path:=<town dir> relay:=tcp://<simulation host>:5560 [rviz:=false]
+     FLAGS are the play_launch options enforce-rules off, parser python and
+     web-addr 127.0.0.1:8082, each with a double-hyphen prefix (which an XML comment cannot
+     contain); that guide, section 4, says why. The deprecated API it starts
+     (launch_deprecated_api) serves the velocity limit scenarios set; nothing else needs to
+     run beside it.
 -->
 <launch>
   <!-- User's Autoware launch file (can point to a custom fork) -->
@@ -121,6 +130,12 @@
   <arg name="carla_localization" default="true" description="CARLA-tuned localization params"/>
   <arg name="carla_perception" default="true" description="selectable lidar model, fusion-only traffic lights"/>
   <arg name="carla_system" default="true" description="CARLA component-state topics, MRM params, diagnostic graph"/>
+  <!-- Autoware's deprecated (tier4) API, which autoware_launch turns on only for
+       scenario_simulation. The vehicle agent needs /api/autoware/set/velocity_limit from it
+       (served by autoware_iv_internal_api_adaptor) for a scenario's absolute SpeedAction:
+       without it set_speed_limit fails and SSv2 aborts the scenario. Passed to
+       autoware.launch.xml, so a user's own autoware.launch.xml gets it too. -->
+  <arg name="launch_deprecated_api" default="true" description="tier4 deprecated API (velocity limit for scenarios)"/>
   <!-- System -->
   <arg name="launch_system_monitor" default="false" description="launch system monitor"/>
   <arg name="launch_dummy_diag_publisher" default="false" description="launch dummy diag publisher"/>
@@ -209,6 +224,8 @@
            messages in a run to zero and the chain produced nothing at all. Leave this
            off until the fine detector's own lifetime is understood. -->
       <arg name="traffic_light_recognition/use_high_accuracy_detection" value="false"/>
+      <!-- API -->
+      <arg name="launch_deprecated_api" value="$(var launch_deprecated_api)"/>
       <!-- Tools -->
       <arg name="rviz" value="$(var rviz)"/>
       <arg name="rviz_config" value="$(var rviz_config)"/>
