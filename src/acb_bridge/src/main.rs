@@ -106,7 +106,15 @@ fn create_sensor_bridges(
         let bridge_type = BridgeType::Sensor(mapped_type, link_name.clone());
 
         // Create sensor bridge
-        match SensorBridge::new(node.clone(), sensor, bridge_type, autoware, clock.clone()) {
+        let self_box = carla_vehicle.self_box(link_name);
+        match SensorBridge::new(
+            node.clone(),
+            sensor,
+            bridge_type,
+            autoware,
+            clock.clone(),
+            self_box,
+        ) {
             Ok(bridge) => {
                 tracing::info!(
                     "Created sensor bridge for '{}' (type: {:?})",

@@ -32,7 +32,14 @@ pub struct CarlaVehicle {
     /// frame, in CARLA axes (x forward, y right, z up) and metres. About (-1.386, 0, 0)
     /// on vehicle.tesla.model3. Measured once, at adoption; see `measure_base_link`.
     base_link_in_actor: nalgebra::Vector3<f64>,
+    /// Each sensor's attach transform (sensor frame -> actor frame, CARLA axes).
+    sensor_mounts: HashMap<String, nalgebra::Isometry3<f32>>,
+    /// The vehicle's bounding box in the actor frame: centre and half extents.
+    body: Option<(nalgebra::Vector3<f32>, nalgebra::Vector3<f32>)>,
 }
+
+/// How far beyond the bounding box a lidar return still counts as the vehicle itself.
+const SELF_BOX_MARGIN_M: f32 = 0.1;
 
 /// A rear axle further than this from the actor origin is a bad reading, not a vehicle.
 /// Half the length of a long bus; a car's is under 2 m.
@@ -90,7 +97,7 @@ impl CarlaVehicle {
         // is decides where they are attached.
         let base_link_in_actor = Self::measure_base_link(&vehicle, base_link_offset_x);
 
-        let (sensors, sensor_types) = Self::spawn_sensors(
+        let (sensors, sensor_types, sensor_mounts) = Self::spawn_sensors(
             world,
             &vehicle,
             vehicle_config,
@@ -100,11 +107,28 @@ impl CarlaVehicle {
 
         tracing::info!("All sensors spawned successfully");
 
+        let body = match vehicle.bounding_box() {
+            Ok(bb) => Some((
+                nalgebra::Vector3::new(
+                    bb.transform.location.x,
+                    bb.transform.location.y,
+                    bb.transform.location.z,
+                ),
+                nalgebra::Vector3::new(bb.extent.x, bb.extent.y, bb.extent.z),
+            )),
+            Err(e) => {
+                tracing::warn!("No bounding box for the vehicle ({e}); lidar self-returns kept");
+                None
+            }
+        };
+
         Ok(Self {
             vehicle,
             sensors,
             sensor_types,
             base_link_in_actor,
+            sensor_mounts,
+            body,
         })
     }
 
@@ -247,7 +271,11 @@ impl CarlaVehicle {
         vehicle_config: &VehicleConfig,
         tf_buffer: &TFBuffer,
         base_link_in_actor: &nalgebra::Vector3<f64>,
-    ) -> Result<(HashMap<String, Sensor>, HashMap<String, SensorType>)> {
+    ) -> Result<(
+        HashMap<String, Sensor>,
+        HashMap<String, SensorType>,
+        HashMap<String, nalgebra::Isometry3<f32>>,
+    )> {
         // TF gives base_link -> sensor; CARLA attaches relative to the actor origin. The
         // two differ by the rear-axle offset, so attach at T_actor<-base_link *
         // T_base_link<-sensor. A pure translation, carried into ROS axes (Y-flip) because
@@ -262,6 +290,7 @@ impl CarlaVehicle {
         let blueprint_library = world.blueprint_library()?;
         let mut spawned_sensors = HashMap::new();
         let mut sensor_types = HashMap::new();
+        let mut mounts = HashMap::new();
 
         for (link_name, sensor_def) in &vehicle_config.sensors {
             // Get blueprint directly from config (no name-based inference!)
@@ -382,9 +411,22 @@ impl CarlaVehicle {
 
             spawned_sensors.insert(link_name.clone(), sensor);
             sensor_types.insert(link_name.clone(), sensor_type);
+            mounts.insert(link_name.clone(), carla_transform.to_na());
         }
 
-        Ok((spawned_sensors, sensor_types))
+        Ok((spawned_sensors, sensor_types, mounts))
+    }
+
+    /// The vehicle's body as seen from sensor `link_name`, for dropping lidar returns that
+    /// hit the vehicle itself. `None` when the mount or the bounding box is unknown.
+    pub fn self_box(&self, link_name: &str) -> Option<crate::bridge::sensor_bridge::SelfBox> {
+        let mount = self.sensor_mounts.get(link_name)?;
+        let (center, half) = self.body?;
+        Some(crate::bridge::sensor_bridge::SelfBox {
+            actor_from_sensor: *mount,
+            center,
+            half: half.add_scalar(SELF_BOX_MARGIN_M),
+        })
     }
 
     /// Get reference to the spawned vehicle
