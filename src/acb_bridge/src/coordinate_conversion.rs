@@ -527,6 +527,7 @@ pub fn base_link_world_location(
 /// `R_actor^T * (rear_mid_world - actor_origin_world)`. Returns `None` when there are no
 /// wheels to average. The z component is returned as measured; the caller decides
 /// whether to keep it.
+#[cfg_attr(carla_0100, allow(dead_code))] // no wheel positions on CARLA 0.10
 pub fn base_link_in_actor_from_wheels(
     rear_wheels_world_cm: &[Vector3<f64>],
     actor_location: &Vector3<f64>,

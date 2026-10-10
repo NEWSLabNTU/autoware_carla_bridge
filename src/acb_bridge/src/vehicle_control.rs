@@ -12,7 +12,7 @@
 use crate::error::Result;
 use carla::{
     client::{ActorBase, Vehicle},
-    rpc::{VehicleControl, VehicleLightState, VehicleWheelLocation},
+    rpc::{VehicleControl, VehicleLightState},
 };
 use rclrs::IntoPrimitiveOptions;
 use std::{
@@ -911,9 +911,20 @@ impl VehicleControlBridge {
             return SteerGeometry::default();
         }
 
+        // CARLA 0.10 exposes no wheel positions (carla-scenario-bridge roadmap 019), so the
+        // Ackermann term cannot be measured there; steer as a plain bicycle model.
+        #[cfg(carla_0100)]
+        let track_over_wheelbase = {
+            let _ = (&steered, &fixed);
+            tracing::warn!(
+                "CARLA 0.10 exposes no wheel positions; steering without an Ackermann term"
+            );
+            0.0_f32
+        };
         // Track and wheelbase from the wheel offsets, which carla-rust exposes as
         // `offset` from the vehicle origin. Only their ratio is used, so whatever unit
         // CARLA reports cancels and no conversion is needed.
+        #[cfg(not(carla_0100))]
         let track_over_wheelbase = match (steered.as_slice(), fixed.as_slice()) {
             ([a, b], [c, d]) => {
                 let track: f32 = (a.position.x - b.position.x).hypot(a.position.y - b.position.y);
@@ -1249,27 +1260,38 @@ impl VehicleControlBridge {
     /// back the command it just issued and removes the actuator from its loop entirely.
     /// See `docs/issues/009-*`.
     fn measured_steering_angle(&self, vehicle: &Vehicle, commanded_steer: f32) -> f32 {
-        // `VehicleWheelLocation` is an autocxx-generated POD without `Copy`, so the two
-        // wheels are read one at a time rather than through an array.
-        let front = vehicle
-            .wheel_steer_angle(VehicleWheelLocation::FL_Wheel)
-            .and_then(|fl| {
-                vehicle
-                    .wheel_steer_angle(VehicleWheelLocation::FR_Wheel)
-                    .map(|fr| (fl, fr))
-            });
+        // CARLA 0.10.0 raises `std::exception` from every `get_wheel_steer_angle` call
+        // (carla-scenario-bridge roadmap 019), so skip the two failing RPCs per frame and
+        // report the command through the steering model, as the error path below would.
+        #[cfg(carla_0100)]
+        {
+            let _ = vehicle;
+            -effective_tire_angle(commanded_steer, &self.steer_geometry)
+        }
+        #[cfg(not(carla_0100))]
+        {
+            // `VehicleWheelLocation` is an autocxx-generated POD without `Copy`, so the two
+            // wheels are read one at a time rather than through an array.
+            let front = vehicle
+                .wheel_steer_angle(carla::rpc::VehicleWheelLocation::FL_Wheel)
+                .and_then(|fl| {
+                    vehicle
+                        .wheel_steer_angle(carla::rpc::VehicleWheelLocation::FR_Wheel)
+                        .map(|fr| (fl, fr))
+                });
 
-        match front {
-            Ok((fl, fr)) => {
-                let mean_degrees = 0.5 * (fl + fr);
-                // Negate: CARLA positive = right turn, Autoware positive = left turn.
-                -mean_degrees.to_radians()
-            }
-            _ => {
-                // Rate-limited by being a debug line: a CARLA build without the API would
-                // otherwise log at 20 Hz for the whole run.
-                tracing::debug!("Wheel steer angle unavailable; reporting the commanded angle");
-                -effective_tire_angle(commanded_steer, &self.steer_geometry)
+            match front {
+                Ok((fl, fr)) => {
+                    let mean_degrees = 0.5 * (fl + fr);
+                    // Negate: CARLA positive = right turn, Autoware positive = left turn.
+                    -mean_degrees.to_radians()
+                }
+                _ => {
+                    // Rate-limited by being a debug line: a CARLA build without the API would
+                    // otherwise log at 20 Hz for the whole run.
+                    tracing::debug!("Wheel steer angle unavailable; reporting the commanded angle");
+                    -effective_tire_angle(commanded_steer, &self.steer_geometry)
+                }
             }
         }
     }
