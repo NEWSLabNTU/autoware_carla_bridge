@@ -13,8 +13,8 @@
      Start it as carla-scenario-bridge's user guide does (the vehicle side):
        ROS_DOMAIN_ID=1 play_launch launch FLAGS acb_launch carla_simulator.launch.xml
            map_path:=<town dir> relay:=tcp://<simulation host>:5560 [rviz:=false]
-     FLAGS are the play_launch options enforce-rules off, parser python and
-     web-addr 127.0.0.1:8082, each with a double-hyphen prefix (which an XML comment cannot
+     FLAGS are the play_launch options enforce-rules off, parser python,
+     composable-respawn on-crash and web-addr 127.0.0.1:8082, each with a double-hyphen prefix (which an XML comment cannot
      contain); that guide, section 4, says why. The deprecated API it starts
      (launch_deprecated_api) serves the velocity limit scenarios set; nothing else needs to
      run beside it.
@@ -92,9 +92,15 @@
                     exit at startup without failing the launch. acb publishes its one
                     CARLA camera under the TF frame named in acb_bridge's
                     vehicle_config.yaml, which is camera6/camera_link for that reason"/>
-  <arg name="lidar_detection_model" default="centerpoint"
-       description="lidar object detection model; 'clustering' selects the CPU-only
-                    rule-based detector, for GPUs without VRAM headroom for TensorRT"/>
+  <!-- clustering by default: on CARLA it is the one that passes the AWF standing-pedestrian
+       use case. Measured 2026-10-10 on one host and build, UC-AEB-001-0001 (9 variants):
+       centerpoint 2/9 (the ego hit the pedestrian in 6, braked at -7.2 m/s^2 in 1; the
+       node logged "Fail to preprocess and skip to detect" on TF lookups ~9 s stale),
+       clustering 9/9. basic/ and UC-ACC pass with either. It also needs no GPU beside
+       CARLA's. centerpoint (TensorRT) remains a choice. -->
+  <arg name="lidar_detection_model" default="clustering"
+       description="lidar object detection model: clustering (CPU, rule-based; default) or
+                    centerpoint (TensorRT)"/>
   <arg name="occupancy_grid_map_method" default="pointcloud_based"
        description="'laserscan_based' avoids the CUDA occupancy grid node"/>
   <!-- Vehicle - bridge + monitor launched via acb_vehicle_launch/vehicle_interface.launch.xml -->
