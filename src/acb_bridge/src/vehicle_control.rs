@@ -197,8 +197,17 @@ fn steer_dynamics_step(
 /// Verified against CARLA 0.9.16 by `scripts/probe_carla_conventions.py`, which reads the
 /// physical wheel angles back over the whole command range. This model reproduces them to
 /// better than 0.05 degrees.
+///
+/// CARLA 0.10's Chaos vehicles respond to the *square* of the command: steady-state
+/// curvature on vehicle.lincoln.mkz at 3 m/s was 0.0033, 0.0135 and 0.0305 1/m for
+/// commands 0.1, 0.2 and 0.3, a 1 : 4.1 : 9.2 ratio (carla-scenario-bridge roadmap 019;
+/// TIER IV's square-root fix for the same engine). There the inner wheel follows
+/// `cmd^2 * max_steer_angle`, and `steer_command_for` inverts it to a square root.
 fn effective_tire_angle(steer_cmd: f32, geometry: &SteerGeometry) -> f32 {
-    let inner = steer_cmd.abs().clamp(0.0, 1.0) * geometry.max_steer_angle;
+    let magnitude = steer_cmd.abs().clamp(0.0, 1.0);
+    #[cfg(carla_0100)]
+    let magnitude = magnitude * magnitude;
+    let inner = magnitude * geometry.max_steer_angle;
     if inner <= f32::EPSILON {
         return 0.0;
     }
@@ -1727,6 +1736,7 @@ mod tests {
     /// the vehicle actually turns at -- not the wheel limit the command used to be scaled
     /// against.
     #[test]
+    #[cfg(not(carla_0100))] // 0.9.16 PhysX steering is linear in the command
     fn effective_angle_matches_measured_wheels() {
         // (steer command, measured mean of FL and FR, degrees)
         let measured = [
@@ -1792,6 +1802,7 @@ mod tests {
 
     /// Without geometry the model must reduce to exactly what it replaced.
     #[test]
+    #[cfg(not(carla_0100))] // 0.9.16 PhysX steering is linear in the command
     fn zero_ackermann_term_is_the_old_linear_mapping() {
         let g = SteerGeometry {
             max_steer_angle: 1.22,
@@ -1799,6 +1810,25 @@ mod tests {
             ..Default::default()
         };
         assert!((steer_command_for(0.61, &g) - 0.5).abs() < 1e-4);
+    }
+
+    /// CARLA 0.10 (Chaos): the delivered angle is quadratic in the command, so a quarter
+    /// of the limit needs half the command, and the inverse round-trips.
+    #[test]
+    #[cfg(carla_0100)]
+    fn chaos_steering_is_quadratic_in_the_command() {
+        let g = SteerGeometry {
+            max_steer_angle: 1.22,
+            track_over_wheelbase: 0.0,
+            ..Default::default()
+        };
+        assert!((effective_tire_angle(0.5, &g) - 0.305).abs() < 1e-4);
+        assert!((steer_command_for(0.305, &g) - 0.5).abs() < 1e-4);
+        assert!((steer_command_for(-0.305, &g) + 0.5).abs() < 1e-4);
+        for cmd in [0.05_f32, 0.2, 0.7, 1.0] {
+            let back = steer_command_for(effective_tire_angle(cmd, &g), &g);
+            assert!((back - cmd).abs() < 1e-3, "{cmd} -> {back}");
+        }
     }
 
     #[test]
