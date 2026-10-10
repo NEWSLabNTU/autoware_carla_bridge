@@ -29,7 +29,7 @@ STACKS=1
 OUT="scenario_results.tsv"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${ACB_CSB_REPO:-$HOME/repos/carla-scenario-bridge}"
-SCENARIO="$REPO/scenarios/town01_ego_drive.xosc"
+SCENARIO="$REPO/src/csb_examples/scenarios/basic/town01_ego_drive.xosc"
 
 while getopts "n:s:o:h" opt; do
     case "$opt" in

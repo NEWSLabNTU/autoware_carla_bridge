@@ -272,6 +272,26 @@ const STALL_AFTER: Duration = Duration::from_secs(5);
 /// fifteen seconds instead of one per control command at 20 Hz.
 const STALL_WARN_INTERVAL: Duration = Duration::from_secs(15);
 
+/// Speed below which a commanded standstill is held with the handbrake.
+///
+/// Autoware commands zero velocity *before* the car has stopped: its stop sequence reaches
+/// `velocity = 0` with the car still rolling at up to ~1 m/s, and keeps braking with
+/// `stopped_acc`. Locking CARLA's handbrake at that moment stopped the car within two ticks
+/// -- measured -6.6 and -8.7 m/s^2 at 20 Hz, from 0.8 m/s -- and AWF's UC-AEB-001-0001
+/// fails any deceleration beyond 6 m/s^2 (carla-scenario-bridge roadmap 020). Below 0.1 m/s the lock takes off
+/// at most 2 m/s^2 in one tick, which the bridge's median filter discards; above it the
+/// service brake finishes the stop. Same threshold as the emergency branch.
+const HANDBRAKE_ENGAGE_SPEED_MPS: f64 = 0.1;
+
+/// Whether to hold the vehicle with the handbrake this tick: always in PARK; otherwise on
+/// a commanded standstill (velocity and acceleration both ~0 or braking) once the car has
+/// actually come to rest (`HANDBRAKE_ENGAGE_SPEED_MPS`). Holding stops CARLA's automatic
+/// transmission from idle-creeping a stopped car.
+fn hold_with_handbrake(is_park: bool, cmd_velocity: f64, cmd_accel: f64, speed: f64) -> bool {
+    is_park
+        || (cmd_velocity.abs() <= 0.01 && cmd_accel <= 0.01 && speed < HANDBRAKE_ENGAGE_SPEED_MPS)
+}
+
 /// What `StallWatch` decided to say, if anything.
 #[derive(Debug, PartialEq)]
 enum StallEvent {
@@ -1141,7 +1161,12 @@ impl VehicleControlBridge {
             // tooling validating against vehicle performance bounds treats as fatal.
             //
             // PARK holds unconditionally, which is what the gear means.
-            if applied.is_park() || (cmd.longitudinal.velocity.abs() <= 0.01 && accel <= 0.01) {
+            if hold_with_handbrake(
+                applied.is_park(),
+                cmd.longitudinal.velocity as f64,
+                accel as f64,
+                speed,
+            ) {
                 control.hand_brake = true;
                 if applied.is_park() {
                     control.throttle = 0.0;
@@ -1426,6 +1451,20 @@ impl VehicleControlBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handbrake_waits_for_the_car_to_stop() {
+        // Autoware reaches velocity 0 while the car still rolls: service brake only.
+        assert!(!hold_with_handbrake(false, 0.0, -3.4, 0.8));
+        assert!(!hold_with_handbrake(false, 0.0, -0.4, 0.1));
+        // At rest under a standstill command: hold.
+        assert!(hold_with_handbrake(false, 0.0, -0.4, 0.05));
+        assert!(hold_with_handbrake(false, 0.0, 0.0, 0.0));
+        // Moving or accelerating commands never hold; PARK always does.
+        assert!(!hold_with_handbrake(false, 1.0, -0.4, 0.0));
+        assert!(!hold_with_handbrake(false, 0.0, 0.5, 0.0));
+        assert!(hold_with_handbrake(true, 3.0, 1.0, 5.0));
+    }
 
     fn dyn_(rate_deg_s: f32, tau: f32) -> SteerDynamics {
         SteerDynamics {
