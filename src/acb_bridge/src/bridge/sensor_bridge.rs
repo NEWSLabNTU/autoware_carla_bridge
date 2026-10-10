@@ -23,6 +23,32 @@ use crate::{
     utils,
 };
 
+/// The parent vehicle's body, as seen from one of its sensors, for dropping self-returns.
+///
+/// CARLA 0.9.16's ray-cast lidar ignored the vehicle it was attached to; 0.10's hits it.
+/// On vehicle.lincoln.mkz 552 returns per sweep landed on the hood (3.0-3.5 m ahead of
+/// the rear axle, 0.8-1.0 m up), became an obstacle inside the ego's own footprint, and
+/// Autoware's obstacle stop held the car at a standstill for the whole run
+/// (carla-scenario-bridge roadmap 019). Nothing downstream crops the body: the sensor
+/// kit has no self-crop filter because 0.9.16 never needed one.
+#[derive(Debug, Clone, Copy)]
+pub struct SelfBox {
+    /// Sensor frame -> actor frame, CARLA axes: the transform the sensor was attached with.
+    pub actor_from_sensor: nalgebra::Isometry3<f32>,
+    /// Bounding-box centre in the actor frame (CARLA axes).
+    pub center: nalgebra::Vector3<f32>,
+    /// Half extents plus a margin.
+    pub half: nalgebra::Vector3<f32>,
+}
+
+impl SelfBox {
+    /// Whether a point in the sensor frame (CARLA axes) lies on the vehicle's body.
+    fn contains(&self, x: f32, y: f32, z: f32) -> bool {
+        let p = self.actor_from_sensor * nalgebra::Point3::new(x, y, z) - self.center;
+        p.x.abs() <= self.half.x && p.y.abs() <= self.half.y && p.z.abs() <= self.half.z
+    }
+}
+
 /// Autoware 2025 PointXYZIRC format (16 bytes per point)
 ///
 /// This struct matches Autoware's expected point cloud format for NDT localization.
@@ -129,6 +155,7 @@ impl SensorBridge {
         bridge_type: BridgeType,
         autoware: &Autoware,
         clock: crate::clock::SimClock,
+        self_box: Option<SelfBox>,
     ) -> Result<SensorBridge> {
         let (sensor_type, sensor_name) = match bridge_type {
             BridgeType::Sensor(t, s) => (t, s),
@@ -150,6 +177,7 @@ impl SensorBridge {
                     key_list,
                     &sensor_name,
                     clock.clone(),
+                    self_box,
                 )?;
             }
             SensorType::LidarRayCastSemantic => {
@@ -297,6 +325,7 @@ fn register_lidar_raycast(
     key_list: Option<Vec<String>>,
     frame_id: &str,
     clock: crate::clock::SimClock,
+    self_box: Option<SelfBox>,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
@@ -317,7 +346,7 @@ fn register_lidar_raycast(
         };
 
         if let Ok(measure) = data.try_into() {
-            if let Err(e) = publish_lidar(&publisher, header, measure) {
+            if let Err(e) = publish_lidar(&publisher, header, measure, self_box.as_ref()) {
                 tracing::error!("Failed to publish lidar data: {e:?}");
             }
         } else {
@@ -508,6 +537,7 @@ fn publish_lidar(
     publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::PointCloud2>>,
     header: std_msgs::msg::Header,
     measure: LidarMeasurement,
+    self_box: Option<&SelfBox>,
 ) -> Result<()> {
     let lidar_data = measure.as_slice();
     if lidar_data.is_empty() {
@@ -537,7 +567,7 @@ fn publish_lidar(
     let points: Vec<PointXYZIRC> = lidar_data
         .iter()
         .enumerate()
-        .map(|(idx, det)| {
+        .filter_map(|(idx, det)| {
             while cursor + 1 < channel_boundaries.len() && idx >= channel_boundaries[cursor + 1] {
                 cursor += 1;
             }
@@ -551,7 +581,11 @@ fn publish_lidar(
                     .saturating_sub(1)
             } as u16;
 
-            PointXYZIRC {
+            if self_box.is_some_and(|b| b.contains(det.point.x, det.point.y, det.point.z)) {
+                return None;
+            }
+
+            Some(PointXYZIRC {
                 // Apply Y-axis flip: CARLA uses left-handed (Y=right), ROS uses right-handed (Y=left)
                 // The pre-built PCD map is in ROS frame (Y-flipped), so live scan must match.
                 x: det.point.x,
@@ -561,7 +595,7 @@ fn publish_lidar(
                 intensity: (det.intensity.clamp(0.0, 1.0) * 255.0) as u8,
                 return_type: 0, // Single return
                 channel,
-            }
+            })
         })
         .collect();
 
@@ -805,6 +839,21 @@ mod tests {
 
     /// The cursor walk in `publish_lidar` must land on the same channel a linear scan
     /// would, including the fall back for out-of-order points. See issue 011.
+    #[test]
+    fn self_box_drops_the_hood_and_keeps_the_road() {
+        // Lidar 0.58 m behind the actor origin and 2 m up, as acb mounts it on the mkz.
+        let b = SelfBox {
+            actor_from_sensor: nalgebra::Isometry3::translation(-0.578, 0.0, 2.0),
+            center: nalgebra::Vector3::new(0.0, 0.0, 0.763),
+            half: nalgebra::Vector3::new(2.446 + 0.1, 0.918 + 0.1, 0.762 + 0.1),
+        };
+        // Hood: 3.0 m ahead of the rear axle (-1.478) is actor x 1.52; sensor x 2.1, z -1.1.
+        assert!(b.contains(2.1, 0.0, -1.1));
+        // Road 10 m ahead, and a car beside the ego.
+        assert!(!b.contains(10.0, 0.0, -2.0));
+        assert!(!b.contains(0.0, 3.0, -1.0));
+    }
+
     #[test]
     fn channel_lookup_matches_a_linear_scan() {
         let boundaries = [0usize, 3, 3, 7, 10]; // note the empty channel 1
