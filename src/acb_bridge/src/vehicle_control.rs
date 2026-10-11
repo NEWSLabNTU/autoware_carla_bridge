@@ -976,6 +976,19 @@ impl VehicleControlBridge {
             .filter(|(x, y)| x.is_finite() && y.is_finite())
             .collect();
         steering_curve.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // CARLA 0.10 reports the default curve with the blueprint's appended to it --
+        // vehicle.lincoln.mkz reads (0, 1), (10, 0.5), (0, 1), (20, 0.9), (60, 0.8),
+        // (120, 0.7) -- so the factor at 10 km/h would be 0.5 by the default's point alone.
+        // The quadratic steering law above was measured against a flat curve, with whatever
+        // speed dependence the server applies folded into it; keep it flat there.
+        #[cfg(carla_0100)]
+        if !steering_curve.is_empty() {
+            tracing::info!(
+                "CARLA 0.10 steering_curve {steering_curve:?} ignored: it carries the default \
+                 curve's points, and the 0.10 steering law is measured without compensation"
+            );
+            steering_curve = FLAT_STEERING_CURVE.to_vec();
+        }
         if steering_curve.is_empty() {
             tracing::info!("CARLA reported no steering_curve; steering without speed compensation");
             steering_curve = FLAT_STEERING_CURVE.to_vec();
