@@ -47,6 +47,14 @@ const SELF_BOX_MARGIN_M: f32 = 0.1;
 #[cfg_attr(carla_0100, allow(dead_code))]
 const MAX_PLAUSIBLE_BASE_LINK_OFFSET_M: f64 = 6.0;
 
+/// What `spawn_sensors` returns, keyed by sensor link name: the spawned actors, their
+/// types, and each one's mount in the actor frame.
+type SpawnedSensors = (
+    HashMap<String, Sensor>,
+    HashMap<String, SensorType>,
+    HashMap<String, nalgebra::Isometry3<f32>>,
+);
+
 impl CarlaVehicle {
     /// Create a CarlaVehicle wrapper around an existing hero vehicle and spawn sensors on it
     ///
@@ -271,11 +279,7 @@ impl CarlaVehicle {
         vehicle_config: &VehicleConfig,
         tf_buffer: &TFBuffer,
         base_link_in_actor: &nalgebra::Vector3<f64>,
-    ) -> Result<(
-        HashMap<String, Sensor>,
-        HashMap<String, SensorType>,
-        HashMap<String, nalgebra::Isometry3<f32>>,
-    )> {
+    ) -> Result<SpawnedSensors> {
         // TF gives base_link -> sensor; CARLA attaches relative to the actor origin. The
         // two differ by the rear-axle offset, so attach at T_actor<-base_link *
         // T_base_link<-sensor. A pure translation, carried into ROS axes (Y-flip) because
