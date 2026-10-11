@@ -751,7 +751,7 @@ fn publish_gnss(
         // Negating latitude makes gnss_poser output match the map frame (y = -CARLA_y).
         latitude: -measure.latitude(),
         longitude: measure.longitude(),
-        altitude: measure.attitude(),
+        altitude: measure.altitude(),
         position_covariance: [0.0; 9],
         position_covariance_type: 0,
     };
