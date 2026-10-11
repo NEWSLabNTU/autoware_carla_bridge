@@ -67,6 +67,11 @@
        with this on, SSv2's publish_conventional_traffic_signals must be off. -->
   <arg name="traffic_light_map_path" default=""
        description="the map dir's carla/traffic_lights.yaml (carla_scenario_bridge --generate-signal-table) to publish signals from; empty disables"/>
+  <!-- Where CARLA's world origin sits in the map frame (x, y, z in metres): the offset the
+       map's OpenDRIVE was converted with. carla_scenario_bridge reads the same file. Empty,
+       or no file, means zero: the map is in CARLA's frame, as every TUM town is. -->
+  <arg name="map_origin_path" default=""
+       description="the map dir's carla/map_origin.yaml; empty or absent = origin zero"/>
 
   <!-- Sensor frames of vehicle_config not to spawn, comma-separated. The ego and background
        launches set camera6/camera_link when traffic light recognition is fusion-only: the
@@ -98,6 +103,7 @@
     <param name="seed_localization_on_attach" value="$(var seed_localization_on_attach)"/>
     <param name="ground_truth_range_m" value="$(var ground_truth_range_m)"/>
     <param name="traffic_light_map_path" value="$(var traffic_light_map_path)"/>
+    <param name="map_origin_path" value="$(var map_origin_path)"/>
     <param name="control_trace_path" value="$(var control_trace_path)"/>
     <param name="accel_map_path" value="$(var accel_map_path)"/>
     <param name="brake_map_path" value="$(var brake_map_path)"/>

@@ -75,6 +75,64 @@ pub fn ros_to_carla_position(ros_position: &Vector3<f64>) -> Vector3<f64> {
     )
 }
 
+/// Where CARLA's world origin sits in the Autoware map frame, in metres.
+///
+/// The TUM towns' Lanelet2 maps are authored in CARLA's frame, so for them this is zero. A
+/// surveyed map is not: the NTU campus Lanelet2 coordinates are MGRS grid metres, about
+/// (52 600, 67 800), and its OpenDRIVE is converted with that offset subtracted so CARLA's
+/// world stays near its origin. Every map-frame position crossing into or out of CARLA goes
+/// through this: `map = Y-flip(carla) + origin`. Rotations are unaffected.
+///
+/// Read from `<map dir>/carla/map_origin.yaml` (`map_origin_path`); carla_scenario_bridge
+/// reads the same file for the scenario's poses, and the two must agree.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapOrigin {
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub z: f64,
+}
+
+impl MapOrigin {
+    /// Read `path`. Empty, `none`, or a file that does not exist means origin zero (a map in
+    /// CARLA's frame); a file that does not parse is an error, since a wrong origin puts the
+    /// ego hundreds of metres off on a run that otherwise looks fine.
+    pub fn load(path: &str) -> std::result::Result<Self, String> {
+        if path.is_empty() || path == "none" {
+            return Ok(Self::default());
+        }
+        match std::fs::read_to_string(path) {
+            Ok(text) => {
+                serde_yaml::from_str(&text).map_err(|e| format!("cannot parse {path}: {e}"))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(format!("cannot read {path}: {e}")),
+        }
+    }
+
+    fn vector(&self) -> Vector3<f64> {
+        Vector3::new(self.x, self.y, self.z)
+    }
+
+    /// A CARLA position to the map frame.
+    pub fn carla_to_map(&self, carla_position: &Vector3<f64>) -> Vector3<f64> {
+        carla_to_ros_position(carla_position) + self.vector()
+    }
+
+    /// A map-frame pose to a CARLA isometry (see [`ros_pose_to_carla_isometry`]).
+    pub fn pose_to_carla_isometry(
+        &self,
+        pose: &geometry_msgs::msg::Pose,
+    ) -> nalgebra::Isometry3<f32> {
+        let mut local = pose.clone();
+        local.position.x -= self.x;
+        local.position.y -= self.y;
+        local.position.z -= self.z;
+        ros_pose_to_carla_isometry(&local)
+    }
+}
+
 /// Convert position from CARLA (meters, left-handed) to ROS (meters, right-handed)
 ///
 /// # Arguments
@@ -571,6 +629,64 @@ pub fn velocity_at_offset(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- map origin ---
+
+    #[test]
+    fn map_origin_moves_carla_positions_into_the_map_frame() {
+        let o = MapOrigin {
+            x: 52600.0,
+            y: 67800.0,
+            z: 0.0,
+        };
+        // NTU r02 lanelet node 1 sits 382.5 m west and 148.4 m south of CARLA's origin.
+        let carla = Vector3::new(-382.51, 148.35, 11.88);
+        let map = o.carla_to_map(&carla);
+        assert!(
+            (map - Vector3::new(52217.49, 67651.65, 11.88)).norm() < 1e-6,
+            "{map}"
+        );
+
+        let zero = MapOrigin::default();
+        assert_eq!(zero.carla_to_map(&carla), carla_to_ros_position(&carla));
+    }
+
+    #[test]
+    fn a_map_frame_initial_pose_lands_at_its_carla_location() {
+        let o = MapOrigin {
+            x: 52600.0,
+            y: 67800.0,
+            z: 0.0,
+        };
+        let mut pose = geometry_msgs::msg::Pose::default();
+        pose.position.x = 52610.0;
+        pose.position.y = 67790.0;
+        pose.orientation.w = 1.0;
+        let iso = o.pose_to_carla_isometry(&pose);
+        assert!((iso.translation.x - 10.0).abs() < 1e-4 && (iso.translation.y - 10.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn map_origin_files() {
+        assert_eq!(MapOrigin::load("").unwrap(), MapOrigin::default());
+        assert_eq!(MapOrigin::load("none").unwrap(), MapOrigin::default());
+        assert_eq!(
+            MapOrigin::load("/nonexistent/carla/map_origin.yaml").unwrap(),
+            MapOrigin::default()
+        );
+        let dir = std::env::temp_dir().join(format!("acb-map-origin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("map_origin.yaml");
+        std::fs::write(&f, "x: 52600.0\ny: 67800.0\n").unwrap();
+        let o = MapOrigin::load(f.to_str().unwrap()).unwrap();
+        assert_eq!((o.x, o.y, o.z), (52600.0, 67800.0, 0.0));
+        std::fs::write(&f, "x: 1\ny: 2\nyaw: 0.1\n").unwrap();
+        assert!(
+            MapOrigin::load(f.to_str().unwrap()).is_err(),
+            "a yaw it cannot apply is refused"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     // --- base_link offset (rear axle) ---
 

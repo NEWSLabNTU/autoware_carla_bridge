@@ -168,9 +168,13 @@ impl PoseVelocityEstimator {
     }
 }
 
-/// An actor's CARLA transform as an estimator sample, in ROS axes.
-fn pose_sample(tf: &carla::geom::Transform, t: f64) -> PoseSample {
-    let pos = coordinate_conversion::carla_to_ros_position(&nalgebra::Vector3::new(
+/// An actor's CARLA transform as an estimator sample, in the map frame.
+fn pose_sample(
+    tf: &carla::geom::Transform,
+    t: f64,
+    origin: &coordinate_conversion::MapOrigin,
+) -> PoseSample {
+    let pos = origin.carla_to_map(&nalgebra::Vector3::new(
         tf.location.x as f64,
         tf.location.y as f64,
         tf.location.z as f64,
@@ -241,10 +245,17 @@ pub struct GroundTruthObjectPublisher {
     ego_role_name: String,
     range_m: f64,
     velocities: PoseVelocityEstimator,
+    /// Map-frame position of CARLA's world origin; objects are published in the map frame.
+    map_origin: coordinate_conversion::MapOrigin,
 }
 
 impl GroundTruthObjectPublisher {
-    pub fn new(node: rclrs::Node, ego_role_name: String, range_m: f64) -> Result<Self> {
+    pub fn new(
+        node: rclrs::Node,
+        ego_role_name: String,
+        range_m: f64,
+        map_origin: coordinate_conversion::MapOrigin,
+    ) -> Result<Self> {
         // A non-positive or non-finite range would silently publish nothing, which looks
         // exactly like a broken bridge. Fall back rather than start in that state.
         let range_m = if range_m.is_finite() && range_m > 0.0 {
@@ -268,6 +279,7 @@ impl GroundTruthObjectPublisher {
             ego_role_name,
             range_m,
             velocities: PoseVelocityEstimator::default(),
+            map_origin,
         })
     }
 
@@ -324,7 +336,7 @@ impl GroundTruthObjectPublisher {
             let tf = state.transform();
             // Every actor feeds its history, in range or not, so one that drives into
             // range arrives with a velocity instead of reading as parked for a frame.
-            let pose = pose_sample(&tf, sim_time);
+            let pose = pose_sample(&tf, sim_time, &self.map_origin);
             let estimated = self
                 .velocities
                 .observe(actor.id(), actor.type_id().as_str(), pose);

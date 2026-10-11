@@ -47,9 +47,11 @@ pub struct VehicleConfig {
     #[serde(default)]
     pub sensors: HashMap<String, SensorDefinition>,
 
-    /// Map origin offset (CARLA coordinates relative to ROS map frame)
-    #[serde(default)]
-    pub map_origin: MapOrigin,
+    /// Retired: the map origin is per map, not per vehicle, and now lives in the map dir's
+    /// `carla/map_origin.yaml` (`map_origin_path`). This key was parsed and never applied;
+    /// it is kept only to refuse a non-zero value instead of ignoring it again.
+    #[serde(default, skip_serializing)]
+    pub map_origin: Option<serde_yaml::Value>,
 }
 
 /// Vehicle blueprint configuration
@@ -65,15 +67,6 @@ impl Default for VehicleSettings {
             blueprint: "vehicle.tesla.model3".to_string(),
         }
     }
-}
-
-/// Map origin offset configuration
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct MapOrigin {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
-    pub yaw: f64,
 }
 
 /// Sensor definition from config file
@@ -152,6 +145,26 @@ impl VehicleConfig {
                 e
             ))
         })?;
+
+        if let Some(legacy) = &config.map_origin {
+            let all_zero = legacy.as_mapping().is_some_and(|m| {
+                m.values()
+                    .all(|v| v.as_f64() == Some(0.0) || v.as_i64() == Some(0))
+            });
+            if !all_zero {
+                return Err(BridgeError::ConfigError(format!(
+                    "{}: `map_origin` in the vehicle config was never applied and is no \
+                     longer read; put the map's origin in <map dir>/carla/map_origin.yaml \
+                     (x, y, z; no yaw) instead",
+                    path.display()
+                )));
+            }
+            tracing::warn!(
+                "{}: ignoring the retired all-zero `map_origin`; the map's origin now comes \
+                 from <map dir>/carla/map_origin.yaml",
+                path.display()
+            );
+        }
 
         tracing::info!(
             "✓ Loaded vehicle config: {} sensors defined",

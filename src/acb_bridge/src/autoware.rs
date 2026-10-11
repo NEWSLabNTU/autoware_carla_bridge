@@ -139,6 +139,8 @@ pub struct Autoware {
     /// Initial pose for vehicle spawning (from modern Autoware localization API)
     /// Set from /localization/kinematic_state when initialization_state becomes 3
     initial_pose: Arc<Mutex<Option<nalgebra::Isometry3<f32>>>>,
+    /// Map-frame position of CARLA's world origin (`map_origin_path`).
+    map_origin: crate::coordinate_conversion::MapOrigin,
 
     // === Localization State Monitoring ===
     /// Localization initialization state (from /localization/initialization_state)
@@ -207,7 +209,11 @@ impl Autoware {
     ///
     /// # Returns
     /// Result containing Autoware instance or error
-    pub fn new(node: rclrs::Node, publish_direct_localization: bool) -> Result<Self> {
+    pub fn new(
+        node: rclrs::Node,
+        publish_direct_localization: bool,
+        map_origin: crate::coordinate_conversion::MapOrigin,
+    ) -> Result<Self> {
         tracing::info!("Initializing Autoware coordinator...");
         tracing::info!(
             "Direct localization publishing: {}",
@@ -306,8 +312,8 @@ impl Autoware {
                                 pose.position.z
                             );
 
-                            // Convert ROS pose to CARLA transform
-                            let carla_isometry = crate::coordinate_conversion::ros_pose_to_carla_isometry(pose);
+                            // Map-frame pose to a CARLA transform
+                            let carla_isometry = map_origin.pose_to_carla_isometry(pose);
                             *initial_pose_from_localization.lock().unwrap() = Some(carla_isometry);
                         } else {
                             tracing::warn!("Localization initialized but no kinematic state available yet");
@@ -358,6 +364,7 @@ impl Autoware {
 
             // === Initial Pose ===
             initial_pose,
+            map_origin,
 
             // === Localization State Monitoring ===
             localization_init_state,
@@ -655,8 +662,8 @@ impl Autoware {
             vehicle_guard.base_link_in_actor(),
         );
 
-        // Convert CARLA coordinates to ROS coordinates
-        let position = coordinate_conversion::carla_to_ros_position(&base_link);
+        // CARLA coordinates to the map frame
+        let position = self.map_origin.carla_to_map(&base_link);
 
         // Convert CARLA rotation (quaternion) to ROS quaternion
         let carla_quat = nalgebra::Quaternion::new(

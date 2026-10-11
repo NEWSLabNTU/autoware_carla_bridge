@@ -79,11 +79,3 @@ sensors:
     blueprint: "sensor.other.gnss"
     parameters:
       sensor_tick: "0.1"
-
-# Map origin offset (CARLA coordinates relative to ROS map frame)
-# Default: assume map origin = CARLA (0,0,0)
-map_origin:
-  x: 0.0
-  y: 0.0
-  z: 0.0
-  yaw: 0.0
