@@ -769,6 +769,22 @@ fn publish_imu(
     Ok(())
 }
 
+/// The latitude whose northing matches the map frame, y = -CARLA_y (ROS left = map north).
+///
+/// CARLA's frame is left-handed: +x east, +y south. LibCarla 0.9.x nevertheless raises the
+/// latitude with +y, mirroring north-south, so on 0.9.x the latitude is negated to make
+/// gnss_poser's output match the map frame. CARLA 0.10 maps +y to a lower latitude already
+/// (measured with CARLA's own 0.10 Python client and carla-rust's
+/// `Map::transform_to_geolocation`, carla-scenario-bridge roadmap 019), and negating it again
+/// mirrored the ego's GNSS position across the x axis: y = -57.43 at a true +57.75.
+fn map_frame_latitude(carla_latitude: f64) -> f64 {
+    if cfg!(carla_0100) {
+        carla_latitude
+    } else {
+        -carla_latitude
+    }
+}
+
 fn publish_gnss(
     publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::NavSatFix>>,
     header: std_msgs::msg::Header,
@@ -780,12 +796,9 @@ fn publish_gnss(
             status: GnssStatus::GbasFix as i8,
             service: GnssService::Gps as u16,
         },
-        // Negate latitude: CARLA maps CARLA_y (right=south) to Northing without sign flip,
-        // but the TUMFTM maps use y = -CARLA_y convention (y = ROS left = map north).
-        // Negating latitude makes gnss_poser output match the map frame (y = -CARLA_y).
-        latitude: -measure.latitude(),
+        latitude: map_frame_latitude(measure.latitude()),
         longitude: measure.longitude(),
-        altitude: measure.attitude(),
+        altitude: measure.altitude(),
         position_covariance: [0.0; 9],
         position_covariance_type: 0,
     };
@@ -798,6 +811,18 @@ fn publish_gnss(
 mod tests {
     use super::*;
     use std::f32::consts::{FRAC_PI_2, PI};
+
+    /// A point south of the origin (+CARLA_y) must come out with negative map y after
+    /// gnss_poser, i.e. with a negative published latitude, on both CARLA versions.
+    #[test]
+    fn gnss_latitude_follows_the_map_frame() {
+        // What each version's GNSS reports 100 m south of the origin (+CARLA_y).
+        #[cfg(carla_0100)]
+        let carla_latitude = -0.000_9;
+        #[cfg(not(carla_0100))]
+        let carla_latitude = 0.000_9;
+        assert!(map_frame_latitude(carla_latitude) < 0.0);
+    }
 
     /// Regression guard for issue 001. The old `compass.atan2(-compass)` returned
     /// `3*pi/4` for every positive reading, so all three of these collapsed to one value.
