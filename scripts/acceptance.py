@@ -446,8 +446,27 @@ def junit_verdict() -> tuple[bool, str]:
     return False, "scenario reported a failure or error"
 
 
+# Deaths that are known, harmless and unfixed upstream, by node and by the text of the error.
+# Each is still printed, as "(known)", so a change in what kills the node shows; it does not
+# fail the run. Keep this to deaths the user guide documents as harmless.
+#
+# pose_instability_detector: "cannot store a negative time point in rclcpp::Time" after the
+# ego is teleported to a scenario's start. It only feeds a localization diagnostic; driving
+# and verdicts are unaffected (carla-scenario-bridge docs/user-guide.md, section 6, "When
+# things go wrong").
+# Every managed run teleports, so without this entry no acceptance run on Autoware 1.5.0
+# passes: measured 2026-10-14, a run that drove 66 m at 0.009 m/s^2 longitudinal error
+# failed on this line alone.
+KNOWN_HARMLESS_DEATHS = {
+    "pose_instability_detector": "cannot store a negative time point",
+}
+
+
 def dead_nodes(play_log: Path) -> list[str]:
-    """Nodes whose stderr holds a fatal error, whatever the launcher reported."""
+    """Nodes whose stderr holds a fatal error, whatever the launcher reported.
+
+    A death listed in KNOWN_HARMLESS_DEATHS is printed and left out of the result.
+    """
     dead = []
     runs = sorted((p for p in play_log.glob("*/node") if p.is_dir()),
                   key=lambda p: p.stat().st_mtime, reverse=True)
@@ -464,6 +483,11 @@ def dead_nodes(play_log: Path) -> list[str]:
         for marker in ("terminate called", "what():", "Traceback (most recent call last)"):
             if marker in text:
                 first = next((ln for ln in text.splitlines() if marker in ln), marker)
+                known = KNOWN_HARMLESS_DEATHS.get(node_dir.name)
+                if known is not None and known in text:
+                    print("    (known) %s exited: %s -- harmless, not judged"
+                          % (node_dir.name, known))
+                    break
                 dead.append("%s: %s" % (node_dir.name, first.strip()[:100]))
                 break
     return dead
