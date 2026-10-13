@@ -168,21 +168,6 @@ pub struct Autoware {
     /// Subscription to /localization/kinematic_state (kept alive)
     _localization_kinematic_state_sub: Arc<rclrs::Subscription<nav_msgs::msg::Odometry>>,
 
-    // === Topic Configuration (existing - kept for compatibility) ===
-    // Vehicle publish topic (root namespace)
-    pub topic_actuation_status: String,
-    pub topic_velocity_status: String,
-    pub topic_steering_status: String,
-    pub topic_gear_status: String,
-    pub topic_control_mode: String,
-    pub topic_turn_indicators_status: String,
-    pub topic_hazard_lights_status: String,
-    // Vehicle subscribe topic (root namespace)
-    pub topic_actuation_cmd: String,
-    pub topic_gear_cmd: String,
-    pub topic_current_gate_mode: String,
-    pub topic_turn_indicators_cmd: String,
-    pub topic_hazard_lights_cmd: String,
     // Sensor publish topic (dynamically built from sensor names)
     pub list_image_raw: HashMap<String, String>,
     pub list_camera_info: HashMap<String, String>,
@@ -373,21 +358,6 @@ impl Autoware {
             _localization_init_state_sub: localization_init_state_sub,
             _localization_kinematic_state_sub: localization_kinematic_state_sub,
 
-            // === Topic Configuration ===
-            // Vehicle publish topic (standard Autoware topics - no prefix for namespace flexibility)
-            topic_actuation_status: "vehicle/status/actuation_status".to_string(),
-            topic_velocity_status: "vehicle/status/velocity_status".to_string(),
-            topic_steering_status: "vehicle/status/steering_status".to_string(),
-            topic_gear_status: "vehicle/status/gear_status".to_string(),
-            topic_control_mode: "vehicle/status/control_mode".to_string(),
-            topic_turn_indicators_status: "vehicle/status/turn_indicators_status".to_string(),
-            topic_hazard_lights_status: "vehicle/status/hazard_lights_status".to_string(),
-            // Vehicle subscribe topic (standard Autoware topics - no prefix for namespace flexibility)
-            topic_actuation_cmd: "control/command/actuation_cmd".to_string(),
-            topic_gear_cmd: "control/command/gear_cmd".to_string(),
-            topic_current_gate_mode: "control/current_gate_mode".to_string(),
-            topic_turn_indicators_cmd: "control/command/turn_indicators_cmd".to_string(),
-            topic_hazard_lights_cmd: "control/command/hazard_lights_cmd".to_string(),
             // Sensor publish topic (will be populated dynamically)
             list_image_raw: HashMap::new(),
             list_camera_info: HashMap::new(),

@@ -85,10 +85,6 @@ impl ControlTrace {
         })
     }
 
-    pub fn now(&self) -> Instant {
-        Instant::now()
-    }
-
     /// One iteration of the main loop: how long since the last, how long the executor pump
     /// took, and how many callbacks it actually ran.
     ///

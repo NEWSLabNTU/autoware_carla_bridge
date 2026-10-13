@@ -194,42 +194,6 @@ impl ReleaseRequest {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_a_release_frame() {
-        let r = ReleaseRequest::parse("release 187 hero").unwrap();
-        assert_eq!(r.actor_id, 187);
-        assert_eq!(r.role_name, "hero");
-    }
-
-    /// The ledger teardown path has no role name for the actor it is destroying.
-    #[test]
-    fn a_missing_role_name_is_allowed() {
-        let r = ReleaseRequest::parse("release 42").unwrap();
-        assert_eq!(r.actor_id, 42);
-        assert_eq!(r.role_name, "-");
-    }
-
-    #[test]
-    fn rejects_other_verbs_and_junk() {
-        assert!(ReleaseRequest::parse("released 187").is_none());
-        assert!(ReleaseRequest::parse("release notanid").is_none());
-        assert!(ReleaseRequest::parse("").is_none());
-        assert!(ReleaseRequest::parse("release").is_none());
-    }
-
-    /// Trailing fields are ignored rather than rejected, so the frame can grow.
-    #[test]
-    fn extra_fields_do_not_break_parsing() {
-        let r = ReleaseRequest::parse("release 7 bg_av_1 something_new").unwrap();
-        assert_eq!(r.actor_id, 7);
-        assert_eq!(r.role_name, "bg_av_1");
-    }
-}
-
 /// Tells the scenario runner when this bridge's localization estimate is on its vehicle.
 ///
 /// Shares the runner's PULL endpoint with the release acknowledgements, because it is the
@@ -279,5 +243,41 @@ impl SeatedReporter {
             ),
             Err(e) => tracing::debug!("Seated reporter: could not send: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_a_release_frame() {
+        let r = ReleaseRequest::parse("release 187 hero").unwrap();
+        assert_eq!(r.actor_id, 187);
+        assert_eq!(r.role_name, "hero");
+    }
+
+    /// The ledger teardown path has no role name for the actor it is destroying.
+    #[test]
+    fn a_missing_role_name_is_allowed() {
+        let r = ReleaseRequest::parse("release 42").unwrap();
+        assert_eq!(r.actor_id, 42);
+        assert_eq!(r.role_name, "-");
+    }
+
+    #[test]
+    fn rejects_other_verbs_and_junk() {
+        assert!(ReleaseRequest::parse("released 187").is_none());
+        assert!(ReleaseRequest::parse("release notanid").is_none());
+        assert!(ReleaseRequest::parse("").is_none());
+        assert!(ReleaseRequest::parse("release").is_none());
+    }
+
+    /// Trailing fields are ignored rather than rejected, so the frame can grow.
+    #[test]
+    fn extra_fields_do_not_break_parsing() {
+        let r = ReleaseRequest::parse("release 7 bg_av_1 something_new").unwrap();
+        assert_eq!(r.actor_id, 7);
+        assert_eq!(r.role_name, "bg_av_1");
     }
 }

@@ -1017,6 +1017,7 @@ impl VehicleControlBridge {
     ///
     /// The gear comes from `/control/command/gear_cmd` (see `AppliedState`), not from the
     /// sign of the commanded velocity.
+    #[allow(clippy::too_many_arguments)]
     fn apply_control_command(
         vehicle: &Arc<Mutex<Option<Vehicle>>>,
         state: &Arc<Mutex<AppliedState>>,
@@ -1122,7 +1123,7 @@ impl VehicleControlBridge {
                 // Once stopped, hold with the handbrake -- CARLA's automatic transmission
                 // idle-creeps at zero throttle, and an emergency stop that creeps is not one.
                 control.hand_brake = speed < 0.1;
-                v.apply_control(&control);
+                v.apply_control(&control)?;
                 return Ok(());
             }
 
