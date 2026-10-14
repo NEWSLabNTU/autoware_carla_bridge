@@ -78,3 +78,12 @@ topic means what its name says.
 `autoware_operation_mode_transition_manager` reference it, but no such service appears in this
 stack's graph. Nothing is calling one, so serving one would be writing an interface against a
 caller that does not exist here.
+
+Update: `allow_manual:=true` (default `false`) now serves MANUAL for a caller that does exist
+on one stack: a safety island's takeover request, answered by a driver (the island demo of
+`NEWSLabNTU/simple-autoware-safety-island`, unit C2). MANUAL is then accepted and reported on
+`/vehicle/status/control_mode`, Autoware's control command is not applied, and a scripted
+driver holds the lane (`VehicleControlBridge::drive_manual`). Default off, so the stock
+answer above is unchanged. `honor_emergency_cmd` is now also a launch argument, still default
+`false`: in an MRM the vehicle follows the control command's deceleration through the pedal
+maps rather than braking fully.

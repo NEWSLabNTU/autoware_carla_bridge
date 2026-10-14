@@ -192,6 +192,10 @@ struct BridgeParams {
     /// `carla/map_origin.yaml`; empty or absent = zero, as for the TUM towns).
     pub map_origin: coordinate_conversion::MapOrigin,
     pub honor_emergency_cmd: bool,
+    /// Accept MANUAL on `/control/control_mode_request` and drive the car with a scripted
+    /// lane-keeping driver while it is MANUAL (`vehicle_control::ControlMode`). Off by
+    /// default: the stock ego simulation refuses MANUAL.
+    pub allow_manual: bool,
     pub control_trace_path: String,
     pub accel_map_path: String,
     pub brake_map_path: String,
@@ -324,6 +328,14 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        // Off by default, as SSv2's stock ego simulation: MANUAL refused, the report always
+        // AUTONOMOUS. On, a driver's takeover is accepted and reported (vehicle_control).
+        let allow_manual = node
+            .declare_parameter("allow_manual")
+            .default(false)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         let ground_truth_range_m = node
             .declare_parameter("ground_truth_range_m")
             .default(100.0)
@@ -432,6 +444,7 @@ impl BridgeParams {
             traffic_light_map_path: traffic_light_map_path_val.to_string(),
             map_origin,
             honor_emergency_cmd: honor_emergency_cmd_val,
+            allow_manual: allow_manual.get(),
             control_trace_path: control_trace_path_val.to_string(),
             accel_map_path: accel_map_path_val.to_string(),
             brake_map_path: brake_map_path_val.to_string(),
@@ -894,7 +907,9 @@ fn main() -> Result<()> {
 
     // `/control/control_mode_request`, answered as SSv2's stock ego simulation answers it.
     // Node-lifetime, like the clock: it must not disappear between vehicle sessions.
-    let _control_mode_service = vehicle_control::ControlModeService::new(&node)?;
+    let control_mode = Arc::new(vehicle_control::ControlMode::new(params.allow_manual));
+    let _control_mode_service =
+        vehicle_control::ControlModeService::new(&node, control_mode.clone())?;
 
     // === Step 3: Create Autoware coordinator and wait for Autoware ===
     tracing::info!("Creating Autoware coordinator...");
@@ -1265,6 +1280,7 @@ fn main() -> Result<()> {
             params.honor_emergency_cmd,
             control_trace.clone(),
             base_link_in_actor,
+            control_mode.clone(),
         )?;
         tracing::info!("Vehicle control bridge created");
 
@@ -1569,6 +1585,11 @@ fn main() -> Result<()> {
             // Publish vehicle status (velocity, steering, control mode)
             if let Err(e) = vehicle_control.publish_status(&stamp) {
                 tracing::warn!("Failed to publish vehicle status: {e}");
+            }
+
+            // MANUAL (allow_manual:=true, a takeover accepted): the scripted driver
+            if let Err(e) = vehicle_control.drive_manual(&world) {
+                tracing::warn!("Manual driver failed this frame: {e}");
             }
             last_frame_stamp = Some(stamp);
 

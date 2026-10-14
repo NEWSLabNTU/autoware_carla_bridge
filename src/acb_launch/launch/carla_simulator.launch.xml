@@ -126,6 +126,8 @@
   <arg name="publish_ground_truth_objects" default="false"/>
   <arg name="ground_truth_range_m" default="100.0"/>
   <arg name="control_trace_path" default=""/>
+  <arg name="allow_manual" default="false" description="accept a driver's MANUAL takeover (acb_bridge.launch.xml)"/>
+  <arg name="honor_emergency_cmd" default="false" description="full brake on emergency_cmd instead of the control command (acb_bridge.launch.xml)"/>
   <!-- The vehicle agent (acb_pilot agent): takes goals from a scenario's agent relay and
        drives Autoware's API locally, so the scenario needs no access to this ROS domain
        (roadmap 017). relay empty and goal_poses_file set: drive to a local goal instead. -->
@@ -378,6 +380,8 @@
       <arg name="control_trace_path" value="$(var control_trace_path)"/>
       <arg name="accel_map_path" value="$(var accel_map_path)"/>
       <arg name="brake_map_path" value="$(var brake_map_path)"/>
+      <arg name="allow_manual" value="$(var allow_manual)"/>
+      <arg name="honor_emergency_cmd" value="$(var honor_emergency_cmd)"/>
     </include>
   </group>
 </launch>

@@ -61,6 +61,18 @@
        description="Brake response table: pedal x speed -> acceleration"/>
   <arg name="publish_clock" default="true"
        description="Publish /clock from CARLA simulation time"/>
+  <!-- A driver's takeover. false (the stock ego simulation): MANUAL on
+       /control/control_mode_request fails and /vehicle/status/control_mode stays AUTONOMOUS.
+       true: MANUAL succeeds and is reported, Autoware's control command is no longer
+       applied, and a scripted driver holds the lane at the takeover speed until AUTONOMOUS
+       is requested or the next vehicle session starts. -->
+  <arg name="allow_manual" default="false"
+       description="Accept MANUAL control mode requests (a driver takeover) and drive the car while MANUAL"/>
+  <!-- false: in an MRM the control command (vehicle_cmd_gate's, the MRM operator's
+       deceleration) reaches the actuators through the pedal maps, like any other.
+       true: /control/command/emergency_cmd overrides it with full brake. See docs/issues/021. -->
+  <arg name="honor_emergency_cmd" default="false"
+       description="Full brake while /control/command/emergency_cmd is set (false: follow the control command)"/>
   <!-- Signal state from CARLA's lights, on the arbiter's V2X input. The file is the table
        carla_scenario_bridge writes beside the Lanelet2 map at every Initialize; it is re-read
        when it changes. Empty turns the publisher off. Only one source may feed that topic:
@@ -107,6 +119,8 @@
     <param name="control_trace_path" value="$(var control_trace_path)"/>
     <param name="accel_map_path" value="$(var accel_map_path)"/>
     <param name="brake_map_path" value="$(var brake_map_path)"/>
+    <param name="allow_manual" value="$(var allow_manual)"/>
+    <param name="honor_emergency_cmd" value="$(var honor_emergency_cmd)"/>
     <!-- base_link is the rear-axle centre. The bridge measures where it sits from CARLA's
          rear wheel positions (about -1.386 m along the actor x axis on a model3) and
          publishes the pose and attaches the sensors relative to it. For a blueprint

@@ -11,12 +11,15 @@
 /// - Publishing vehicle status back to Autoware
 use crate::error::Result;
 use carla::{
-    client::{ActorBase, Vehicle},
+    client::{ActorBase, Map, Vehicle, World},
     rpc::{VehicleControl, VehicleLightState, VehicleWheelLocation},
 };
 use rclrs::IntoPrimitiveOptions;
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -250,6 +253,62 @@ fn steer_command_for(tire_angle: f32, geometry: &SteerGeometry) -> f32 {
     (0.5 * (lo + hi)).copysign(tire_angle)
 }
 
+/// The scripted driver of a MANUAL vehicle (`VehicleControlBridge::drive_manual`).
+///
+/// It stands in for the person who answered a takeover request: hold the lane at the
+/// speed the car had when control was handed over. It is a demo driver, not a vehicle
+/// model, so these are round numbers rather than measurements.
+///
+/// Wheelbase for the pure-pursuit geometry, metres (a model3 is 2.875).
+const MANUAL_WHEELBASE_M: f64 = 2.9;
+/// Pure-pursuit look-ahead: this many seconds of travel, but never less than
+/// `MANUAL_LOOKAHEAD_MIN_M`, so it does not chase the lane centre's noise at low speed.
+const MANUAL_LOOKAHEAD_S: f64 = 1.0;
+const MANUAL_LOOKAHEAD_MIN_M: f64 = 6.0;
+/// Speed hold: requested acceleration per m/s of speed error, and its bounds (m/s^2).
+const MANUAL_SPEED_GAIN: f64 = 0.8;
+const MANUAL_MAX_ACCEL: f64 = 1.5;
+const MANUAL_MAX_DECEL: f64 = 3.0;
+
+/// Pure pursuit: the tire angle, radians, CARLA's sign (positive = right), that puts the
+/// rear axle on the arc through a target `ahead_m` in front of it and `right_m` to its
+/// right. Curvature 2y / l^2, tire angle atan(wheelbase x curvature).
+fn pursuit_tire_angle(ahead_m: f64, right_m: f64, wheelbase_m: f64) -> f64 {
+    let l2 = ahead_m * ahead_m + right_m * right_m;
+    if l2 < 1e-6 {
+        return 0.0;
+    }
+    (wheelbase_m * 2.0 * right_m / l2).atan()
+}
+
+/// The look-ahead distance at `speed` m/s.
+fn manual_lookahead_m(speed: f64) -> f64 {
+    (MANUAL_LOOKAHEAD_S * speed.abs()).max(MANUAL_LOOKAHEAD_MIN_M)
+}
+
+/// The acceleration that holds `target` m/s from `speed` m/s.
+fn hold_speed_accel(target: f64, speed: f64) -> f64 {
+    (MANUAL_SPEED_GAIN * (target - speed)).clamp(-MANUAL_MAX_DECEL, MANUAL_MAX_ACCEL)
+}
+
+/// The signed difference `a - b` of two headings in degrees, in (-180, 180].
+fn heading_diff_deg(a: f32, b: f32) -> f32 {
+    let d = (a - b).rem_euclid(360.0);
+    if d > 180.0 {
+        d - 360.0
+    } else {
+        d
+    }
+}
+
+/// What the scripted driver keeps between frames: the town's map (fetched once per
+/// session, it is the OpenDRIVE) and the speed it holds, set when MANUAL starts.
+#[derive(Default)]
+struct ManualDriver {
+    map: Option<Map>,
+    target_speed: Option<f64>,
+}
+
 /// What the bridge last applied to CARLA, and therefore what it reports to Autoware.
 ///
 /// Autoware compares commanded against reported state (`vehicle_cmd_gate` will not
@@ -464,18 +523,76 @@ impl AppliedState {
     }
 }
 
-/// Answer to a `/control/control_mode_request`, exactly as SSv2's stock ego simulation gives
-/// it (`concealer/src/autoware_universe.cpp`, the `control_mode_request_server`):
-/// AUTONOMOUS succeeds, MANUAL and everything else fail.
+/// Answer to a `/control/control_mode_request`.
 ///
-/// MANUAL fails in the stock simulation because it only arrives on a remote override, which
-/// scenario_simulator_v2 does not support; this bridge does not support one either. The
-/// reported mode on `/vehicle/status/control_mode` stays AUTONOMOUS regardless -- a request
-/// that succeeds asks for the mode the vehicle is already in, and one that fails changes
-/// nothing.
-pub fn control_mode_request_accepted(mode: u8) -> bool {
+/// With `allow_manual` false (the default) exactly as SSv2's stock ego simulation gives it
+/// (`concealer/src/autoware_universe.cpp`, the `control_mode_request_server`): AUTONOMOUS
+/// succeeds, MANUAL and everything else fail. MANUAL fails in the stock simulation because
+/// it only arrives on a remote override, which scenario_simulator_v2 does not support; the
+/// reported mode then stays AUTONOMOUS regardless.
+///
+/// With `allow_manual` true MANUAL succeeds too: a driver takes the car over (a safety
+/// island's takeover request answered, for one), the reported mode becomes MANUAL, and
+/// Autoware's commands stop reaching the actuators until AUTONOMOUS is asked for again or
+/// the next vehicle session starts. See `ControlMode`.
+pub fn control_mode_request_accepted(mode: u8, allow_manual: bool) -> bool {
     use autoware_vehicle_msgs::srv::control_mode_command::ControlModeCommand_Request as Req;
-    mode == Req::AUTONOMOUS
+    mode == Req::AUTONOMOUS || (allow_manual && mode == Req::MANUAL)
+}
+
+/// Who drives the vehicle: Autoware (AUTONOMOUS) or the driver (MANUAL).
+///
+/// Shared by the node-lifetime `/control/control_mode_request` server, which changes it,
+/// and the per-session `VehicleControlBridge`, which reports it on
+/// `/vehicle/status/control_mode` and, while it is MANUAL, ignores Autoware's control
+/// command and drives the car itself (`VehicleControlBridge::drive_manual`). Every new
+/// vehicle session starts AUTONOMOUS, so one scenario's takeover does not leak into the next.
+#[derive(Debug, Default)]
+pub struct ControlMode {
+    allow_manual: bool,
+    manual: AtomicBool,
+}
+
+impl ControlMode {
+    pub fn new(allow_manual: bool) -> Self {
+        Self {
+            allow_manual,
+            manual: AtomicBool::new(false),
+        }
+    }
+
+    pub fn allow_manual(&self) -> bool {
+        self.allow_manual
+    }
+
+    pub fn is_manual(&self) -> bool {
+        self.manual.load(Ordering::SeqCst)
+    }
+
+    /// Apply an accepted request; returns whether it was accepted.
+    pub fn request(&self, mode: u8) -> bool {
+        use autoware_vehicle_msgs::srv::control_mode_command::ControlModeCommand_Request as Req;
+        let ok = control_mode_request_accepted(mode, self.allow_manual);
+        if ok {
+            self.manual.store(mode == Req::MANUAL, Ordering::SeqCst);
+        }
+        ok
+    }
+
+    /// Back to AUTONOMOUS, as at the start of a vehicle session.
+    pub fn reset(&self) {
+        self.manual.store(false, Ordering::SeqCst);
+    }
+
+    /// The `ControlModeReport` constant for the current mode.
+    pub fn report(&self) -> u8 {
+        use autoware_vehicle_msgs::msg::ControlModeReport;
+        if self.is_manual() {
+            ControlModeReport::MANUAL
+        } else {
+            ControlModeReport::AUTONOMOUS
+        }
+    }
 }
 
 fn control_mode_name(mode: u8) -> &'static str {
@@ -506,14 +623,15 @@ pub struct ControlModeService {
 impl ControlModeService {
     pub const SERVICE_NAME: &'static str = "/control/control_mode_request";
 
-    pub fn new(node: &rclrs::Node) -> Result<Self> {
+    pub fn new(node: &rclrs::Node, mode: Arc<ControlMode>) -> Result<Self> {
         use autoware_vehicle_msgs::srv::control_mode_command::{
             ControlModeCommand_Request, ControlModeCommand_Response,
         };
+        let allow_manual = mode.allow_manual();
         let service = node.create_service::<autoware_vehicle_msgs::srv::ControlModeCommand, _>(
             Self::SERVICE_NAME,
-            |request: ControlModeCommand_Request| {
-                let success = control_mode_request_accepted(request.mode);
+            move |request: ControlModeCommand_Request| {
+                let success = mode.request(request.mode);
                 tracing::info!(
                     "{} {} ({}) -> success={success}",
                     ControlModeService::SERVICE_NAME,
@@ -523,7 +641,15 @@ impl ControlModeService {
                 ControlModeCommand_Response { success }
             },
         )?;
-        tracing::info!("  Serving: {}", Self::SERVICE_NAME);
+        tracing::info!(
+            "  Serving: {} ({})",
+            Self::SERVICE_NAME,
+            if allow_manual {
+                "MANUAL accepted: allow_manual:=true"
+            } else {
+                "AUTONOMOUS only, as the stock ego simulation"
+            }
+        );
         Ok(Self { _service: service })
     }
 }
@@ -594,6 +720,14 @@ pub struct VehicleControlBridge {
     /// same offset `CarlaVehicle::base_link_in_actor` measured at spawn. The VelocityReport
     /// is the rear axle's, not the actor origin's (roadmap 014, "Pose reference point").
     base_link_in_actor: nalgebra::Vector3<f64>,
+
+    /// AUTONOMOUS or MANUAL, shared with the `/control/control_mode_request` server.
+    mode: Arc<ControlMode>,
+    /// The pedal maps, for the scripted driver's speed hold (the control callback has its
+    /// own copy).
+    longitudinal: Option<crate::longitudinal_map::LongitudinalCalibration>,
+    /// The scripted driver's state; only the main loop touches it.
+    manual_driver: std::cell::RefCell<ManualDriver>,
 }
 
 impl VehicleControlBridge {
@@ -615,8 +749,15 @@ impl VehicleControlBridge {
         honor_emergency_cmd: bool,
         control_trace: Option<Arc<crate::control_trace::ControlTrace>>,
         base_link_in_actor: nalgebra::Vector3<f64>,
+        mode: Arc<ControlMode>,
     ) -> Result<Self> {
         let steer_geometry = Self::read_steer_geometry(&vehicle);
+        // A new vehicle session starts under Autoware, whatever the last one ended in.
+        if mode.is_manual() {
+            tracing::info!("New vehicle session: control mode back to AUTONOMOUS");
+        }
+        mode.reset();
+        let longitudinal_for_manual = longitudinal.clone();
 
         // Create publishers
         let velocity_pub =
@@ -659,12 +800,18 @@ impl VehicleControlBridge {
         // The node's own ROS clock, read inside the callback: /clock is simulation time, and
         // the command's stamp is too, so the two are comparable.
         let node_for_clock = node.clone();
+        let mode_for_control = mode.clone();
         let control_sub = Arc::new(node.create_subscription(
             "/control/command/control_cmd".reliable(),
             move |msg: autoware_control_msgs::msg::Control| {
                 // Taken before anything else in the callback, so the row covers the whole of
                 // the bridge's share of the path rather than a convenient part of it.
                 let received = std::time::Instant::now();
+                // MANUAL: the driver has the car (`drive_manual`); Autoware's command is
+                // not applied, as on a vehicle whose driver took over.
+                if mode_for_control.is_manual() {
+                    return;
+                }
                 if let Err(e) = Self::apply_control_command(
                     &vehicle_for_control,
                     &state_for_control,
@@ -859,6 +1006,9 @@ impl VehicleControlBridge {
             report_measured_steering,
             compensate_steering_curve,
             base_link_in_actor,
+            mode,
+            longitudinal: longitudinal_for_manual,
+            manual_driver: std::cell::RefCell::new(ManualDriver::default()),
         })
     }
 
@@ -1275,6 +1425,113 @@ impl VehicleControlBridge {
         }
     }
 
+    /// Drive the car while it is MANUAL: hold the lane at the speed it had when the driver
+    /// took over. Call once per frame from the main loop; a no-op unless `allow_manual`.
+    ///
+    /// A scripted stand-in for the person who answered a takeover request, so a scenario
+    /// can go on after the takeover with the car still on its road. Steering is pure
+    /// pursuit on CARLA's own lane centre (the map's waypoints, `MANUAL_LOOKAHEAD_*` ahead,
+    /// straight on at a junction), through the same Ackermann inverse and steering-curve
+    /// compensation as Autoware's commands; speed is a proportional hold through the pedal
+    /// maps. CARLA's Traffic Manager was the other way to do it, but in synchronous mode it
+    /// is ticked only by the process that ticks the world (carla-scenario-bridge), so this
+    /// bridge cannot hand it a vehicle on its own.
+    ///
+    /// The map is fetched on the first call of a session (an RPC carrying the OpenDRIVE),
+    /// so the cost lands at the start and not at the takeover.
+    pub fn drive_manual(&self, world: &World) -> Result<()> {
+        if !self.mode.allow_manual() {
+            return Ok(());
+        }
+        let mut driver = self.manual_driver.borrow_mut();
+        if driver.map.is_none() {
+            driver.map = Some(world.map()?);
+        }
+        if !self.mode.is_manual() {
+            driver.target_speed = None;
+            return Ok(());
+        }
+        let guard = self.vehicle.lock().unwrap();
+        let Some(ref v) = *guard else {
+            return Ok(());
+        };
+        let transform = v.transform()?;
+        let velocity = v.velocity()?;
+        let body_velocity = transform.rotation.inverse_rotate_vector(&velocity);
+        let longitudinal_mps = body_velocity.x as f64;
+        let speed = (velocity.x as f64).hypot(velocity.y as f64);
+        let target = *driver.target_speed.get_or_insert_with(|| {
+            tracing::info!(
+                "MANUAL: the scripted driver holds the lane at {:.2} m/s ({:.1} km/h)",
+                speed,
+                speed * 3.6
+            );
+            speed
+        });
+
+        // Steering: the lane centre one look-ahead ahead, picked straight on at a fork.
+        let map = driver.map.as_ref().expect("fetched above");
+        let mut tire_angle = 0.0_f64;
+        if let Some(here) = map.waypoint_at(&transform.location)? {
+            let ahead = here.next(manual_lookahead_m(speed))?;
+            let yaw = transform.rotation.yaw;
+            if let Some(next) = ahead.iter().min_by(|a, b| {
+                heading_diff_deg(a.transform().rotation.yaw, yaw)
+                    .abs()
+                    .total_cmp(&heading_diff_deg(b.transform().rotation.yaw, yaw).abs())
+            }) {
+                let to = next.transform().location;
+                let d = carla::geom::Vector3D::new(
+                    to.x - transform.location.x,
+                    to.y - transform.location.y,
+                    0.0,
+                );
+                let body = transform.rotation.inverse_rotate_vector(&d);
+                // From the rear axle, where pure pursuit's geometry is exact.
+                tire_angle = pursuit_tire_angle(
+                    body.x as f64 - self.base_link_in_actor.x,
+                    body.y as f64 - self.base_link_in_actor.y,
+                    MANUAL_WHEELBASE_M,
+                );
+            }
+        }
+        let factor = steer_speed_factor(
+            &self.steer_geometry,
+            self.compensate_steering_curve,
+            longitudinal_mps as f32,
+        );
+        let (steer, _) = compensate_steer(
+            steer_command_for(tire_angle as f32, &self.steer_geometry),
+            factor,
+        );
+
+        let accel = hold_speed_accel(target, speed);
+        let pedals = match self.longitudinal.as_ref() {
+            Some(cal) => cal.command_for(accel, speed),
+            None => crate::longitudinal_map::PedalCommand {
+                throttle: (accel as f32 / MAX_ACCEL).clamp(0.0, 1.0),
+                brake: (-accel as f32 / MAX_ACCEL).clamp(0.0, 1.0),
+            },
+        };
+        let stopped = target < HANDBRAKE_ENGAGE_SPEED_MPS && speed < HANDBRAKE_ENGAGE_SPEED_MPS;
+        v.apply_control(&VehicleControl {
+            throttle: if stopped { 0.0 } else { pedals.throttle },
+            steer,
+            brake: pedals.brake,
+            hand_brake: stopped,
+            reverse: false,
+            manual_gear_shift: false,
+            gear: 0,
+        })?;
+        tracing::debug!(
+            "MANUAL: steer={steer:.3} (tire {tire_angle:.3} rad), throttle={:.3}, brake={:.3}, \
+             v={speed:.2} -> {target:.2} m/s",
+            pedals.throttle,
+            pedals.brake
+        );
+        Ok(())
+    }
+
     /// Publish vehicle status to Autoware
     ///
     /// Report the vehicle at rest, once, as the last word on a vehicle that has gone.
@@ -1392,10 +1649,11 @@ impl VehicleControlBridge {
 
             self.steering_pub.publish(&steering_report)?;
 
-            // Publish ControlModeReport (always AUTONOMOUS in simulation)
+            // Publish ControlModeReport: AUTONOMOUS, or MANUAL after an accepted takeover
+            // (allow_manual:=true; see `ControlMode`)
             let control_mode = autoware_vehicle_msgs::msg::ControlModeReport {
                 stamp: ros_timestamp.clone(),
-                mode: autoware_vehicle_msgs::msg::ControlModeReport::AUTONOMOUS,
+                mode: self.mode.report(),
             };
 
             self.control_mode_pub.publish(&control_mode)?;
@@ -1522,16 +1780,98 @@ mod tests {
     #[test]
     fn control_mode_request_matches_the_stock_ego_simulation() {
         use autoware_vehicle_msgs::srv::control_mode_command::ControlModeCommand_Request as Req;
-        assert!(control_mode_request_accepted(Req::AUTONOMOUS));
-        assert!(!control_mode_request_accepted(Req::MANUAL));
-        assert!(!control_mode_request_accepted(Req::NO_COMMAND));
-        assert!(!control_mode_request_accepted(Req::AUTONOMOUS_STEER_ONLY));
+        assert!(control_mode_request_accepted(Req::AUTONOMOUS, false));
+        assert!(!control_mode_request_accepted(Req::MANUAL, false));
+        assert!(!control_mode_request_accepted(Req::NO_COMMAND, false));
         assert!(!control_mode_request_accepted(
-            Req::AUTONOMOUS_VELOCITY_ONLY
+            Req::AUTONOMOUS_STEER_ONLY,
+            false
         ));
-        assert!(!control_mode_request_accepted(200));
+        assert!(!control_mode_request_accepted(
+            Req::AUTONOMOUS_VELOCITY_ONLY,
+            false
+        ));
+        assert!(!control_mode_request_accepted(200, false));
         assert_eq!(control_mode_name(Req::MANUAL), "MANUAL");
         assert_eq!(control_mode_name(200), "UNKNOWN");
+    }
+
+    /// allow_manual adds MANUAL and nothing else.
+    #[test]
+    fn allow_manual_accepts_manual_only() {
+        use autoware_vehicle_msgs::srv::control_mode_command::ControlModeCommand_Request as Req;
+        assert!(control_mode_request_accepted(Req::AUTONOMOUS, true));
+        assert!(control_mode_request_accepted(Req::MANUAL, true));
+        assert!(!control_mode_request_accepted(Req::NO_COMMAND, true));
+        assert!(!control_mode_request_accepted(
+            Req::AUTONOMOUS_STEER_ONLY,
+            true
+        ));
+        assert!(!control_mode_request_accepted(
+            Req::AUTONOMOUS_VELOCITY_ONLY,
+            true
+        ));
+        assert!(!control_mode_request_accepted(200, true));
+    }
+
+    #[test]
+    fn control_mode_reports_what_was_accepted() {
+        use autoware_vehicle_msgs::{
+            msg::ControlModeReport as Rep,
+            srv::control_mode_command::ControlModeCommand_Request as Req,
+        };
+        // Default: MANUAL refused, the report stays AUTONOMOUS.
+        let stock = ControlMode::new(false);
+        assert!(!stock.request(Req::MANUAL));
+        assert!(!stock.is_manual());
+        assert_eq!(stock.report(), Rep::AUTONOMOUS);
+
+        let m = ControlMode::new(true);
+        assert_eq!(m.report(), Rep::AUTONOMOUS);
+        assert!(m.request(Req::MANUAL));
+        assert!(m.is_manual());
+        assert_eq!(m.report(), Rep::MANUAL);
+        // A refused request changes nothing.
+        assert!(!m.request(Req::AUTONOMOUS_STEER_ONLY));
+        assert_eq!(m.report(), Rep::MANUAL);
+        // AUTONOMOUS hands the car back; so does a new session.
+        assert!(m.request(Req::AUTONOMOUS));
+        assert_eq!(m.report(), Rep::AUTONOMOUS);
+        assert!(m.request(Req::MANUAL));
+        m.reset();
+        assert_eq!(m.report(), Rep::AUTONOMOUS);
+    }
+
+    #[test]
+    fn pursuit_steers_toward_the_target() {
+        // Straight ahead: no steering.
+        assert_eq!(pursuit_tire_angle(10.0, 0.0, 2.9), 0.0);
+        // Target to the right: positive (CARLA's right), to the left negative, symmetric.
+        let r = pursuit_tire_angle(10.0, 1.0, 2.9);
+        assert!(r > 0.0);
+        assert!((pursuit_tire_angle(10.0, -1.0, 2.9) + r).abs() < 1e-12);
+        // Curvature 2y/l^2 = 2/101; tire angle atan(2.9 x that).
+        assert!((r - (2.9_f64 * 2.0 / 101.0).atan()).abs() < 1e-12);
+        // Degenerate target: no steering rather than NaN.
+        assert_eq!(pursuit_tire_angle(0.0, 0.0, 2.9), 0.0);
+    }
+
+    #[test]
+    fn lookahead_and_speed_hold() {
+        assert_eq!(manual_lookahead_m(0.0), MANUAL_LOOKAHEAD_MIN_M);
+        assert_eq!(manual_lookahead_m(10.0), 10.0);
+        assert_eq!(hold_speed_accel(7.0, 7.0), 0.0);
+        assert!((hold_speed_accel(7.0, 6.5) - 0.4).abs() < 1e-12);
+        assert_eq!(hold_speed_accel(7.0, 0.0), MANUAL_MAX_ACCEL);
+        assert_eq!(hold_speed_accel(0.0, 10.0), -MANUAL_MAX_DECEL);
+    }
+
+    #[test]
+    fn heading_difference_wraps() {
+        assert_eq!(heading_diff_deg(10.0, 350.0), 20.0);
+        assert_eq!(heading_diff_deg(350.0, 10.0), -20.0);
+        assert_eq!(heading_diff_deg(-179.0, 179.0), 2.0);
+        assert_eq!(heading_diff_deg(90.0, 90.0), 0.0);
     }
 
     #[test]
