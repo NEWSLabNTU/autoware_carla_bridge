@@ -53,6 +53,14 @@ RTC_STATES = {0: "WAITING_FOR_EXECUTION", 1: "RUNNING", 2: "ABORTING", 3: "SUCCE
 
 # The services without which the agent cannot do its job; until all answer, the agent
 # reports UNAVAILABLE and the relay withholds the ADAPI from the scenario.
+
+# How long one /api/localization/initialize may take. The call returns when NDT's align
+# server has searched its particles (200 by default), which is CPU-bound wall time: 9.4 s
+# measured on a loaded host (the safety island demo, unit C3), where 8 s timed out every
+# attempt and each retry queued another align behind the first. The
+# scenario's initialize_duration (120 s) bounds the whole start anyway.
+INITIALIZE_TIMEOUT = 30.0
+
 CORE_SERVICES = ("initialize", "set_route_points", "clear_route", "change_to_autonomous",
                  "change_to_stop")
 
@@ -256,7 +264,7 @@ class AutowarePort(AutopilotPort):
                           else self.node.get_clock().now().to_msg())
         _pose_msg(pose, p.pose.pose)
         request.pose = [p]
-        return self._adapi(self._call("initialize", request, timeout=8.0))
+        return self._adapi(self._call("initialize", request, timeout=INITIALIZE_TIMEOUT))
 
     def set_route(self, goal, waypoints, allow_goal_modification, segments):
         if segments:
