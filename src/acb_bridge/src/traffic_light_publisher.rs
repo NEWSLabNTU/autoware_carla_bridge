@@ -62,6 +62,8 @@ const RECHECK: Duration = Duration::from_secs(1);
 /// No frame for this long: ask whether the world was replaced or the server is gone.
 const STALL_CHECK: Duration = Duration::from_secs(2);
 const MAX_FAILURES: u32 = 3;
+/// The signal thread's client RPC timeout.
+const SIGNALS_CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// One entry of the resolved table, as far as this bridge needs it.
 #[derive(Debug, Deserialize)]
@@ -285,13 +287,13 @@ pub fn spawn(
                 last_publish: None,
             };
             while running.load(Ordering::SeqCst) {
-                let client = match carla::client::Client::connect(
+                let mut client = match carla::client::Client::connect(
                     &worker.config.address,
                     worker.config.port,
                     None,
                 ) {
                     Ok(mut c) => {
-                        let _ = c.set_timeout(Duration::from_secs(10));
+                        let _ = c.set_timeout(SIGNALS_CLIENT_TIMEOUT);
                         c
                     }
                     Err(e) => {
@@ -300,7 +302,7 @@ pub fn spawn(
                         continue;
                     }
                 };
-                worker.follow(&client, &running);
+                worker.follow(&mut client, &running);
                 worker.lights_for = None; // handles belong to the connection
             }
         })
@@ -446,7 +448,7 @@ struct Worker {
 
 impl Worker {
     /// Subscribe to frames on `client` and publish until the connection looks dead.
-    fn follow(&mut self, client: &carla::client::Client, running: &AtomicBool) {
+    fn follow(&mut self, client: &mut carla::client::Client, running: &AtomicBool) {
         let Ok(mut world) = client.world() else {
             std::thread::sleep(Duration::from_secs(2));
             return;
@@ -463,7 +465,15 @@ impl Worker {
         let mut failures = 0u32;
         let mut last_frame = Instant::now();
         let mut last_check = Instant::now();
+        let mut probe = crate::conn_probe::ConnectionProbe::new(SIGNALS_CLIENT_TIMEOUT);
         while running.load(Ordering::SeqCst) {
+            // Frames arriving prove nothing: after a server restart they come from the new
+            // server over a subscription whose RPC connection is dead (crate::conn_probe).
+            if probe.dead(client) {
+                tracing::warn!("signals: the CARLA connection is dead; reconnecting");
+                let _ = world.remove_on_tick(cb);
+                return;
+            }
             match rx.recv_timeout(Duration::from_millis(200)) {
                 Ok(mut snapshot) => {
                     while let Ok(newer) = rx.try_recv() {

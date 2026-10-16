@@ -3,6 +3,7 @@ pub mod autoware_detection;
 pub mod bridge;
 pub mod carla_vehicle;
 pub mod clock;
+pub mod conn_probe;
 pub mod coordinate_conversion;
 pub mod error;
 pub mod sensor_config;

@@ -609,6 +609,8 @@ const CLOCK_POLL: Duration = Duration::from_millis(20);
 const CLOCK_STALL_CHECK: Duration = Duration::from_secs(2);
 /// Consecutive failed checks before the connection is rebuilt.
 const CLOCK_MAX_FAILURES: u32 = 3;
+/// The clock client's RPC timeout.
+const CLOCK_CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Run `/clock` on a CARLA client of its own, from connect, for the life of the node.
 ///
@@ -626,9 +628,9 @@ pub fn spawn_clock_source(
         .spawn(move || {
             let mut connected_before = false;
             while running.load(Ordering::SeqCst) {
-                let client = match carla::client::Client::connect(&address, port, None) {
+                let mut client = match carla::client::Client::connect(&address, port, None) {
                     Ok(mut c) => {
-                        if let Err(e) = c.set_timeout(Duration::from_secs(10)) {
+                        if let Err(e) = c.set_timeout(CLOCK_CLIENT_TIMEOUT) {
                             tracing::debug!("clock: set_timeout failed: {e}");
                         }
                         c
@@ -642,7 +644,7 @@ pub fn spawn_clock_source(
                 if connected_before {
                     clock.mark_reconnect();
                 }
-                if follow_frames(&client, &clock, &running) {
+                if follow_frames(&mut client, &clock, &running) {
                     connected_before = true;
                 }
             }
@@ -652,26 +654,40 @@ pub fn spawn_clock_source(
 
 /// Subscribe and keep the subscription on the current world. Returns when the connection
 /// looks dead (or on shutdown); `true` if a subscription was ever established.
-fn follow_frames(client: &carla::client::Client, clock: &SimClock, running: &AtomicBool) -> bool {
-    let subscribe =
-        |clock: &SimClock| -> Option<(carla::client::World, carla::client::OnTickId, u64)> {
-            let mut world = client.world().ok()?;
-            let id = world.id().ok()?;
-            let sink = clock.clone();
-            let cb = world
-                .on_tick(move |snapshot| sink.on_frame(Tick::from_snapshot(&snapshot)))
-                .ok()?;
-            Some((world, cb, id))
-        };
-    let Some(mut sub) = subscribe(clock) else {
+fn follow_frames(
+    client: &mut carla::client::Client,
+    clock: &SimClock,
+    running: &AtomicBool,
+) -> bool {
+    let subscribe = |client: &carla::client::Client,
+                     clock: &SimClock|
+     -> Option<(carla::client::World, carla::client::OnTickId, u64)> {
+        let mut world = client.world().ok()?;
+        let id = world.id().ok()?;
+        let sink = clock.clone();
+        let cb = world
+            .on_tick(move |snapshot| sink.on_frame(Tick::from_snapshot(&snapshot)))
+            .ok()?;
+        Some((world, cb, id))
+    };
+    let Some(mut sub) = subscribe(client, clock) else {
         std::thread::sleep(Duration::from_secs(2));
         return false;
     };
     tracing::info!("/clock follows CARLA frames (episode {})", sub.2);
     let mut failures = 0u32;
     let mut last_check = Instant::now();
+    let mut probe = crate::conn_probe::ConnectionProbe::new(CLOCK_CLIENT_TIMEOUT);
     while running.load(Ordering::SeqCst) {
         std::thread::sleep(CLOCK_POLL);
+        // Frames arriving prove nothing: after a server restart they come from the new
+        // server over a subscription whose RPC connection is dead (crate::conn_probe).
+        if probe.dead(client) {
+            tracing::warn!("clock: the CARLA connection is dead; reconnecting");
+            let (mut old, cb, _) = sub;
+            let _ = old.remove_on_tick(cb); // local; the connection is dead
+            return true;
+        }
         clock.flush();
         clock.check_marker(client);
         let quiet = clock
@@ -688,7 +704,7 @@ fn follow_frames(client: &carla::client::Client, clock: &SimClock, running: &Ato
                 tracing::info!("clock: the world was replaced; following the new episode");
                 let (mut old, cb, _) = sub;
                 let _ = old.remove_on_tick(cb); // the old episode is gone; best effort
-                match subscribe(clock) {
+                match subscribe(client, clock) {
                     Some(s) => sub = s,
                     None => return true,
                 }

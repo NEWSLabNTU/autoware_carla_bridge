@@ -4,6 +4,7 @@ mod bridge;
 mod carla_vehicle;
 mod carla_version;
 mod clock;
+mod conn_probe;
 mod control_trace;
 mod coordinate_conversion;
 mod error;
@@ -459,6 +460,9 @@ impl BridgeParams {
 const IDLE_SPIN_SLICE: Duration = Duration::from_millis(100);
 
 /// The next spin timeout for a pump with `remaining` time left, or `None` when it is done.
+/// The session client's RPC timeout.
+const CLIENT_RPC_TIMEOUT: Duration = Duration::from_secs(30);
+
 fn idle_spin_slice(remaining: Duration, max: Duration) -> Option<Duration> {
     if remaining.is_zero() {
         None
@@ -514,7 +518,7 @@ fn connect_to_carla(
     loop {
         match Client::connect(&params.carla_address, params.carla_port, None) {
             Ok(mut client) => {
-                if let Err(e) = client.set_timeout(Duration::from_secs(30)) {
+                if let Err(e) = client.set_timeout(CLIENT_RPC_TIMEOUT) {
                     tracing::warn!("Failed to set timeout: {e}, retrying in 5 seconds...");
                     pump_ros_for(executor, Duration::from_secs(5));
                     continue;
@@ -703,7 +707,7 @@ fn connection_is_dead(client: &Client) -> bool {
 }
 
 fn wait_for_vehicle(
-    client: &Client,
+    client: &mut Client,
     vehicle_name: &str,
     running: &AtomicBool,
     executor: &mut rclrs::Executor,
@@ -712,9 +716,17 @@ fn wait_for_vehicle(
     tracing::info!("Waiting for vehicle (role_name={vehicle_name}) in CARLA...");
     let mut start = std::time::Instant::now();
     let mut last_log = std::time::Instant::now();
+    let mut probe = conn_probe::ConnectionProbe::new(CLIENT_RPC_TIMEOUT);
     loop {
         if !running.load(Ordering::SeqCst) {
             return WaitOutcome::Shutdown;
+        }
+        // A dead connection must go at once, not after the 60 s below: its world-tick
+        // subscription would reattach to the next server on the port and stall it
+        // (conn_probe).
+        if probe.dead(client) {
+            tracing::info!("The CARLA connection is dead; refreshing it");
+            return WaitOutcome::Stale;
         }
         if start.elapsed() > WAIT_RECONNECT_INTERVAL {
             if connection_is_dead(client) {
@@ -1053,7 +1065,7 @@ fn main() -> Result<()> {
                 None => return Ok(()), // Ctrl-C during connection
             };
         }
-        let client = client.as_ref().expect("client connected above");
+        let client = client.as_mut().expect("client connected above");
 
         // === Wait for vehicle then attach sensors ===
         tracing::info!(
