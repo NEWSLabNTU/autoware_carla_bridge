@@ -150,7 +150,9 @@ topic, which this repository has already paid for twice.
 
 Each non-ego CARLA actor within `ground_truth_range_m` (default 100 m) becomes one
 `PredictedObject`: the actor id little-endian in the UUID, the bounding box as `shape`,
-`existence_probability` 1.0, and a classification of CAR or PEDESTRIAN by actor type. Poses
+`existence_probability` 1.0, and a classification from the actor's blueprint: PEDESTRIAN
+for walkers, and for vehicles CAR, TRUCK, BUS, MOTORCYCLE or BICYCLE from CARLA's `base_type`
+attribute (issue 023; until 2026-10-17 every vehicle, bicycles included, was CAR). Poses
 are converted to the ROS frame, and velocity is rotated into the object's body frame so the
 longitudinal and lateral components mean what Autoware expects.
 

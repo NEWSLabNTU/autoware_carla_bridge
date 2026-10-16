@@ -239,6 +239,65 @@ fn wrap_angle(a: f64) -> f64 {
     }
 }
 
+/// The bicycles CARLA ships, for the fallback below. `special_type` is empty on every
+/// two-wheeler in 0.9.16, so when `base_type` is missing nothing else tells a bicycle from a
+/// motorbike.
+const KNOWN_BICYCLES: &[&str] = &[
+    "vehicle.bh.crossbike",
+    "vehicle.diamondback.century",
+    "vehicle.gazelle.omafiets",
+];
+
+/// Autoware label for a CARLA actor, or `None` if it is not traffic.
+///
+/// Walkers are pedestrians. Vehicles are classified by their blueprint's `base_type`
+/// attribute (CARLA >= 0.9.14), matched without case because 0.9.16 serves the Fusorosa
+/// as `Bus`. When `base_type` is empty (0.9.16's `bmw.grandtourer` and `mini.cooper_s`),
+/// missing or unrecognised, `number_of_wheels` decides: a two-wheeler is a bicycle if its
+/// id is a known bicycle and a motorcycle otherwise -- the faster class, so an unknown one
+/// is not given too little room -- and anything else is a car. Autoware has no van class;
+/// CARLA's vans are passenger-sized and map to CAR. See docs/issues/023.
+fn classify(type_id: &str, base_type: Option<&str>, number_of_wheels: Option<i32>) -> Option<u8> {
+    use autoware_perception_msgs::msg::ObjectClassification as C;
+    if type_id.starts_with("walker.") {
+        return Some(C::PEDESTRIAN);
+    }
+    if !type_id.starts_with("vehicle.") {
+        return None;
+    }
+    let by_base_type = match base_type.map(|b| b.trim().to_ascii_lowercase()).as_deref() {
+        Some("car" | "van") => Some(C::CAR),
+        Some("truck") => Some(C::TRUCK),
+        Some("bus") => Some(C::BUS),
+        Some("motorcycle") => Some(C::MOTORCYCLE),
+        Some("bicycle") => Some(C::BICYCLE),
+        _ => None,
+    };
+    Some(by_base_type.unwrap_or(match number_of_wheels {
+        Some(2) if KNOWN_BICYCLES.contains(&type_id) => C::BICYCLE,
+        Some(2) => C::MOTORCYCLE,
+        _ => C::CAR,
+    }))
+}
+
+/// The two blueprint attributes `classify` reads from a vehicle. CARLA copies every
+/// blueprint attribute into the spawned actor's description, so they are read client-side.
+fn vehicle_attributes(actor: &carla::client::Actor) -> (Option<String>, Option<i32>) {
+    let Ok(attrs) = actor.attributes() else {
+        return (None, None);
+    };
+    let mut base_type = None;
+    let mut wheels = None;
+    for a in attrs.iter() {
+        match a.id().as_str() {
+            "base_type" => base_type = Some(a.value_string()),
+            "number_of_wheels" => wheels = a.value_string().trim().parse().ok(),
+            _ => {}
+        }
+    }
+    (base_type, wheels)
+}
+
 pub struct GroundTruthObjectPublisher {
     publisher: Arc<rclrs::Publisher<autoware_perception_msgs::msg::PredictedObjects>>,
     /// CARLA `role_name` of the ego, so it is not published as an obstacle to itself.
@@ -299,18 +358,19 @@ impl GroundTruthObjectPublisher {
 
         // Classify by type id before anything else. A world holds far more than traffic --
         // Town01 alone carries over a hundred `static.*` props and the spectator -- and the
-        // type id is a local string, where reading attributes is an RPC per actor.
+        // type id is one string, where reading attributes copies the actor's whole list
+        // across the FFI. Only vehicles pay that, for `base_type` (docs/issues/023).
         let traffic: Vec<_> = actors
             .iter()
             .filter_map(|actor| {
                 let type_id = actor.type_id();
-                let label = if type_id.starts_with("vehicle.") {
-                    autoware_perception_msgs::msg::ObjectClassification::CAR
-                } else if type_id.starts_with("walker.") {
-                    autoware_perception_msgs::msg::ObjectClassification::PEDESTRIAN
+                // Attributes only for vehicles: walkers need none, and props must not pay.
+                let (base_type, wheels) = if type_id.starts_with("vehicle.") {
+                    vehicle_attributes(&actor)
                 } else {
-                    return None;
+                    (None, None)
                 };
+                let label = classify(&type_id, base_type.as_deref(), wheels)?;
                 Some((actor, label))
             })
             .collect();
@@ -645,5 +705,126 @@ mod tests {
             yaw_rate: 0.2,
         };
         assert_eq!(choose_twist(&zero, &zero, &tf, est), est);
+    }
+
+    #[test]
+    fn classify_by_carla_base_type() {
+        use autoware_perception_msgs::msg::ObjectClassification as C;
+        type Case<'a> = (&'a str, Option<&'a str>, Option<i32>, Option<u8>);
+        // (type_id, base_type, number_of_wheels, expected). The base_type values are the
+        // ones CARLA 0.9.16 actually serves (docs/issues/023), "Bus" capital B included.
+        let cases: &[Case] = &[
+            ("vehicle.tesla.model3", Some("car"), Some(4), Some(C::CAR)),
+            ("vehicle.ford.ambulance", Some("van"), Some(4), Some(C::CAR)),
+            (
+                "vehicle.carlamotors.firetruck",
+                Some("truck"),
+                Some(4),
+                Some(C::TRUCK),
+            ),
+            (
+                "vehicle.carlamotors.european_hgv",
+                Some("truck"),
+                Some(6),
+                Some(C::TRUCK),
+            ),
+            (
+                "vehicle.tesla.cybertruck",
+                Some("truck"),
+                Some(4),
+                Some(C::TRUCK),
+            ),
+            (
+                "vehicle.mitsubishi.fusorosa",
+                Some("Bus"),
+                Some(4),
+                Some(C::BUS),
+            ),
+            (
+                "vehicle.yamaha.yzf",
+                Some("motorcycle"),
+                Some(2),
+                Some(C::MOTORCYCLE),
+            ),
+            (
+                "vehicle.vespa.zx125",
+                Some("motorcycle"),
+                Some(2),
+                Some(C::MOTORCYCLE),
+            ),
+            (
+                "vehicle.diamondback.century",
+                Some("bicycle"),
+                Some(2),
+                Some(C::BICYCLE),
+            ),
+            (
+                "vehicle.bh.crossbike",
+                Some(" Bicycle "),
+                Some(2),
+                Some(C::BICYCLE),
+            ),
+            // base_type wins over the wheel count and the bicycle list.
+            (
+                "vehicle.gazelle.omafiets",
+                Some("motorcycle"),
+                Some(2),
+                Some(C::MOTORCYCLE),
+            ),
+            // Fallback: empty (0.9.16's bmw.grandtourer, mini.cooper_s), missing, or unknown.
+            ("vehicle.bmw.grandtourer", Some(""), Some(4), Some(C::CAR)),
+            ("vehicle.mini.cooper_s", None, None, Some(C::CAR)),
+            (
+                "vehicle.custom.hovercraft",
+                Some("hovercraft"),
+                Some(4),
+                Some(C::CAR),
+            ),
+            (
+                "vehicle.gazelle.omafiets",
+                Some(""),
+                Some(2),
+                Some(C::BICYCLE),
+            ),
+            ("vehicle.bh.crossbike", None, Some(2), Some(C::BICYCLE)),
+            (
+                "vehicle.diamondback.century",
+                Some("?"),
+                Some(2),
+                Some(C::BICYCLE),
+            ),
+            (
+                "vehicle.custom.scooter",
+                Some(""),
+                Some(2),
+                Some(C::MOTORCYCLE),
+            ),
+            ("vehicle.custom.scooter", None, Some(2), Some(C::MOTORCYCLE)),
+            // Walkers are pedestrians whatever they carry; anything else is not traffic.
+            ("walker.pedestrian.0001", None, None, Some(C::PEDESTRIAN)),
+            (
+                "walker.pedestrian.0030",
+                Some("bicycle"),
+                Some(2),
+                Some(C::PEDESTRIAN),
+            ),
+            ("static.prop.streetbarrier", None, None, None),
+            ("traffic.traffic_light", None, None, None),
+            ("spectator", None, None, None),
+        ];
+        let failures: Vec<String> = cases
+            .iter()
+            .filter_map(|&(id, base, wheels, want)| {
+                let got = classify(id, base, wheels);
+                (got != want).then(|| {
+                    format!("{id} base={base:?} wheels={wheels:?}: want {want:?}, got {got:?}")
+                })
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "misclassified:\n{}",
+            failures.join("\n")
+        );
     }
 }
