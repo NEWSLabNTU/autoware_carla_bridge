@@ -46,6 +46,14 @@ Automatic localization eliminates a manual step that blocks unattended operation
 | Throttle/brake | Forwarded to separate `carla_ackermann_control` process | Direct: `acceleration / max_accel` split into throttle or brake |
 | Status publishers | 3 (velocity, steering, control_mode) | 4 (velocity, steering, control_mode, gear) |
 | Control pipeline | Autoware -> Python converter -> Ackermann controller -> carla_ros_bridge -> CARLA | Autoware -> Rust bridge -> CARLA (single hop) |
+| Command timeout | None (CARLA holds the last control) | `control_cmd_timeout_s` (1 s of sim time): brake at 2.5 m/s^2, hazards on, handbrake once stopped, until commands resume ([issue 024](../issues/024-a-silent-stack-keeps-the-ego-driving.md)) |
+
+CARLA keeps the last `VehicleControl` applied to an actor until another replaces it, so a
+bridge that only acts on arriving commands turns a dead `vehicle_cmd_gate` into a held
+throttle. The watchdog is the vehicle interface's half of the safety net; the other half is
+Autoware's own, the component state monitor's planning and control timeouts (2.5 s), which
+turn a silent planner or controller into an MRM. The two cover different failures: an MRM
+reaches the vehicle through the gate, so it cannot help when the gate is what died.
 
 ## Simulation Mode
 
@@ -67,7 +75,7 @@ Separating the ticker from the bridge allows multiple bridges (one per vehicle) 
 | Ctrl-C handling | Standard Python signal | Graceful shutdown within 100ms at any phase |
 | Sensor cleanup | Manual | Automatic on Autoware loss (sensors destroyed, vehicle preserved) |
 | Stale actor handling | None | Hero vehicle stability check (survives 60 ticks before attaching) |
-| MRM tuning | Default Autoware timeouts | CARLA-specific MRM handler (30s availability timeout) and component monitor (3s topic timeouts) |
+| MRM tuning | Default Autoware timeouts | CARLA-specific MRM handler (30s availability timeout); component monitor relaxed to 30 s for map/localization/perception, 2.5 s for the planning trajectory and control commands ([issue 024](../issues/024-a-silent-stack-keeps-the-ego-driving.md)) |
 | Diagnostic errors | Not addressed | 4 known non-critical errors documented; none in autonomous mode path |
 
 ## Companion Tools

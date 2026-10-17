@@ -34,6 +34,7 @@ conventions.
 | [021](021-nothing-listened-for-the-emergency.md) | The emergency topic has no subscriber, and should not have one yet | Medium | Behind a flag, default off |
 | [022](022-the-pose-estimate-outlives-the-run.md) | The pose estimate outlives the vehicle it belongs to | High | Fixed (`/initialpose` seed on attach) |
 | [023](023-every-vehicle-is-a-car.md) | Ground truth publishes every vehicle, bicycles included, as a car | Medium | Fixed (`base_type` attribute) |
+| [024](024-a-silent-stack-keeps-the-ego-driving.md) | A silent planner or controller leaves the ego driving | High | Fixed (2.5 s planning/control monitors; command watchdog) |
 
 ## Severity
 

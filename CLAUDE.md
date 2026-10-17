@@ -658,7 +658,7 @@ The `acb_launch` package provides CARLA-optimized configurations that override A
 
 **Component State Monitor Topics** (`config/system/component_state_monitor/topics.yaml`):
 - Excludes traffic light recognition topic monitoring (not available in CARLA)
-- Topic timeouts relaxed from 1.0s to 3.0s to prevent MRM emergency_stop from transient gaps
+- Map/localization/perception topic timeouts relaxed to 30 s (sim time); the planning trajectory and both control commands stay at 2.5 s, since they are what turns a dead planner or controller into an MRM (docs/issues/024)
 
 **Launch File** (`launch/carla_simulator.launch.xml`):
 - Sets `use_sim_time` globally via `<set_parameter>`
