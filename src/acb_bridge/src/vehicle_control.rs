@@ -9,6 +9,7 @@
 /// - Subscribing to Autoware control, gear, turn-indicator and hazard-light commands
 /// - Applying them to the CARLA vehicle, including its light state
 /// - Publishing vehicle status back to Autoware
+use crate::command_watchdog::{CommandWatchdog, Verdict};
 use crate::error::Result;
 use carla::{
     client::{ActorBase, Map, Vehicle, World},
@@ -31,6 +32,16 @@ const FALLBACK_MAX_STEER_ANGLE: f32 = 1.22;
 
 /// Maximum expected acceleration magnitude for throttle/brake mapping (m/s²)
 const MAX_ACCEL: f32 = 3.0;
+
+/// Deceleration the command watchdog stops the vehicle with (m/s^2): Autoware's own MRM
+/// emergency stop target (`mrm_emergency_stop_operator`'s `target_acceleration`, -2.5), so
+/// a vehicle that loses its commands stops the way Autoware itself would have stopped it.
+const WATCHDOG_DECEL_MPS2: f64 = 2.5;
+
+/// The least brake the watchdog applies while moving, whatever the maps say: where drag
+/// alone already exceeds the target they answer "coast", and coasting on CARLA's idle
+/// torque is not a stop.
+const WATCHDOG_MIN_BRAKE: f32 = 0.2;
 
 /// How CARLA turns a normalized steer command into a physical tire angle.
 ///
@@ -460,6 +471,12 @@ struct AppliedState {
     /// The tire angle the steering dynamics last produced and the simulation time of that
     /// step (`SteerDynamics`); `None` until the first control command.
     steer_actuator: Option<(f32, f64)>,
+    /// The normalized steer last sent to CARLA, so a watchdog stop holds the wheel where
+    /// Autoware left it instead of snapping it straight at speed.
+    last_steer: f32,
+    /// Whether the hazard lights are on because the command watchdog turned them on, so
+    /// the end of the trip turns off only what it turned on.
+    watchdog_hazards: bool,
 }
 
 impl Default for AppliedState {
@@ -476,6 +493,8 @@ impl Default for AppliedState {
             emergency: false,
             last_lights: None,
             steer_actuator: None,
+            last_steer: 0.0,
+            watchdog_hazards: false,
         }
     }
 }
@@ -520,6 +539,38 @@ impl AppliedState {
         }
 
         lights
+    }
+}
+
+/// The control the command watchdog applies while Autoware is silent: no throttle, the
+/// brake the pedal maps give for `WATCHDOG_DECEL_MPS2` at this speed (all of it on the
+/// fallback constant if there are no maps), the wheel held at `steer`, and the handbrake
+/// once stopped -- CARLA's automatic gearbox idle-creeps otherwise.
+fn watchdog_stop_control(
+    longitudinal: Option<&crate::longitudinal_map::LongitudinalCalibration>,
+    speed: f64,
+    steer: f32,
+    reverse: bool,
+) -> VehicleControl {
+    let brake = match longitudinal {
+        Some(cal) => cal.command_for(-WATCHDOG_DECEL_MPS2, speed).brake,
+        None => (WATCHDOG_DECEL_MPS2 as f32 / MAX_ACCEL).clamp(0.0, 1.0),
+    };
+    let stopped = speed < 0.1;
+    VehicleControl {
+        throttle: 0.0,
+        steer,
+        // Never less than a firm brake: a map that answers "coast" at this speed (drag
+        // alone exceeds the target) must not leave the car rolling on idle torque.
+        brake: if stopped {
+            1.0
+        } else {
+            brake.max(WATCHDOG_MIN_BRAKE)
+        },
+        hand_brake: stopped,
+        reverse,
+        manual_gear_shift: false,
+        gear: 0,
     }
 }
 
@@ -728,6 +779,12 @@ pub struct VehicleControlBridge {
     longitudinal: Option<crate::longitudinal_map::LongitudinalCalibration>,
     /// The scripted driver's state; only the main loop touches it.
     manual_driver: std::cell::RefCell<ManualDriver>,
+    /// Times out `/control/command/control_cmd` (docs/issues/024).
+    watchdog: Arc<Mutex<CommandWatchdog>>,
+    /// Simulation time of the frame being processed, written by the main loop before it
+    /// spins the executor, so a command is stamped with the frame it arrived in and the
+    /// watchdog compares like with like.
+    frame_time: Arc<Mutex<f64>>,
 }
 
 impl VehicleControlBridge {
@@ -750,6 +807,7 @@ impl VehicleControlBridge {
         control_trace: Option<Arc<crate::control_trace::ControlTrace>>,
         base_link_in_actor: nalgebra::Vector3<f64>,
         mode: Arc<ControlMode>,
+        control_cmd_timeout_s: f64,
     ) -> Result<Self> {
         let steer_geometry = Self::read_steer_geometry(&vehicle);
         // A new vehicle session starts under Autoware, whatever the last one ended in.
@@ -782,6 +840,8 @@ impl VehicleControlBridge {
 
         let state = Arc::new(Mutex::new(AppliedState::default()));
         let stall = Arc::new(Mutex::new(StallWatch::default()));
+        let watchdog = Arc::new(Mutex::new(CommandWatchdog::new(control_cmd_timeout_s)));
+        let frame_time = Arc::new(Mutex::new(0.0_f64));
 
         // Create control command subscriber (Autoware 1.5.0 uses Control message)
         let vehicle_for_control = vehicle.clone();
@@ -801,6 +861,10 @@ impl VehicleControlBridge {
         // the command's stamp is too, so the two are comparable.
         let node_for_clock = node.clone();
         let mode_for_control = mode.clone();
+        let watchdog_for_control = watchdog.clone();
+        let frame_time_for_control = frame_time.clone();
+        let vehicle_for_recovery = vehicle.clone();
+        let state_for_recovery = state.clone();
         let control_sub = Arc::new(node.create_subscription(
             "/control/command/control_cmd".reliable(),
             move |msg: autoware_control_msgs::msg::Control| {
@@ -811,6 +875,23 @@ impl VehicleControlBridge {
                 // not applied, as on a vehicle whose driver took over.
                 if mode_for_control.is_manual() {
                     return;
+                }
+                let now = *frame_time_for_control.lock().unwrap();
+                let recovered = watchdog_for_control.lock().unwrap().on_command(now);
+                if let Some(gap_s) = recovered {
+                    tracing::warn!(
+                        "Control commands are back after {gap_s:.2} s of simulation time \
+                         without one; Autoware has the vehicle again"
+                    );
+                    {
+                        let mut state = state_for_recovery.lock().unwrap();
+                        if state.watchdog_hazards {
+                            state.watchdog_hazards = false;
+                            state.hazard_lights =
+                                autoware_vehicle_msgs::msg::HazardLightsReport::DISABLE;
+                        }
+                    }
+                    Self::apply_lights(&vehicle_for_recovery, &state_for_recovery);
                 }
                 if let Err(e) = Self::apply_control_command(
                     &vehicle_for_control,
@@ -928,6 +1009,22 @@ impl VehicleControlBridge {
         )?);
 
         tracing::info!("Vehicle control bridge created");
+        {
+            let w = watchdog.lock().unwrap();
+            if w.enabled() {
+                tracing::info!(
+                    "  Command watchdog: brake to a stop ({WATCHDOG_DECEL_MPS2} m/s^2, hazards \
+                     on) when /control/command/control_cmd is older than {:.2} s of \
+                     simulation time",
+                    w.timeout_s()
+                );
+            } else {
+                tracing::warn!(
+                    "  Command watchdog: OFF (control_cmd_timeout_s <= 0); a silent Autoware \
+                     leaves the last command applied indefinitely"
+                );
+            }
+        }
         tracing::info!(
             "  Steering: limit {:.3} rad, track/wheelbase {:.4}, {:.3} rad at full lock",
             steer_geometry.max_steer_angle,
@@ -1009,6 +1106,8 @@ impl VehicleControlBridge {
             mode,
             longitudinal: longitudinal_for_manual,
             manual_driver: std::cell::RefCell::new(ManualDriver::default()),
+            watchdog,
+            frame_time,
         })
     }
 
@@ -1208,6 +1307,8 @@ impl VehicleControlBridge {
         };
         let (applied, tire_angle) = applied;
 
+        // Recorded after the vehicle lock is released: state-then-vehicle is the lock order.
+        let mut sent_steer: Option<f32> = None;
         let vehicle_guard = vehicle.lock().unwrap();
         if let Some(ref v) = *vehicle_guard {
             let mut control = VehicleControl {
@@ -1252,6 +1353,7 @@ impl VehicleControlBridge {
                 );
             }
             control.steer = steer;
+            sent_steer = Some(steer);
 
             // Longitudinal: acceleration (m/s²) → throttle or brake (0 to 1), through the
             // measured pedal maps when they are available. The fallback divides by a single
@@ -1385,6 +1487,9 @@ impl VehicleControlBridge {
             );
         }
         drop(vehicle_guard);
+        if let Some(steer) = sent_steer {
+            state.lock().unwrap().last_steer = steer;
+        }
 
         // Brake and reverse lights follow the control that was just applied. Done after
         // the vehicle lock is released, and only when the state actually changed.
@@ -1557,6 +1662,81 @@ impl VehicleControlBridge {
         Ok(())
     }
 
+    /// Tell the command path which frame is being processed. Called by the main loop with
+    /// the frame's stamp *before* it spins the executor, so every command drained in that
+    /// spin is stamped with this frame (docs/issues/024).
+    pub fn set_frame_time(&self, stamp: &builtin_interfaces::msg::Time) {
+        *self.frame_time.lock().unwrap() = stamp.sec as f64 + stamp.nanosec as f64 * 1e-9;
+    }
+
+    /// The command watchdog, once per frame after the executor has been spun.
+    ///
+    /// CARLA keeps the last `VehicleControl` applied until another replaces it, so when
+    /// Autoware stops commanding the vehicle the bridge must say so itself: past
+    /// `control_cmd_timeout_s` of simulation time without a `/control/command/control_cmd`,
+    /// release the throttle, brake at `WATCHDOG_DECEL_MPS2` through the pedal maps, hold
+    /// the wheel where it was, turn the hazards on, and hold with the handbrake once
+    /// stopped. The next command hands the vehicle back (see the control callback).
+    pub fn watch_commands(&self) -> Result<()> {
+        if self.mode.is_manual() {
+            // The scripted driver has the car and Autoware's commands are ignored on
+            // purpose; returning to AUTONOMOUS must not read that gap as a dead stack.
+            self.watchdog.lock().unwrap().disarm();
+            return Ok(());
+        }
+        let now = *self.frame_time.lock().unwrap();
+        let verdict = self.watchdog.lock().unwrap().check(now);
+        if !verdict.brakes() {
+            return Ok(());
+        }
+        let age_s = match verdict {
+            Verdict::Unarmed | Verdict::Fresh => return Ok(()),
+            Verdict::Tripped { age_s } => {
+                tracing::error!(
+                    "No /control/command/control_cmd for {age_s:.2} s of simulation time \
+                     (timeout {:.2} s): Autoware has stopped commanding the vehicle, and \
+                     CARLA would hold the last command -- throttle included -- forever. \
+                     Braking to a stop at {WATCHDOG_DECEL_MPS2} m/s^2 with the hazards on \
+                     until commands resume (docs/issues/024)",
+                    self.watchdog.lock().unwrap().timeout_s()
+                );
+                age_s
+            }
+            Verdict::Stale { age_s } => age_s,
+        };
+
+        let (steer, reverse) = {
+            let mut state = self.state.lock().unwrap();
+            state.braking = true;
+            if state.hazard_lights != autoware_vehicle_msgs::msg::HazardLightsReport::ENABLE {
+                state.hazard_lights = autoware_vehicle_msgs::msg::HazardLightsReport::ENABLE;
+                state.watchdog_hazards = true;
+            }
+            (state.last_steer, state.is_reverse())
+        };
+        {
+            // State lock released above: state-then-vehicle is the lock order.
+            let guard = self.vehicle.lock().unwrap();
+            if let Some(ref v) = *guard {
+                let speed = v
+                    .velocity()
+                    .map(|vel| (vel.x as f64).hypot(vel.y as f64))
+                    .unwrap_or(0.0);
+                let control =
+                    watchdog_stop_control(self.longitudinal.as_ref(), speed, steer, reverse);
+                v.apply_control(&control)?;
+                tracing::debug!(
+                    "Watchdog stop: command {age_s:.2} s old, {speed:.2} m/s, brake {:.3}, \
+                     handbrake {}",
+                    control.brake,
+                    control.hand_brake
+                );
+            }
+        }
+        Self::apply_lights(&self.vehicle, &self.state);
+        Ok(())
+    }
+
     /// Should be called in the main loop at regular intervals (e.g., 20 Hz)
     ///
     /// # Arguments
@@ -1710,6 +1890,28 @@ impl VehicleControlBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watchdog_stop_releases_the_throttle_and_brakes() {
+        let c = watchdog_stop_control(None, 15.0, 0.12, false);
+        assert_eq!(c.throttle, 0.0);
+        assert!((c.brake - (WATCHDOG_DECEL_MPS2 as f32 / MAX_ACCEL)).abs() < 1e-6);
+        assert!(
+            !c.hand_brake,
+            "no handbrake while moving: it locks the rear wheels"
+        );
+        assert_eq!(c.steer, 0.12, "the wheel stays where Autoware left it");
+        assert!(!c.reverse);
+    }
+
+    #[test]
+    fn watchdog_stop_holds_a_stopped_car() {
+        let c = watchdog_stop_control(None, 0.05, -0.3, true);
+        assert_eq!(c.throttle, 0.0);
+        assert_eq!(c.brake, 1.0);
+        assert!(c.hand_brake);
+        assert!(c.reverse, "the gear is not the watchdog's to change");
+    }
 
     #[test]
     fn handbrake_waits_for_the_car_to_stop() {

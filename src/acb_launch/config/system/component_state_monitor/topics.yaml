@@ -1,7 +1,19 @@
 # CARLA Simulator Topics Configuration for Component State Monitor
 # This file is a copy of autoware_launch/config/system/component_state_monitor/topics.yaml
-# with traffic_light_recognition_traffic_signals topic REMOVED for CARLA simulation
-# and timeouts relaxed from 1.0s to 3.0s to prevent MRM emergency_stop in simulation
+# with traffic_light_recognition_traffic_signals topic REMOVED for CARLA simulation.
+#
+# Map, localization and perception topics are relaxed to 30 s / 0.1 Hz (6fefaa6): on a
+# contended host their rates sag and autonomous mode would never become available.
+#
+# The planning trajectory and the two control commands are NOT relaxed that far: they are
+# what tells the stack its planner or controller is gone, and nothing else does it in
+# time. trajectory_follower keeps tracking the last trajectory it received, however old,
+# and planning_validator re-publishes its last OK diagnosis at 1 Hz with no trajectory
+# arriving, so with a 30 s timeout a dead behavior_path_planner left the ego driving on a
+# stale trajectory for 20 s and into a guardrail (docs/issues/024). 2.5 s is autoware_launch's
+# own CARLA profile (config/simulator/carla/component_state_monitor/topics.yaml). The
+# monitors run on the node clock, i.e. simulation time, so a paused or sub-realtime
+# simulation does not age these topics.
 
 - module: map
   mode: [online, logging_simulation, planning_simulation]
@@ -120,9 +132,9 @@
     topic_type: autoware_planning_msgs/msg/Trajectory
     best_effort: false
     transient_local: false
-    warn_rate: 0.5
-    error_rate: 0.1
-    timeout: 30.0
+    warn_rate: 2.0
+    error_rate: 0.5
+    timeout: 2.5
 
 - module: control
   mode: [online, logging_simulation, planning_simulation]
@@ -133,9 +145,9 @@
     topic_type: autoware_control_msgs/msg/Control
     best_effort: false
     transient_local: false
-    warn_rate: 0.5
-    error_rate: 0.1
-    timeout: 30.0
+    warn_rate: 5.0
+    error_rate: 1.0
+    timeout: 2.5
 
 - module: control
   mode: [online, logging_simulation, planning_simulation]
@@ -146,9 +158,9 @@
     topic_type: autoware_control_msgs/msg/Control
     best_effort: false
     transient_local: false
-    warn_rate: 0.5
-    error_rate: 0.1
-    timeout: 30.0
+    warn_rate: 5.0
+    error_rate: 1.0
+    timeout: 2.5
 
 - module: vehicle
   mode: [online, logging_simulation, planning_simulation]

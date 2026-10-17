@@ -4,6 +4,7 @@ mod bridge;
 mod carla_vehicle;
 mod carla_version;
 mod clock;
+mod command_watchdog;
 mod conn_probe;
 mod control_trace;
 mod coordinate_conversion;
@@ -197,6 +198,9 @@ struct BridgeParams {
     /// lane-keeping driver while it is MANUAL (`vehicle_control::ControlMode`). Off by
     /// default: the stock ego simulation refuses MANUAL.
     pub allow_manual: bool,
+    /// Brake to a stop when `/control/command/control_cmd` is older than this, in seconds of
+    /// simulation time; 0 disables (`vehicle_control::watch_commands`, docs/issues/024).
+    pub control_cmd_timeout_s: f64,
     pub control_trace_path: String,
     pub accel_map_path: String,
     pub brake_map_path: String,
@@ -337,6 +341,14 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        // A drive-by-wire interface times its commands out (pacmod_interface:
+        // command_timeout_ms 1000); CARLA does not, so the bridge must (docs/issues/024).
+        let control_cmd_timeout_s = node
+            .declare_parameter("control_cmd_timeout_s")
+            .default(1.0)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         let ground_truth_range_m = node
             .declare_parameter("ground_truth_range_m")
             .default(100.0)
@@ -446,6 +458,7 @@ impl BridgeParams {
             map_origin,
             honor_emergency_cmd: honor_emergency_cmd_val,
             allow_manual: allow_manual.get(),
+            control_cmd_timeout_s: control_cmd_timeout_s.get(),
             control_trace_path: control_trace_path_val.to_string(),
             accel_map_path: accel_map_path_val.to_string(),
             brake_map_path: brake_map_path_val.to_string(),
@@ -1293,6 +1306,7 @@ fn main() -> Result<()> {
             control_trace.clone(),
             base_link_in_actor,
             control_mode.clone(),
+            params.control_cmd_timeout_s,
         )?;
         tracing::info!("Vehicle control bridge created");
 
@@ -1572,6 +1586,8 @@ fn main() -> Result<()> {
             // anything to an actuator, so a backlog is not work to get through, it is work
             // to discard. Consuming one per iteration keeps the stale ones and applies them
             // in order, which is the worst of both.
+            // Commands drained by this spin are stamped with this frame (command watchdog).
+            vehicle_control.set_frame_time(&stamp);
             let spin_start = std::time::Instant::now();
             executor.spin(rclrs::SpinOptions::default().timeout(Duration::from_millis(1)));
             if let Some(t) = &loop_trace {
@@ -1597,6 +1613,11 @@ fn main() -> Result<()> {
             // Publish vehicle status (velocity, steering, control mode)
             if let Err(e) = vehicle_control.publish_status(&stamp) {
                 tracing::warn!("Failed to publish vehicle status: {e}");
+            }
+
+            // Autoware silent past control_cmd_timeout_s: brake to a stop (docs/issues/024)
+            if let Err(e) = vehicle_control.watch_commands() {
+                tracing::warn!("Command watchdog failed this frame: {e}");
             }
 
             // MANUAL (allow_manual:=true, a takeover accepted): the scripted driver

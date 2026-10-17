@@ -73,6 +73,13 @@
        true: /control/command/emergency_cmd overrides it with full brake. See docs/issues/021. -->
   <arg name="honor_emergency_cmd" default="false"
        description="Full brake while /control/command/emergency_cmd is set (false: follow the control command)"/>
+  <!-- CARLA holds the last control applied to a vehicle indefinitely, so a silent Autoware
+       (vehicle_cmd_gate dead, stopped or reloading) would leave its last throttle on. Past
+       this many seconds of simulation time without /control/command/control_cmd the bridge
+       brakes to a stop at 2.5 m/s^2 with the hazards on, until commands resume. 0 disables.
+       See docs/issues/024. -->
+  <arg name="control_cmd_timeout_s" default="1.0"
+       description="Brake to a stop when control_cmd is older than this (s, sim time); 0 disables"/>
   <!-- Signal state from CARLA's lights, on the arbiter's V2X input. The file is the table
        carla_scenario_bridge writes beside the Lanelet2 map at every Initialize; it is re-read
        when it changes. Empty turns the publisher off. Only one source may feed that topic:
@@ -121,6 +128,7 @@
     <param name="brake_map_path" value="$(var brake_map_path)"/>
     <param name="allow_manual" value="$(var allow_manual)"/>
     <param name="honor_emergency_cmd" value="$(var honor_emergency_cmd)"/>
+    <param name="control_cmd_timeout_s" value="$(var control_cmd_timeout_s)"/>
     <!-- base_link is the rear-axle centre. The bridge measures where it sits from CARLA's
          rear wheel positions (about -1.386 m along the actor x axis on a model3) and
          publishes the pose and attaches the sensors relative to it. For a blueprint
