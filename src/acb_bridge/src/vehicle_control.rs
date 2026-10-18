@@ -273,9 +273,26 @@ fn steer_command_for(tire_angle: f32, geometry: &SteerGeometry) -> f32 {
 /// Wheelbase for the pure-pursuit geometry, metres (a model3 is 2.875).
 const MANUAL_WHEELBASE_M: f64 = 2.9;
 /// Pure-pursuit look-ahead: this many seconds of travel, but never less than
-/// `MANUAL_LOOKAHEAD_MIN_M`, so it does not chase the lane centre's noise at low speed.
+/// `MANUAL_LOOKAHEAD_MIN_M`. Pure pursuit cuts a curve of radius R by about L^2 / 2R, so
+/// the minimum is kept short for Town01's junction turns (R 9-13 m): 4 m cuts them by
+/// under 1 m, the 6 m this had cut a 9 m right turn by 2 m.
 const MANUAL_LOOKAHEAD_S: f64 = 1.0;
-const MANUAL_LOOKAHEAD_MIN_M: f64 = 6.0;
+const MANUAL_LOOKAHEAD_MIN_M: f64 = 4.0;
+/// Spacing of the committed path's points (lane centre, `Waypoint::next`), metres.
+const MANUAL_PATH_STEP_M: f64 = 1.0;
+/// How far past the look-ahead point the path is kept committed, metres: enough to see a
+/// curve, or the end of the road, in time to slow down for it.
+const MANUAL_PATH_HORIZON_M: f64 = 30.0;
+/// Curve speed: the lateral acceleration the scripted driver takes a curve at, m/s^2,
+/// the curvature measured as the heading change over this many path steps (so a
+/// degree's kink between two lane sections does not read as a hairpin).
+const MANUAL_CURVE_WINDOW: usize = 3;
+const MANUAL_MAX_LATERAL_ACCEL: f64 = 1.5;
+/// Deceleration planned for a curve or the end of the road ahead, m/s^2 (below
+/// `MANUAL_MAX_DECEL`, so the speed hold can deliver it).
+const MANUAL_PLAN_DECEL: f64 = 1.5;
+/// Where the car stops short of the end of its road, metres from the last lane point.
+const MANUAL_END_MARGIN_M: f64 = 3.0;
 /// Speed hold: requested acceleration per m/s of speed error, and its bounds (m/s^2).
 const MANUAL_SPEED_GAIN: f64 = 0.8;
 const MANUAL_MAX_ACCEL: f64 = 1.5;
@@ -312,12 +329,178 @@ fn heading_diff_deg(a: f32, b: f32) -> f32 {
     }
 }
 
+/// One point of the scripted driver's committed path: a lane centre in CARLA's frame
+/// (metres; yaw in degrees, CARLA's left-handed sign).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PathPoint {
+    x: f64,
+    y: f64,
+    yaw_deg: f32,
+}
+
+/// `(ahead, right)` of a point `(dx, dy)` away (CARLA frame) from a body with heading
+/// `yaw_deg`: forward is (cos, sin), right is (-sin, cos) in CARLA's left-handed frame.
+fn body_offset(dx: f64, dy: f64, yaw_deg: f64) -> (f64, f64) {
+    let (s, c) = yaw_deg.to_radians().sin_cos();
+    (dx * c + dy * s, -dx * s + dy * c)
+}
+
+/// The successor that keeps closest to `heading_deg`: straight on where the road goes
+/// on, the gentler turn at a T-junction. Index into `yaws`, `None` when there is none.
+fn straightest(yaws: &[f32], heading_deg: f32) -> Option<usize> {
+    (0..yaws.len()).min_by(|&a, &b| {
+        heading_diff_deg(yaws[a], heading_deg)
+            .abs()
+            .total_cmp(&heading_diff_deg(yaws[b], heading_deg).abs())
+    })
+}
+
+/// Drop the points the rear axle at `(x, y)`, heading `yaw_deg`, has passed. The last point
+/// is never dropped, so the path stays anchored at the end of the road.
+fn trim_passed(path: &mut std::collections::VecDeque<PathPoint>, x: f64, y: f64, yaw_deg: f64) {
+    while path.len() > 1 {
+        let p = path[0];
+        if body_offset(p.x - x, p.y - y, yaw_deg).0 > 0.0 {
+            break;
+        }
+        path.pop_front();
+    }
+}
+
+/// The pure-pursuit target: the first point at least `lookahead_m` from `(x, y)`, else the
+/// last point of the path.
+fn pursuit_target(
+    path: &std::collections::VecDeque<PathPoint>,
+    x: f64,
+    y: f64,
+    lookahead_m: f64,
+) -> Option<PathPoint> {
+    path.iter()
+        .copied()
+        .find(|p| (p.x - x).hypot(p.y - y) >= lookahead_m)
+        .or_else(|| path.back().copied())
+}
+
+/// Path length from `(x, y)` along `path` to each point, metres.
+fn distances_along(path: &std::collections::VecDeque<PathPoint>, x: f64, y: f64) -> Vec<f64> {
+    let mut out = Vec::with_capacity(path.len());
+    let (mut px, mut py, mut acc) = (x, y, 0.0);
+    for p in path {
+        acc += (p.x - px).hypot(p.y - py);
+        out.push(acc);
+        (px, py) = (p.x, p.y);
+    }
+    out
+}
+
+/// The speed the scripted driver may have now, from the path ahead: for every curve on it
+/// the speed that takes the curve at `MANUAL_MAX_LATERAL_ACCEL` (curvature from the heading
+/// change over `MANUAL_CURVE_WINDOW` points), reachable at `MANUAL_PLAN_DECEL` from here; and,
+/// when the path ends (no lane goes on), a stop `MANUAL_END_MARGIN_M` short of its end.
+/// The proportional speed hold trails a falling target by about `speed / gain` metres (and
+/// the pedals and the car add their own lag), so twice that is taken off the distance to
+/// every curve.
+fn path_speed_limit(
+    path: &std::collections::VecDeque<PathPoint>,
+    x: f64,
+    y: f64,
+    ends: bool,
+    speed: f64,
+) -> f64 {
+    let dist = distances_along(path, x, y);
+    let lag = 2.0 * speed.abs() / MANUAL_SPEED_GAIN;
+    let reach =
+        |v_end: f64, s: f64| (v_end * v_end + 2.0 * MANUAL_PLAN_DECEL * (s - lag).max(0.0)).sqrt();
+    let mut limit = f64::INFINITY;
+    for i in MANUAL_CURVE_WINDOW..path.len() {
+        let j = i - MANUAL_CURVE_WINDOW;
+        let arc = dist[i] - dist[j];
+        let turn = (heading_diff_deg(path[i].yaw_deg, path[j].yaw_deg) as f64)
+            .abs()
+            .to_radians();
+        if arc < 1e-3 || turn < 1e-6 {
+            continue;
+        }
+        let v_curve = (MANUAL_MAX_LATERAL_ACCEL * arc / turn).sqrt();
+        limit = limit.min(reach(v_curve, dist[j]));
+    }
+    if ends {
+        if let Some(&end) = dist.last() {
+            let room = end - MANUAL_END_MARGIN_M;
+            limit = limit.min(if room <= 0.0 {
+                0.0
+            } else {
+                reach(0.0, room + lag)
+            });
+        }
+    }
+    limit
+}
+
+/// One frame of the scripted driver on its committed `path`, the rear axle at `(x, y)` with
+/// heading `yaw_deg` and `speed` m/s, holding `hold` m/s: drops the points passed and
+/// returns the pure-pursuit tire angle (radians, CARLA's sign) and the speed to hold now
+/// (`hold`, lowered for a curve or the end of the road ahead).
+fn manual_step(
+    path: &mut std::collections::VecDeque<PathPoint>,
+    ends: bool,
+    x: f64,
+    y: f64,
+    yaw_deg: f64,
+    speed: f64,
+    hold: f64,
+) -> (f64, f64) {
+    trim_passed(path, x, y, yaw_deg);
+    let tire_angle = pursuit_target(path, x, y, manual_lookahead_m(speed))
+        .map(|p| {
+            let (ahead, right) = body_offset(p.x - x, p.y - y, yaw_deg);
+            pursuit_tire_angle(ahead, right, MANUAL_WHEELBASE_M)
+        })
+        .unwrap_or(0.0);
+    (
+        tire_angle,
+        hold.min(path_speed_limit(path, x, y, ends, speed)),
+    )
+}
+
 /// What the scripted driver keeps between frames: the town's map (fetched once per
-/// session, it is the OpenDRIVE) and the speed it holds, set when MANUAL starts.
+/// session, it is the OpenDRIVE), the speed it holds (set when MANUAL starts), and the
+/// lane it committed to: the path of lane-centre points ahead, extended from `tail` (the
+/// last waypoint on it) as the car uses it up. `ends` is set once no lane goes on from
+/// `tail`.
+///
+/// The path is projected onto the map once, at the takeover, and from then on only
+/// extended along the lane's own successors. Projecting the car every frame
+/// (`Map::waypoint_at`, the nearest driving lane), as this did first, fails in a junction:
+/// every connecting lane overlaps there, the nearest one is as often the crossing road's
+/// or the other turn's, and the target jumps between them (in CARLA the car ran wide of a
+/// Town01 left turn into a pole).
 #[derive(Default)]
 struct ManualDriver {
     map: Option<Map>,
     target_speed: Option<f64>,
+    path: std::collections::VecDeque<PathPoint>,
+    tail: Option<carla::client::Waypoint>,
+    ends: bool,
+}
+
+impl ManualDriver {
+    /// Forget the committed lane and the held speed (MANUAL ended).
+    fn release(&mut self) {
+        self.target_speed = None;
+        self.path.clear();
+        self.tail = None;
+        self.ends = false;
+    }
+}
+
+fn path_point(w: &carla::client::Waypoint) -> PathPoint {
+    let t = w.transform();
+    PathPoint {
+        x: t.location.x as f64,
+        y: t.location.y as f64,
+        yaw_deg: t.rotation.yaw,
+    }
 }
 
 /// What the bridge last applied to CARLA, and therefore what it reports to Autoware.
@@ -1535,10 +1718,11 @@ impl VehicleControlBridge {
     ///
     /// A scripted stand-in for the person who answered a takeover request, so a scenario
     /// can go on after the takeover with the car still on its road. Steering is pure
-    /// pursuit on CARLA's own lane centre (the map's waypoints, `MANUAL_LOOKAHEAD_*` ahead,
-    /// straight on at a junction), through the same Ackermann inverse and steering-curve
-    /// compensation as Autoware's commands; speed is a proportional hold through the pedal
-    /// maps. CARLA's Traffic Manager was the other way to do it, but in synchronous mode it
+    /// pursuit on CARLA's own lane centre, `MANUAL_LOOKAHEAD_*` ahead on the lane committed
+    /// at the takeover (`ManualDriver`: straight on at a junction, the gentler turn at a
+    /// T-junction), through the same Ackermann inverse and steering-curve compensation as
+    /// Autoware's commands; speed is a proportional hold through the pedal maps, slowing
+    /// for curves and stopping where the lane ends. CARLA's Traffic Manager was the other way to do it, but in synchronous mode it
     /// is ticked only by the process that ticks the world (carla-scenario-bridge), so this
     /// bridge cannot hand it a vehicle on its own.
     ///
@@ -1548,12 +1732,13 @@ impl VehicleControlBridge {
         if !self.mode.allow_manual() {
             return Ok(());
         }
-        let mut driver = self.manual_driver.borrow_mut();
+        let mut driver_guard = self.manual_driver.borrow_mut();
+        let driver = &mut *driver_guard;
         if driver.map.is_none() {
             driver.map = Some(world.map()?);
         }
         if !self.mode.is_manual() {
-            driver.target_speed = None;
+            driver.release();
             return Ok(());
         }
         let guard = self.vehicle.lock().unwrap();
@@ -1574,32 +1759,61 @@ impl VehicleControlBridge {
             speed
         });
 
-        // Steering: the lane centre one look-ahead ahead, picked straight on at a fork.
-        let map = driver.map.as_ref().expect("fetched above");
-        let mut tire_angle = 0.0_f64;
-        if let Some(here) = map.waypoint_at(&transform.location)? {
-            let ahead = here.next(manual_lookahead_m(speed))?;
-            let yaw = transform.rotation.yaw;
-            if let Some(next) = ahead.iter().min_by(|a, b| {
-                heading_diff_deg(a.transform().rotation.yaw, yaw)
-                    .abs()
-                    .total_cmp(&heading_diff_deg(b.transform().rotation.yaw, yaw).abs())
-            }) {
-                let to = next.transform().location;
-                let d = carla::geom::Vector3D::new(
-                    to.x - transform.location.x,
-                    to.y - transform.location.y,
-                    0.0,
-                );
-                let body = transform.rotation.inverse_rotate_vector(&d);
-                // From the rear axle, where pure pursuit's geometry is exact.
-                tire_angle = pursuit_tire_angle(
-                    body.x as f64 - self.base_link_in_actor.x,
-                    body.y as f64 - self.base_link_in_actor.y,
-                    MANUAL_WHEELBASE_M,
-                );
+        // The rear axle, where pure pursuit's geometry is exact, in CARLA's frame.
+        let yaw = transform.rotation.yaw as f64;
+        let (s, c) = yaw.to_radians().sin_cos();
+        let (bx, by) = (self.base_link_in_actor.x, self.base_link_in_actor.y);
+        let rear_x = transform.location.x as f64 + bx * c - by * s;
+        let rear_y = transform.location.y as f64 + bx * s + by * c;
+
+        // The committed lane: projected once, then extended along its own successors.
+        if driver.tail.is_none() {
+            let map = driver.map.as_ref().expect("fetched above");
+            if let Some(here) = map.waypoint_at(&transform.location)? {
+                driver.path.push_back(path_point(&here));
+                driver.tail = Some(here);
             }
         }
+        let lookahead = manual_lookahead_m(speed);
+        trim_passed(&mut driver.path, rear_x, rear_y, yaw);
+        while !driver.ends {
+            let Some(tail) = driver.tail.as_ref() else {
+                break;
+            };
+            let last = path_point(tail);
+            if (last.x - rear_x).hypot(last.y - rear_y) >= lookahead + MANUAL_PATH_HORIZON_M {
+                break;
+            }
+            let mut next: Vec<_> = tail.next(MANUAL_PATH_STEP_M)?.iter().collect();
+            let yaws: Vec<f32> = next.iter().map(|w| w.transform().rotation.yaw).collect();
+            match straightest(&yaws, last.yaw_deg) {
+                Some(i) => {
+                    let w = next.swap_remove(i);
+                    driver.path.push_back(path_point(&w));
+                    driver.tail = Some(w);
+                }
+                None => {
+                    tracing::info!(
+                        "MANUAL: the lane ends at ({:.1}, {:.1}); the scripted driver stops there",
+                        last.x,
+                        last.y
+                    );
+                    driver.ends = true;
+                }
+            }
+        }
+
+        // Steering: pure pursuit on the committed path; speed: the held one, lower for a
+        // curve or the end of the road ahead.
+        let (tire_angle, target) = manual_step(
+            &mut driver.path,
+            driver.ends,
+            rear_x,
+            rear_y,
+            yaw,
+            speed,
+            target,
+        );
         let factor = steer_speed_factor(
             &self.steer_geometry,
             self.compensate_steering_curve,
@@ -2061,6 +2275,7 @@ mod tests {
     #[test]
     fn lookahead_and_speed_hold() {
         assert_eq!(manual_lookahead_m(0.0), MANUAL_LOOKAHEAD_MIN_M);
+        assert_eq!(manual_lookahead_m(3.0), MANUAL_LOOKAHEAD_MIN_M);
         assert_eq!(manual_lookahead_m(10.0), 10.0);
         assert_eq!(hold_speed_accel(7.0, 7.0), 0.0);
         assert!((hold_speed_accel(7.0, 6.5) - 0.4).abs() < 1e-12);
@@ -2074,6 +2289,306 @@ mod tests {
         assert_eq!(heading_diff_deg(350.0, 10.0), -20.0);
         assert_eq!(heading_diff_deg(-179.0, 179.0), 2.0);
         assert_eq!(heading_diff_deg(90.0, 90.0), 0.0);
+    }
+
+    /// A Town01 T-junction in CARLA's frame (the island demo's, east of x 101.4 on the
+    /// westbound lane y 130.3): the approach, then the left turn (radius 13 m, ends heading
+    /// +y on the southbound lane x 88.4), the right turn (radius 9 m, ends heading -y on
+    /// the northbound lane x 92.4), and the crossing road's two lanes through the junction.
+    /// Points every 0.25 m.
+    mod town01_t {
+        use super::super::PathPoint;
+
+        pub const STEP: f64 = 0.25;
+
+        fn line(x0: f64, y0: f64, yaw_deg: f32, len: f64) -> Vec<PathPoint> {
+            let (s, c) = (yaw_deg as f64).to_radians().sin_cos();
+            (0..=(len / STEP) as usize)
+                .map(|i| {
+                    let d = i as f64 * STEP;
+                    PathPoint {
+                        x: x0 + d * c,
+                        y: y0 + d * s,
+                        yaw_deg,
+                    }
+                })
+                .collect()
+        }
+
+        /// A quarter circle from heading 180 (towards -x) at (101.4, 130.3), turning to
+        /// `+y` (`left`, CARLA's yaw decreasing to 90) or to `-y` (right, yaw to 270).
+        fn quarter(r: f64, left: bool) -> Vec<PathPoint> {
+            let sign = if left { 1.0 } else { -1.0 };
+            let (cx, cy) = (101.4, 130.3 + sign * r);
+            let n = (std::f64::consts::FRAC_PI_2 * r / STEP) as usize;
+            (0..=n)
+                .map(|i| {
+                    let th = std::f64::consts::FRAC_PI_2 * i as f64 / n as f64;
+                    PathPoint {
+                        x: cx - r * th.sin(),
+                        y: cy - sign * r * th.cos(),
+                        yaw_deg: (180.0 - sign * th.to_degrees()) as f32,
+                    }
+                })
+                .collect()
+        }
+
+        pub fn approach() -> Vec<PathPoint> {
+            line(140.0, 130.3, 180.0, 38.6)
+        }
+        pub fn left_turn() -> Vec<PathPoint> {
+            let mut p = quarter(13.0, true);
+            p.extend(line(88.4, 143.3, 90.0, 40.0).into_iter().skip(1));
+            p
+        }
+        pub fn right_turn() -> Vec<PathPoint> {
+            let mut p = quarter(9.0, false);
+            p.extend(line(92.4, 121.3, -90.0, 40.0).into_iter().skip(1));
+            p
+        }
+        /// The crossing road inside the junction: southbound x 88.4, northbound x 92.4.
+        pub fn crossing() -> [Vec<PathPoint>; 2] {
+            [
+                line(88.4, 120.6, 90.0, 22.7),
+                line(92.4, 143.3, -90.0, 22.7),
+            ]
+        }
+    }
+
+    /// A kinematic bicycle on its rear axle, CARLA's frame: `steer` returns the tire angle
+    /// (positive = right, i.e. yaw increasing) for the pose; returns the track.
+    fn drive(
+        mut x: f64,
+        mut y: f64,
+        mut yaw: f64,
+        v: f64,
+        frames: usize,
+        mut steer: impl FnMut(f64, f64, f64) -> f64,
+    ) -> Vec<(f64, f64, f64)> {
+        let dt = 0.05;
+        let mut track = Vec::with_capacity(frames);
+        for _ in 0..frames {
+            let delta = steer(x, y, yaw).clamp(-0.6, 0.6);
+            let (s, c) = yaw.to_radians().sin_cos();
+            x += v * c * dt;
+            y += v * s * dt;
+            yaw += (v / MANUAL_WHEELBASE_M * delta.tan() * dt).to_degrees();
+            track.push((x, y, yaw));
+        }
+        track
+    }
+
+    fn distance_to(path: &[PathPoint], x: f64, y: f64) -> f64 {
+        path.iter()
+            .map(|p| (p.x - x).hypot(p.y - y))
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    #[test]
+    fn body_offset_is_ahead_and_right() {
+        let close =
+            |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9;
+        assert!(close(body_offset(10.0, 0.0, 0.0), (10.0, 0.0)));
+        // CARLA's frame is left-handed: facing +x, +y is to the right.
+        assert!(close(body_offset(0.0, 2.0, 0.0), (0.0, 2.0)));
+        // Facing +y (yaw 90): +y is ahead, -x is to the right.
+        assert!(close(body_offset(0.0, 5.0, 90.0), (5.0, 0.0)));
+        assert!(close(body_offset(-3.0, 0.0, 90.0), (0.0, 3.0)));
+    }
+
+    #[test]
+    fn straightest_takes_straight_on_or_the_gentler_turn() {
+        // Straight on beats either turn.
+        assert_eq!(straightest(&[175.0, 180.0, -175.0], 180.0), Some(1));
+        // A T-junction, 1 m in: the 13 m left turn has turned 4.4 deg, the 9 m right 6.4.
+        assert_eq!(straightest(&[180.0 + 6.4, 180.0 - 4.4], 180.0), Some(1));
+        // Across the +-180 seam.
+        assert_eq!(straightest(&[170.0, -178.0], 179.0), Some(1));
+        // A dead end.
+        assert_eq!(straightest(&[], 0.0), None);
+    }
+
+    #[test]
+    fn the_path_drops_what_was_passed_but_keeps_its_end() {
+        let mut path: std::collections::VecDeque<_> = (0..=10)
+            .map(|i| PathPoint {
+                x: i as f64,
+                y: 0.0,
+                yaw_deg: 0.0,
+            })
+            .collect();
+        trim_passed(&mut path, 3.5, 0.2, 0.0);
+        assert_eq!(path.front().unwrap().x, 4.0);
+        // The look-ahead target: the first point 4 m away; past the end, the end.
+        assert_eq!(pursuit_target(&path, 3.5, 0.0, 4.0).unwrap().x, 8.0);
+        assert_eq!(pursuit_target(&path, 3.5, 0.0, 40.0).unwrap().x, 10.0);
+        trim_passed(&mut path, 30.0, 0.0, 0.0);
+        assert_eq!(path.len(), 1);
+        assert_eq!(path[0].x, 10.0);
+    }
+
+    #[test]
+    fn the_speed_drops_for_a_curve_and_the_road_end() {
+        let straight: std::collections::VecDeque<_> = town01_t::approach().into_iter().collect();
+        assert_eq!(
+            path_speed_limit(&straight, 140.0, 130.3, false, 0.0),
+            f64::INFINITY
+        );
+        // In the 9 m turn: sqrt(1.5 x 9) = 3.67 m/s.
+        let right: std::collections::VecDeque<_> = town01_t::right_turn().into_iter().collect();
+        let v = path_speed_limit(&right, 101.4, 130.3, false, 0.0);
+        assert!((v - (1.5_f64 * 9.0).sqrt()).abs() < 0.1, "{v}");
+        // 15 m before it at 5 m/s: twice the hold's 5 / 0.8 m lag off, so the curve is
+        // planned from 2.5 m: sqrt(13.5 + 2 x 1.5 x 2.5) = 4.58 m/s.
+        let mut lane = town01_t::approach();
+        lane.extend(town01_t::right_turn().into_iter().skip(1));
+        let mut ahead: std::collections::VecDeque<_> = lane.into_iter().collect();
+        trim_passed(&mut ahead, 116.4, 130.3, 180.0);
+        let v = path_speed_limit(&ahead, 116.4, 130.3, false, 5.0);
+        assert!((v - (13.5_f64 + 3.0 * 2.5).sqrt()).abs() < 0.15, "{v}");
+        // A lane that ends 38.6 m ahead: a stop 3 m short of it at 1.5 m/s^2.
+        let v = path_speed_limit(&straight, 140.0, 130.3, true, 0.0);
+        assert!((v - (2.0 * 1.5 * 35.6_f64).sqrt()).abs() < 0.1, "{v}");
+        // At the margin, zero.
+        let mut end = straight.clone();
+        trim_passed(&mut end, 103.0, 130.3, 180.0);
+        assert_eq!(path_speed_limit(&end, 103.0, 130.3, true, 0.0), 0.0);
+    }
+
+    /// The bug the committed path fixes, reproduced on the T-junction's geometry: the car
+    /// projected each frame onto the nearest lane (`Map::waypoint_at`), its target the
+    /// look-ahead point along that lane (onto the successor straightest to the car's yaw
+    /// at a lane's end). In the left turn the crossing road's northbound lane is as near as
+    /// the turn; the target jumps to it, the car steers away from the turn and runs wide
+    /// across the southbound lane.
+    #[test]
+    fn projecting_every_frame_runs_wide_of_the_left_turn() {
+        let approach = town01_t::approach();
+        let left = town01_t::left_turn();
+        let right = town01_t::right_turn();
+        let [south, north] = town01_t::crossing();
+        let lanes = [&approach, &left, &right, &south, &north];
+        // `successors[i]`: the lanes lane i runs into (the approach into either turn).
+        let successors: [&[usize]; 5] = [&[1, 2], &[], &[], &[], &[]];
+        let v = 3.23;
+        let old_lookahead = 6.0;
+        let track = drive(130.0, 130.3, 180.0, v, 300, |x, y, yaw| {
+            // The actor's origin, 1.4 m ahead of the rear axle (a model3's).
+            let (s, c) = yaw.to_radians().sin_cos();
+            let (ax, ay) = (x + 1.4 * c, y + 1.4 * s);
+            let (lane, idx) = lanes
+                .iter()
+                .enumerate()
+                .flat_map(|(l, pts)| pts.iter().enumerate().map(move |(i, p)| (l, i, p)))
+                .min_by(|a, b| {
+                    let da = (a.2.x - ax).hypot(a.2.y - ay);
+                    let db = (b.2.x - ax).hypot(b.2.y - ay);
+                    da.total_cmp(&db)
+                })
+                .map(|(l, i, _)| (l, i))
+                .unwrap();
+            let k = (old_lookahead / town01_t::STEP) as usize;
+            let target = if idx + k < lanes[lane].len() {
+                lanes[lane][idx + k]
+            } else if successors[lane].is_empty() {
+                *lanes[lane].last().unwrap()
+            } else {
+                let over = idx + k - lanes[lane].len();
+                let yaws: Vec<f32> = successors[lane]
+                    .iter()
+                    .map(|&n| lanes[n][over.min(lanes[n].len() - 1)].yaw_deg)
+                    .collect();
+                let n = successors[lane][straightest(&yaws, yaw as f32).unwrap()];
+                lanes[n][over.min(lanes[n].len() - 1)]
+            };
+            let (ahead, right) = body_offset(target.x - ax, target.y - ay, yaw);
+            pursuit_tire_angle(ahead + 1.4, right, MANUAL_WHEELBASE_M)
+        });
+        let worst = track
+            .iter()
+            .map(|&(x, y, _)| distance_to(&left, x, y))
+            .fold(0.0, f64::max);
+        assert!(
+            worst > 2.0,
+            "the old driver held the turn within {worst:.2} m"
+        );
+    }
+
+    /// The committed path through the same junction: the gentler (left) turn, held within
+    /// 1 m of its lane centre, and out of the junction heading down the southbound lane.
+    #[test]
+    fn the_committed_path_takes_the_left_turn() {
+        let mut lane = town01_t::approach();
+        lane.extend(town01_t::left_turn().into_iter().skip(1));
+        let mut path: std::collections::VecDeque<_> = lane.iter().copied().collect();
+        let hold = 3.23;
+        let mut slowest = f64::INFINITY;
+        let track = drive(130.0, 130.3, 180.0, hold, 400, |x, y, yaw| {
+            let (tire, v) = manual_step(&mut path, false, x, y, yaw, hold, hold);
+            slowest = slowest.min(v);
+            tire
+        });
+        let worst = track
+            .iter()
+            .map(|&(x, y, _)| distance_to(&lane, x, y))
+            .fold(0.0, f64::max);
+        assert!(worst < 1.0, "{worst:.2} m off the lane");
+        let &(x, y, yaw) = track.last().unwrap();
+        assert!(
+            (x - 88.4).abs() < 0.3 && y > 150.0,
+            "ended at ({x:.1}, {y:.1})"
+        );
+        assert!(
+            (heading_diff_deg(yaw as f32, 90.0)).abs() < 3.0,
+            "heading {yaw:.1}"
+        );
+        // 3.23 m/s is under the 13 m turn's 4.4 m/s: the hold is not lowered.
+        assert_eq!(slowest, hold);
+    }
+
+    /// The tighter right turn, entered at 7 m/s: the path's curve speed brings the car
+    /// down to sqrt(1.5 x 9) = 3.7 m/s and it holds the turn.
+    #[test]
+    fn the_committed_path_slows_for_a_tight_turn() {
+        let mut lane = town01_t::approach();
+        lane.extend(town01_t::right_turn().into_iter().skip(1));
+        let mut path: std::collections::VecDeque<_> = lane.iter().copied().collect();
+        let hold = 7.0;
+        let (mut x, mut y, mut yaw, mut v) = (140.0, 130.3, 180.0_f64, hold);
+        let dt = 0.05;
+        let mut worst = 0.0_f64;
+        for _ in 0..300 {
+            let (tire, target) = manual_step(&mut path, false, x, y, yaw, v, hold);
+            v = (v + hold_speed_accel(target, v) * dt).max(0.0);
+            let (s, c) = yaw.to_radians().sin_cos();
+            x += v * c * dt;
+            y += v * s * dt;
+            yaw += (v / MANUAL_WHEELBASE_M * tire.clamp(-0.6, 0.6).tan() * dt).to_degrees();
+            worst = worst.max(distance_to(&lane, x, y));
+            if x < 101.4 && y > 121.5 {
+                assert!(v < 4.0, "{v:.2} m/s at x {x:.1} in the turn");
+            }
+        }
+        assert!(worst < 1.0, "{worst:.2} m off the lane");
+        assert!(
+            (x - 92.4).abs() < 0.3 && y < 110.0,
+            "ended at ({x:.1}, {y:.1})"
+        );
+    }
+
+    /// Where the lane ends (no successor), the car stops short of it.
+    #[test]
+    fn the_scripted_driver_stops_where_the_lane_ends() {
+        let lane = town01_t::approach();
+        let mut path: std::collections::VecDeque<_> = lane.iter().copied().collect();
+        let (mut x, mut v) = (140.0, 3.23);
+        for _ in 0..1200 {
+            let (_, target) = manual_step(&mut path, true, x, 130.3, 180.0, v, 3.23);
+            v = (v + hold_speed_accel(target, v) * 0.05).max(0.0);
+            x -= v * 0.05;
+        }
+        assert!(v < HANDBRAKE_ENGAGE_SPEED_MPS, "{v:.2} m/s");
+        assert!(x > 101.4, "rolled past the end to x {x:.1}");
     }
 
     #[test]
