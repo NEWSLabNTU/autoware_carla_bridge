@@ -117,6 +117,56 @@ fn perception_off_keeps_everything_but_object_recognition() {
     assert!(!perception.contains("<group unless=\"$(var use_empty_dynamic_object_publisher)\">"));
 }
 
+const TRACKER: &str =
+    "config/perception/object_recognition/tracking/multi_object_tracker/multi_object_tracker_node.param.yaml";
+const UPSTREAM_TRACKER: &str = "/opt/autoware/1.5.0/share/autoware_launch/config/perception/object_recognition/tracking/multi_object_tracker/multi_object_tracker_node.param.yaml";
+
+/// Issue 027: two UNKNOWN trackers within 9 m are merged when their generalized IoU exceeds
+/// UNKNOWN's pruning threshold. Upstream's -0.3 in Autoware 1.5.0 admits pairs that do not
+/// overlap at all, so a pedestrian standing 1.4 m from a parked car was merged into it,
+/// frame after frame. Upstream itself later moved to 0.1 (autoware_launch #1885, #1907).
+#[test]
+fn tracker_merges_only_overlapping_unknowns() {
+    let doc = yaml(&read(TRACKER));
+    let giou = &doc["/**"]["ros__parameters"]["pruning_generalized_iou_thresholds"];
+    assert_eq!(
+        giou[0].as_f64(),
+        Some(0.1),
+        "{TRACKER}: pruning_generalized_iou_thresholds[UNKNOWN] must be 0.1 (issue 027)"
+    );
+}
+
+/// The copy differs from upstream's in UNKNOWN's GIoU threshold only
+/// (scripts/sync_perception_component.sh).
+#[test]
+fn tracker_copy_matches_upstream_but_for_unknown_giou() {
+    let Ok(upstream) = std::fs::read_to_string(UPSTREAM_TRACKER) else {
+        eprintln!("no upstream at {UPSTREAM_TRACKER}; skipped");
+        return;
+    };
+    let mut up = yaml(&upstream);
+    let mut ours = yaml(&read(TRACKER));
+    for doc in [&mut up, &mut ours] {
+        doc["/**"]["ros__parameters"]["pruning_generalized_iou_thresholds"][0] =
+            serde_yaml::Value::Null;
+    }
+    assert_eq!(
+        up, ours,
+        "{TRACKER} drifted from upstream; run scripts/sync_perception_component.sh"
+    );
+}
+
+/// acb's perception component hands the tracker acb's parameter file.
+#[test]
+fn perception_component_passes_acb_tracker_params() {
+    let component = read("launch/components/tier4_perception_component.launch.xml");
+    assert!(
+        component.contains(&format!("value=\"$(find-pkg-share acb_launch)/{TRACKER}\"")),
+        "acb's multi_object_tracker parameters are not passed"
+    );
+    assert!(!component.contains(&format!("$(find-pkg-share autoware_launch)/{TRACKER}")));
+}
+
 /// XML forbids `--` inside a comment, and play_launch's parser refuses the whole launch for
 /// it (minutes in, after `just ego-av` has started).
 #[test]

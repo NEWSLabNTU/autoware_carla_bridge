@@ -37,6 +37,7 @@ conventions.
 | [024](024-a-silent-stack-keeps-the-ego-driving.md) | A silent planner or controller leaves the ego driving | High | Fixed (2.5 s planning/control monitors; command watchdog) |
 | [025](025-the-ego-stack-drifts-with-age.md) | A long-lived ego stack steers differently from a fresh one | Medium | Fixed (MPC steering offset removal off on CARLA) |
 | [026](026-ground-truth-stack-never-engages.md) | With `perception:=false` the stack never leaves PLANNING | High | Fixed (`perception:=false` drops object recognition only) |
+| [027](027-a-standing-pedestrian-is-pruned-into-a-parked-car.md) | A pedestrian standing near a parked car flickers out of the tracked objects | High | Fixed (tracker's UNKNOWN pruning GIoU 0.1) |
 
 ## Severity
 
