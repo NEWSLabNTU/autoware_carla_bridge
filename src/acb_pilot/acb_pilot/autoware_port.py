@@ -57,9 +57,11 @@ RTC_STATES = {0: "WAITING_FOR_EXECUTION", 1: "RUNNING", 2: "ABORTING", 3: "SUCCE
 # How long one /api/localization/initialize may take. The call returns when NDT's align
 # server has searched its particles (200 by default), which is CPU-bound wall time: 9.4 s
 # measured on a loaded host (the safety island demo, unit C3), where 8 s timed out every
-# attempt and each retry queued another align behind the first. The
+# attempt and each retry queued another align behind the first. On Isaac Sim (csb roadmap
+# 043) a freshly started stack on a host at load 40-60 kept NDT aligning for well over 30 s,
+# and each expired call again queued a retry behind the first. 60 s outlasts that; the
 # scenario's initialize_duration (120 s) bounds the whole start anyway.
-INITIALIZE_TIMEOUT = 30.0
+INITIALIZE_TIMEOUT = 60.0
 
 CORE_SERVICES = ("initialize", "set_route_points", "clear_route", "change_to_autonomous",
                  "change_to_stop")
