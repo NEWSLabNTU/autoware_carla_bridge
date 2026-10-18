@@ -660,6 +660,18 @@ The `acb_launch` package provides CARLA-optimized configurations that override A
 - Excludes traffic light recognition topic monitoring (not available in CARLA)
 - Map/localization/perception topic timeouts relaxed to 30 s (sim time); the planning trajectory and both control commands stay at 2.5 s, since they are what turns a dead planner or controller into an MRM (docs/issues/024)
 
+**Control** (`config/control/trajectory_follower/lateral/mpc.param.yaml`, generated with
+`launch/components/tier4_control_component.launch.xml` by `scripts/sync_control_component.sh`):
+- MPC's `steering_offset.enable_auto_steering_offset_removal: false`. On CARLA the estimator
+  only learns collisions and transients and keeps them for the stack's lifetime, so an aged
+  ego stack steered differently from a fresh one (docs/issues/025). `carla_control:=false`
+  restores upstream's control. Run the script with `--check` after an Autoware upgrade.
+
+**Perception without object recognition** (docs/issues/026): `perception:=false` and
+`publish_ground_truth_objects:=true` each drop only detection/tracking/prediction (acb_launch's
+generated copy of `perception.launch.xml`, `object_recognition` arg); obstacle segmentation,
+the occupancy grid and traffic light fusion always run -- planning waits for them.
+
 **Launch File** (`launch/carla_simulator.launch.xml`):
 - Sets `use_sim_time` globally via `<set_parameter>`
 - Sets `system_run_mode=logging_simulation` to disable pose_initializer stop check

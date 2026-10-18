@@ -143,10 +143,13 @@ The topic is `/perception/object_recognition/objects`
 (`autoware_perception_msgs/PredictedObjects`), which is what the perception stack itself
 publishes and what `map_based_prediction` and planning consume. There is no separate
 injection interface in Autoware 1.5.0, so the publisher takes the perception stack's place
-rather than sitting alongside it. That makes it the caller's job to launch with
-`perception:=false` -- `carla_simulator.launch.xml` gates the whole stack on that argument,
-so with it off nothing else writes the topic. Running both would put two publishers on one
-topic, which this repository has already paid for twice.
+rather than sitting alongside it. `publish_ground_truth_objects:=true` therefore turns
+object recognition (detection, tracking, prediction) off in `carla_simulator.launch.xml`,
+and so does `perception:=false`; the rest of the perception component -- obstacle
+segmentation, the occupancy grid, traffic light fusion -- keeps running, because planning
+and the diagnostic graph need it (issue 026: until 2026-10-18 `perception:=false` dropped
+the whole component and the stack never left PLANNING). Running both would put two
+publishers on one topic, which this repository has already paid for twice.
 
 Each non-ego CARLA actor within `ground_truth_range_m` (default 100 m) becomes one
 `PredictedObject`: the actor id little-endian in the UUID, the bounding box as `shape`,

@@ -35,6 +35,8 @@ conventions.
 | [022](022-the-pose-estimate-outlives-the-run.md) | The pose estimate outlives the vehicle it belongs to | High | Fixed (`/initialpose` seed on attach) |
 | [023](023-every-vehicle-is-a-car.md) | Ground truth publishes every vehicle, bicycles included, as a car | Medium | Fixed (`base_type` attribute) |
 | [024](024-a-silent-stack-keeps-the-ego-driving.md) | A silent planner or controller leaves the ego driving | High | Fixed (2.5 s planning/control monitors; command watchdog) |
+| [025](025-the-ego-stack-drifts-with-age.md) | A long-lived ego stack steers differently from a fresh one | Medium | Fixed (MPC steering offset removal off on CARLA) |
+| [026](026-ground-truth-stack-never-engages.md) | With `perception:=false` the stack never leaves PLANNING | High | Fixed (`perception:=false` drops object recognition only) |
 
 ## Severity
 

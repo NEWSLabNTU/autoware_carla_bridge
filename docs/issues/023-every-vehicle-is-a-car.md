@@ -109,6 +109,5 @@ discards the hundred-odd `static.*` props first.
   The old prefix rule labels all five `CAR` (reproduced by the unit test, not re-run
   live). The scenario's barrel is a `static.*` prop and is
   not published, as before. The run itself ended in SSv2's `AutowareError` (Autoware
-  stayed in `PLANNING`, never `WAITING_FOR_ENGAGE`) — unrelated to the labels and not
-  investigated here; ground-truth mode with `perception:=false` is not exercised by any
-  regression suite.
+  stayed in `PLANNING`, never `WAITING_FOR_ENGAGE`) — unrelated to the labels; it was
+  the perception component's other outputs going missing with it, fixed in issue 026.
