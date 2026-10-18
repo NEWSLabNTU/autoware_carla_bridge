@@ -163,6 +163,16 @@
        differently from a fresh one. Everything else is upstream's control component. -->
   <arg name="carla_control" default="true" description="CARLA MPC params (no steering offset learning)"/>
   <arg name="carla_lat_controller_param_path" default="$(find-pkg-share acb_launch)/config/control/trajectory_follower/lateral/mpc.param.yaml"/>
+  <!-- Planning from acb's copy of upstream's component, which takes the common parameter
+       file as an argument so max_velocity can reach it; at the default that file is
+       upstream's own and the stack is upstream's. -->
+  <arg name="carla_planning" default="true" description="planning with a selectable max_velocity"/>
+  <!-- Autoware's max_vel (autoware_launch common.param.yaml), the cap on every planner and
+       on the external velocity limit a scenario's SpeedAction sets: 4.17 m/s (15 km/h) is
+       upstream's, and every suite runs at it. 11.11 (40 km/h) for carla-scenario-bridge's
+       demo tour (roadmap 033). Another value loads upstream's file with only max_vel
+       changed, written by acb_launch's planning_common_param. Needs carla_planning. -->
+  <arg name="max_velocity" default="4.17" description="Autoware max_vel, m/s; 4.17 (15 km/h) is upstream's"/>
   <!-- Autoware's deprecated (tier4) API, which autoware_launch turns on only for
        scenario_simulation. The vehicle agent needs /api/autoware/set/velocity_limit from it
        (served by autoware_iv_internal_api_adaptor) for a scenario's absolute SpeedAction:
@@ -225,7 +235,8 @@
            lidar_detection_model can be chosen (autoware.launch.xml does not
            forward it, hardwiring centerpoint) -->
       <arg name="launch_perception" value="$(eval &quot;'$(var perception)' == 'true' and '$(var carla_perception)' != 'true'&quot;)"/>
-      <arg name="launch_planning" value="$(var planning)"/>
+      <!-- CRITICAL - Disable planning here, launch separately below with max_velocity -->
+      <arg name="launch_planning" value="$(eval &quot;'$(var planning)' == 'true' and '$(var carla_planning)' != 'true'&quot;)"/>
       <!-- CRITICAL - Disable control here, launch separately below with CARLA MPC params -->
       <arg name="launch_control" value="$(eval &quot;'$(var control)' == 'true' and '$(var carla_control)' != 'true'&quot;)"/>
       <!-- Global parameters -->
@@ -346,6 +357,27 @@
       <arg name="vehicle_id" value="$(env VEHICLE_ID default)"/>
       <arg name="check_external_emergency_heartbeat" value="false"/>
     </include>
+  </group>
+
+  <!-- Include planning with max_velocity: acb_launch's copy of autoware_launch's component
+       (scripts/sync_planning_component.sh; run it with check after an Autoware upgrade),
+       identical except that the common parameter file is an argument. Arguments as
+       autoware.launch.xml passes them; the two it takes from its own defaults are written
+       out. The trajectory relay is the one autoware.launch.xml starts beside planning. -->
+  <group if="$(eval &quot;'$(var planning)' == 'true' and '$(var carla_planning)' == 'true'&quot;)">
+    <include file="$(find-pkg-share acb_launch)/launch/components/tier4_planning_component.launch.xml">
+      <arg name="module_preset" value="$(var planning_module_preset)"/>
+      <arg name="enable_all_modules_auto_mode" value="false"/>
+      <arg name="is_simulation" value="false"/>
+      <arg name="use_sim_time" value="$(var use_sim_time)"/>
+      <arg name="vehicle_model" value="$(var vehicle_model)"/>
+      <arg name="planning_common_param_path"
+           value="$(command '$(find-pkg-prefix acb_launch)/lib/acb_launch/planning_common_param $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/common.param.yaml $(var max_velocity)')"/>
+    </include>
+    <node pkg="topic_tools" exec="relay" name="trajectory_relay">
+      <param name="input_topic" value="/planning/trajectory"/>
+      <param name="output_topic" value="/planning/scenario_planning/trajectory"/>
+    </node>
   </group>
 
   <!-- Include localization with CARLA-optimized config

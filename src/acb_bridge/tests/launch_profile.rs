@@ -167,6 +167,136 @@ fn perception_component_passes_acb_tracker_params() {
     assert!(!component.contains(&format!("$(find-pkg-share autoware_launch)/{TRACKER}")));
 }
 
+const UPSTREAM_COMMON: &str = "/opt/autoware/1.5.0/share/autoware_launch/config/planning/scenario_planning/common/common.param.yaml";
+
+/// The value of `<arg name="{name}" default="..."/>` in a launch file.
+fn arg_default<'a>(launch: &'a str, name: &str) -> &'a str {
+    let at = launch
+        .find(&format!("<arg name=\"{name}\" default=\""))
+        .unwrap_or_else(|| panic!("no arg {name} with a default"));
+    let rest = &launch[at..];
+    let start = rest.find("default=\"").unwrap() + "default=\"".len();
+    let len = rest[start..].find('"').unwrap();
+    &rest[start..start + len]
+}
+
+/// Roadmap 033: `max_velocity` sets Autoware's max_vel. Its default is upstream's own value,
+/// so every stack that does not pass it plans exactly as upstream does (15 km/h).
+#[test]
+fn max_velocity_defaults_to_upstream_max_vel() {
+    let launch = read("launch/carla_simulator.launch.xml");
+    let default: f64 = arg_default(&launch, "max_velocity").parse().unwrap();
+    assert_eq!(default, 4.17);
+    let Ok(upstream) = std::fs::read_to_string(UPSTREAM_COMMON) else {
+        eprintln!("no upstream at {UPSTREAM_COMMON}; skipped");
+        return;
+    };
+    let up = yaml(&upstream);
+    assert_eq!(
+        up["/**"]["ros__parameters"]["max_vel"].as_f64(),
+        Some(default),
+        "max_velocity's default must stay upstream's max_vel"
+    );
+}
+
+/// carla_simulator.launch.xml launches planning from acb's component copy with the common
+/// parameter file planning_common_param picks for max_velocity, keeps autoware.launch.xml
+/// from launching a second planner, and starts the trajectory relay autoware.launch.xml
+/// starts beside planning.
+#[test]
+fn carla_profile_launches_planning_with_max_velocity() {
+    let launch = read("launch/carla_simulator.launch.xml");
+    assert!(
+        launch.contains(
+            "<arg name=\"launch_planning\" value=\"$(eval &quot;'$(var planning)' == 'true' and '$(var carla_planning)' != 'true'&quot;)\"/>"
+        ),
+        "autoware.launch.xml must not launch planning when carla_planning is on"
+    );
+    assert!(launch.contains(
+        "<group if=\"$(eval &quot;'$(var planning)' == 'true' and '$(var carla_planning)' == 'true'&quot;)\">"
+    ));
+    assert!(launch.contains(
+        "$(find-pkg-share acb_launch)/launch/components/tier4_planning_component.launch.xml"
+    ));
+    assert!(
+        launch.contains(
+            "value=\"$(command '$(find-pkg-prefix acb_launch)/lib/acb_launch/planning_common_param $(find-pkg-share autoware_launch)/config/planning/scenario_planning/common/common.param.yaml $(var max_velocity)')\""
+        ),
+        "the planning common parameter file must come from planning_common_param and max_velocity"
+    );
+    assert!(launch.contains("<node pkg=\"topic_tools\" exec=\"relay\" name=\"trajectory_relay\">"));
+    let component = read("launch/components/tier4_planning_component.launch.xml");
+    assert!(component.contains("<arg name=\"planning_common_param_path\" default="));
+    assert!(component
+        .contains("<arg name=\"common_param_path\" value=\"$(var planning_common_param_path)\"/>"));
+}
+
+/// Runs acb_launch's planning_common_param on `upstream` with `max_velocity`, its cache in
+/// `cache`; returns (exit code, stdout, stderr).
+fn planning_common_param(
+    upstream: &str,
+    max_velocity: &str,
+    cache: &std::path::Path,
+) -> (i32, String, String) {
+    let out = std::process::Command::new("python3")
+        .arg(acb_launch().join("scripts/planning_common_param"))
+        .args([upstream, max_velocity])
+        .env("XDG_CACHE_HOME", cache)
+        .output()
+        .expect("python3 runs");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8(out.stdout).unwrap(),
+        String::from_utf8(out.stderr).unwrap(),
+    )
+}
+
+/// At upstream's value the script hands back upstream's path (the default stack loads
+/// upstream's file); at another it writes upstream's file with max_vel changed and nothing
+/// else; a bad value fails the launch. Stdout is the bare path and stderr stays empty, as a
+/// strict $(command) substitution needs.
+#[test]
+fn planning_common_param_changes_max_vel_only() {
+    let Ok(upstream) = std::fs::read_to_string(UPSTREAM_COMMON) else {
+        eprintln!("no upstream at {UPSTREAM_COMMON}; skipped");
+        return;
+    };
+    let cache =
+        std::env::temp_dir().join(format!("acb_planning_common_param_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&cache);
+
+    let (code, out, err) = planning_common_param(UPSTREAM_COMMON, "4.17", &cache);
+    assert_eq!((code, out.as_str(), err.as_str()), (0, UPSTREAM_COMMON, ""));
+    assert!(!cache.exists(), "the default must not write a file");
+
+    for (arg, want) in [("11.11", 11.11), ("20", 20.0)] {
+        let (code, out, err) = planning_common_param(UPSTREAM_COMMON, arg, &cache);
+        assert_eq!((code, err.as_str()), (0, ""), "{arg}");
+        assert!(
+            !out.ends_with('\n') && out.starts_with(cache.to_str().unwrap()),
+            "{out}"
+        );
+        let mut ours = yaml(&std::fs::read_to_string(&out).unwrap());
+        // A float, also for a whole number: the planners declare max_vel a double.
+        assert_eq!(
+            ours["/**"]["ros__parameters"]["max_vel"].as_f64(),
+            Some(want),
+            "{arg}"
+        );
+        let mut up = yaml(&upstream);
+        for doc in [&mut up, &mut ours] {
+            doc["/**"]["ros__parameters"]["max_vel"] = serde_yaml::Value::Null;
+        }
+        assert_eq!(up, ours, "only max_vel may differ from upstream ({arg})");
+    }
+
+    for bad in ["abc", "0", "-1", "nan", "inf"] {
+        let (code, out, _) = planning_common_param(UPSTREAM_COMMON, bad, &cache);
+        assert_eq!((code, out.as_str()), (2, ""), "{bad}");
+    }
+    let _ = std::fs::remove_dir_all(&cache);
+}
+
 /// XML forbids `--` inside a comment, and play_launch's parser refuses the whole launch for
 /// it (minutes in, after `just ego-av` has started).
 #[test]
@@ -175,6 +305,7 @@ fn launch_comments_have_no_double_hyphen() {
         "launch/carla_simulator.launch.xml",
         "launch/components/tier4_control_component.launch.xml",
         "launch/components/tier4_perception_component.launch.xml",
+        "launch/components/tier4_planning_component.launch.xml",
         "launch/components/perception.launch.xml",
     ] {
         let text = read(rel);
