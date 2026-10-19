@@ -1,16 +1,28 @@
 #!/usr/bin/env bash
-# Start CARLA simulator via systemd
+# Start CARLA simulator via systemd.
+#
+#   carla_start.sh [PORT] [map:=Town01] [quality:=epic|low] [render:=offscreen|window]
+#                  [extra_args:="..."]
+#
+# The name:=value arguments go to third_party/carla/run.sh unchanged (scripts/carla_args.bash
+# says what each one does); they are checked here first, so a bad one fails before a unit
+# exists. PORT is the host's (the justfiles pass CARLA_PORT), and so are CARLA_DIR and
+# DISPLAY, which the unit inherits.
 set -e
 
-PORT="${1:-2000}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Launch knobs, forwarded to the unit so `just carla-start` and a bare run.sh agree.
-# See third_party/carla/run.sh for what each one does.
-CARLA_MAP="${CARLA_MAP-Town01}"
-CARLA_QUALITY="${CARLA_QUALITY:-Low}"
-CARLA_RENDER="${CARLA_RENDER:-offscreen}"
+PORT=2000
+if [ $# -gt 0 ] && [[ "$1" != *:=* ]]; then
+    PORT="$1"
+    shift
+fi
+
+source "$SCRIPT_DIR/carla_args.bash"
+carla_reject_env
+CARLA_PORT="$PORT" carla_parse_args "$@"
+PORT="$CARLA_ARG_PORT"
 
 if [ -z "$DISPLAY" ]; then
     echo "Error: DISPLAY environment variable is not set"
@@ -44,17 +56,13 @@ sleep 0.5
 #
 # The cost is disk: the server runs at about 2.4 GB resident, so expect a report of that order.
 # apport keeps one report per executable until it is cleared, so this does not grow per crash.
-echo "Starting CARLA on port $PORT (map=${CARLA_MAP:-package default}, quality=$CARLA_QUALITY, render=$CARLA_RENDER, DISPLAY=${DISPLAY:-none})..."
+echo "Starting CARLA on port $PORT (map=${CARLA_ARG_MAP:-package default}, quality=$CARLA_ARG_QUALITY, render=$CARLA_ARG_RENDER, DISPLAY=${DISPLAY:-none})..."
 
 systemd-run --user \
     --unit="$UNIT_NAME" \
     --setenv=DISPLAY="$DISPLAY" \
     --setenv=CARLA_PORT="$PORT" \
-    --setenv=CARLA_MAP="$CARLA_MAP" \
-    --setenv=CARLA_QUALITY="$CARLA_QUALITY" \
-    --setenv=CARLA_RENDER="$CARLA_RENDER" \
     ${CARLA_DIR:+--setenv=CARLA_DIR="$CARLA_DIR"} \
-    ${CARLA_EXTRA_ARGS:+--setenv=CARLA_EXTRA_ARGS="$CARLA_EXTRA_ARGS"} \
     -p Restart=on-failure \
     -p RestartSec=10 \
     -p StartLimitBurst=5 \
@@ -62,7 +70,7 @@ systemd-run --user \
     -p TimeoutStartSec=300 \
     -p LimitCORE=infinity \
     -p ExecStartPost="/usr/bin/env bash $SCRIPT_DIR/carla_wait_ready.sh" \
-    bash "$RUN_SCRIPT"
+    bash "$RUN_SCRIPT" port:="$PORT" "$@"
 
 echo "CARLA started on port $PORT"
 echo "Use 'just carla-status' to check status"

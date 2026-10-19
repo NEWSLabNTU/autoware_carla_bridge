@@ -3,6 +3,9 @@
 ## CARLA Service
 
 - **`carla_start.sh`** - Start CARLA simulator as a systemd user service
+  (`carla_start.sh [PORT] [map:=] [quality:=epic|low] [render:=] [extra_args:=]`)
+- **`carla_args.bash`** - The `name:=value` CARLA launch arguments `carla_start.sh` and
+  `third_party/carla/run.sh` share, and the refusal of the env variables they replaced
 - **`carla_stop.sh`** - Stop CARLA simulator service
 
 ## Demo

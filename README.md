@@ -167,8 +167,8 @@ just build
 just carla-start
 just sim
 
-# With autonomous driving
-just sim auto_drive=true
+# With autonomous driving, on another town
+just sim auto_drive:=true map:=Town02
 
 # Stop CARLA
 just carla-stop
@@ -182,6 +182,20 @@ just autoware    # Autoware + bridge + monitor (terminal 1)
 just scenario    # scenario script (terminal 2)
 just pilot       # autonomous driving pilot (terminal 3, optional)
 ```
+
+Project settings are `name:=value` arguments; host settings (`CARLA_PORT`, `CARLA_DIR`,
+`DISPLAY`, `AUTOWARE_DATA_PATH`) come from the environment or `.env`.
+
+```bash
+just carla-start [map:=Town01] [quality:=epic|low] [render:=offscreen|window] [extra_args:="..."]
+just autoware map:=Town02
+```
+
+`quality:=low` holds less memory but cannot change towns: CARLA 0.9.16 at Low segfaults on
+`load_world` to another town and on `reload_world()` (carla-simulator/carla#4940).
+Use it only when every run stays on the town CARLA booted on (`map:=`). The old
+`MAP_NAME`, `CARLA_MAP`, `CARLA_QUALITY`, `CARLA_RENDER` and `CARLA_EXTRA_ARGS` variables
+are refused.
 
 ### Other Recipes
 

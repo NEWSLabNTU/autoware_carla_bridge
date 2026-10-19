@@ -1,9 +1,14 @@
 # Autoware-CARLA Bridge
 set dotenv-load
 
+# Host settings come from the environment (or .env): ports, install and data paths.
+# Project settings -- which town, CARLA's quality and render mode -- are recipe arguments,
+# name:=value as for a launch file (`just carla-start quality:=low`, `just autoware
+# map:=Town02`); the old MAP_NAME / CARLA_MAP / CARLA_QUALITY / CARLA_RENDER /
+# CARLA_EXTRA_ARGS variables are refused.
 carla_port := env_var_or_default('CARLA_PORT', '2000')
-map_name := env_var_or_default('MAP_NAME', 'Town01')
-# Autoware's writable model directory (populate once: ros2 run acb_launch setup_autoware_data)
+# Autoware's writable model directory (populate once: ros2 run acb_launch setup_autoware_data).
+# A host path: where this machine keeps the models, the same for every run.
 data_path := env_var_or_default('AUTOWARE_DATA_PATH', env_var('HOME') + '/autoware_data')
 project := justfile_directory()
 # Where Autoware's own setup.bash lives. The NEWSLabNTU 1.5.0 Debian installs under
@@ -159,16 +164,37 @@ test:
 # Run CI checks: build, check (format + clippy), and tests
 ci: build check test
 
-# Run CARLA simulator (foreground)
-run-carla:
+# quality:=low saves memory but cannot change towns (load_world to another town segfaults;
+# scripts/carla_args.bash).
+# Run CARLA in the foreground: [map:=Town01] [quality:=epic|low] [render:=offscreen|window] [extra_args:=]
+[positional-arguments]
+run-carla *args:
     #!/usr/bin/env bash
     set -e
     export CARLA_PORT={{carla_port}}
-    exec "{{project}}/third_party/carla/run.sh"
+    exec "{{project}}/third_party/carla/run.sh" "$@"
 
-# Start CARLA simulator as a background service
-carla-start:
-    ./scripts/carla_start.sh {{carla_port}}
+# Start CARLA simulator as a background service; arguments as for run-carla
+[positional-arguments]
+carla-start *args:
+    ./scripts/carla_start.sh {{carla_port}} "$@"
+
+# map:=<town> from a recipe's arguments (default Town01); refuses MAP_NAME and anything else.
+[positional-arguments]
+_map *args:
+    #!/usr/bin/env bash
+    if [ -n "${MAP_NAME+x}" ]; then
+        echo "[just] MAP_NAME is no longer read; pass map:=<town> instead (and unset it)" >&2
+        exit 2
+    fi
+    map=Town01
+    for a in "$@"; do
+        case "$a" in
+            map:=?*) map="${a#*:=}" ;;
+            *) echo "[just] unknown argument '$a' (map:=<town>)" >&2; exit 2 ;;
+        esac
+    done
+    echo "$map"
 
 # Stop CARLA simulator service
 carla-stop:
@@ -182,32 +208,44 @@ carla-status:
 carla-logs *args:
     journalctl --user -u "carla-run-{{carla_port}}" {{args}}
 
-# Run Autoware + bridge + scenario + monitor (CARLA must be running)
-# Use auto_drive=true to also run the autonomous driving pilot
-sim auto_drive="false":
+# CARLA must be running.
+# Run Autoware + bridge + scenario + monitor; auto_drive:=true adds the pilot; map:=<town>
+[positional-arguments]
+sim *args:
     #!/usr/bin/env bash
     set -e
+    auto_drive=false; rest=()
+    for a in "$@"; do
+        case "$a" in
+            auto_drive:=*) auto_drive="${a#*:=}" ;;
+            *) rest+=("$a") ;;
+        esac
+    done
+    map_name=$(just _map "${rest[@]}")
     source "{{project}}/install/setup.bash"
-    if [ "{{auto_drive}}" = "true" ]; then
-        POSES_FILE="$(ros2 pkg prefix acb_pilot)/share/acb_pilot/config/poses/{{map_name}}.yaml"
+    if [ "$auto_drive" = "true" ]; then
+        POSES_FILE="$(ros2 pkg prefix acb_pilot)/share/acb_pilot/config/poses/$map_name.yaml"
         ros2 run acb_pilot auto_drive --ros-args -p poses_file:="$POSES_FILE" &
     fi
     exec play_launch launch --web-addr 0.0.0.0:8080 \
         -c "{{project}}/config/play_launch.yaml" \
         acb_demo_launch single_vehicle_autoware.launch.xml \
-        map_path:="{{project}}/data/carla-autoware-bridge/{{map_name}}" \
+        map_path:="{{project}}/data/carla-autoware-bridge/$map_name" \
         carla_port:={{carla_port}} \
-        map_name:={{map_name}} \
+        map_name:="$map_name" \
         data_path:="{{data_path}}"
 
-# Run Autoware + bridge + monitor (CARLA must be running, scenario started separately)
-autoware:
+# CARLA must be running; the scenario is started separately.
+# Run Autoware + bridge + monitor; map:=<town> (default Town01)
+[positional-arguments]
+autoware *args:
     #!/usr/bin/env bash
     set -e
+    map_name=$(just _map "$@")
     source "{{project}}/install/setup.bash"
     exec play_launch launch --web-addr 0.0.0.0:8080 \
         acb_launch carla_simulator.launch.xml \
-        map_path:="{{project}}/data/carla-autoware-bridge/{{map_name}}" \
+        map_path:="{{project}}/data/carla-autoware-bridge/$map_name" \
         data_path:="{{data_path}}"
 
 # Run CARLA-Autoware bridge only
@@ -219,15 +257,17 @@ bridge:
         acb_bridge acb_bridge.launch.xml \
         carla_port:={{carla_port}}
 
-# Run scenario script only (loads map, spawns hero vehicle, ticks CARLA)
-scenario:
+# Run scenario script only (loads map, spawns hero vehicle, ticks CARLA); map:=<town>
+[positional-arguments]
+scenario *args:
     #!/usr/bin/env bash
     set -e
+    map_name=$(just _map "$@")
     source "{{project}}/install/setup.bash"
     exec play_launch launch --web-addr 0.0.0.0:8080 \
         acb_scenario single_vehicle_scenario.launch.xml \
         carla_port:={{carla_port}} \
-        map_name:={{map_name}}
+        map_name:="$map_name"
 
 # Run vehicle monitor GUI
 monitor:

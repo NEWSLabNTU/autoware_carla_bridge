@@ -100,6 +100,9 @@ No manual staging or configuration required - builds like any ROS 2 package.
 **CARLA Management** (systemd service):
 ```bash
 just carla-start    # Start CARLA as background service
+                    #   [map:=Town01] [quality:=epic|low] [render:=offscreen|window] [extra_args:=]
+                    #   quality:=low only if no run changes towns (Low segfaults on
+                    #   load_world/reload_world, carla-simulator/carla#4940)
 just carla-stop     # Stop CARLA service
 just carla-status   # Check CARLA service status
 just carla-logs     # View CARLA service logs
