@@ -2,7 +2,7 @@
 """Confirm what CARLA's IMU compass is the heading OF, and how to find the sensor actor.
 
 Spawns a vehicle and attaches an IMU with a deliberate yaw offset, the way acb_bridge
-mounts `carla/imu_link`. Then checks:
+mounts `imu_link`. Then checks:
 
   1. Whether `world.get_actors().filter("sensor.other.imu")` + `actor.parent` finds it
      (the lookup check_vehicle_interface.py's find_imu was using, which returned nothing).
@@ -15,7 +15,7 @@ import sys
 import carla
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 2000
-# The mount acb uses for carla/imu_link, read live off TF: RPY [-3.141, -0.015, 3.105].
+# The mount acb uses for imu_link, read live off TF: RPY [-3.141, -0.015, 3.105].
 MOUNT_YAW_ROS = 3.105
 MOUNT_ROLL_ROS = -3.141
 

@@ -4,6 +4,9 @@
 **Component**: `src/acb_bridge/src/bridge/sensor_bridge.rs`, `publish_imu`
 **Status**: Fixed
 
+The IMU frame was `carla/imu_link` when this was written; it is `imu_link` since
+2026-10-19 (topic `/sensing/imu/imu_link/imu_raw`). The commands below use the new name.
+
 ## What is wrong
 
 The IMU's orientation quaternion was derived from CARLA's compass reading like this:
@@ -78,7 +81,7 @@ directly against `base_link` yaw is comparing two different frames.
 
 The offset is not π and not a sign error. It is the mount, to four decimal places.
 
-**1. The live TF.** `ros2 run tf2_ros tf2_echo base_link carla/imu_link` on the running
+**1. The live TF.** `ros2 run tf2_ros tf2_echo base_link imu_link` on the running
 stack:
 
 ```

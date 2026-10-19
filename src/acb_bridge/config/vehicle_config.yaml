@@ -68,14 +68,14 @@ sensors:
       fov: "74.5"
       sensor_tick: "0.1"
 
-  # IMU sensor (TF frame: carla/imu_link)
-  carla/imu_link:
+  # IMU sensor (TF frame: imu_link)
+  imu_link:
     blueprint: "sensor.other.imu"
     parameters:
       sensor_tick: "0.01"
 
-  # GNSS sensor (TF frame: carla/gnss_link)
-  carla/gnss_link:
+  # GNSS sensor (TF frame: gnss_link)
+  gnss_link:
     blueprint: "sensor.other.gnss"
     parameters:
       sensor_tick: "0.1"

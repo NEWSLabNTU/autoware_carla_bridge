@@ -61,7 +61,7 @@ class Checker(Node):
         sub("/vehicle/status/hazard_lights_status", HazardLightsReport, "hazard")
         sub("/vehicle/status/actuation_status", ActuationStatusStamped, "actuation")
         sub("/control/command/gear_cmd", GearCommand, "gear_cmd")
-        sub("/sensing/imu/carla/imu_link/imu_raw", Imu, "imu", sensor_qos)
+        sub("/sensing/imu/imu_link/imu_raw", Imu, "imu", sensor_qos)
 
         self.client = carla.Client("localhost", port)
         self.client.set_timeout(20.0)
@@ -145,7 +145,7 @@ def main():
             if "imu" in node.latest:
                 row["imu_yaw"] = quat_yaw(node.latest["imu"].orientation)
                 row["yaw_truth"] = truth_ros_yaw
-                # The IMU is mounted with a yaw offset -- base_link -> carla/imu_link is
+                # The IMU is mounted with a yaw offset -- base_link -> imu_link is
                 # RPY [-3.141, -0.015, 3.105] in this sensor kit -- so CARLA's compass,
                 # and therefore the published orientation, is the SENSOR's heading, not
                 # the vehicle's. Comparing against the vehicle shows a ~3.105 rad error
