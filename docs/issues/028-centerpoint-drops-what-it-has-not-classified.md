@@ -3,8 +3,8 @@
 **Severity**: High
 **Component**: Autoware 1.5's perception launch (`use_multi_channel_tracker_merger`),
 `src/acb_launch/launch/carla_simulator.launch.xml`
-**Status**: Open — `use_multi_channel_tracker_merger:=false` added (default unchanged);
-being verified by carla-scenario-bridge roadmap 033 step 4d
+**Status**: Fixed by option — `use_multi_channel_tracker_merger:=false` (default unchanged);
+verified by carla-scenario-bridge roadmap 033 step 4d (2026-10-21)
 
 ## What happened
 
@@ -57,3 +57,13 @@ CenterPoint's raw objects, not the validator's output (upstream's lidar_merger d
 
 Verified when the incidents that failed pass on a stack with the argument false, and the
 cyclist still reaches `blind_spot` as BICYCLE (033 step 4d, option b).
+
+## Verified (2026-10-21)
+
+Same stack with `use_multi_channel_tracker_merger:=false`: the broken-down car tracked (UNKNOWN)
+from 66-79 m, the pedestrian from 32-35 m; the cyclist still BICYCLE (the merger keeps
+CenterPoint's class where the two overlap) and `blind_spot` yields. The six demo incidents
+5/5 each at 40 km/h; route C with 17 parked cars at the kerb unchanged (no stop, same time);
+UC-AEB-001 7/9 (2/9 with the multi-channel tracker; the two failures are the 15 m variants at
+30 and 35 km/h).
+

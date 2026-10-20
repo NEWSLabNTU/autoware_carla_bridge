@@ -38,7 +38,7 @@ conventions.
 | [025](025-the-ego-stack-drifts-with-age.md) | A long-lived ego stack steers differently from a fresh one | Medium | Fixed (MPC steering offset removal off on CARLA) |
 | [026](026-ground-truth-stack-never-engages.md) | With `perception:=false` the stack never leaves PLANNING | High | Fixed (`perception:=false` drops object recognition only) |
 | [027](027-a-standing-pedestrian-is-pruned-into-a-parked-car.md) | A pedestrian standing near a parked car flickers out of the tracked objects | High | Fixed (tracker's UNKNOWN pruning GIoU 0.1) |
-| [028](028-centerpoint-drops-what-it-has-not-classified.md) | With CenterPoint, an object it has not classified never reaches planning | High | Open (`use_multi_channel_tracker_merger:=false`, default unchanged) |
+| [028](028-centerpoint-drops-what-it-has-not-classified.md) | With CenterPoint, an object it has not classified never reaches planning | High | Fixed by option (`use_multi_channel_tracker_merger:=false`; default unchanged) |
 
 ## Severity
 
