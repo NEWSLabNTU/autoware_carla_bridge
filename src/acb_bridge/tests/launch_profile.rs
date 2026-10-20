@@ -315,3 +315,26 @@ fn launch_comments_have_no_double_hyphen() {
         }
     }
 }
+
+/// Issue 028: `use_multi_channel_tracker_merger` reaches the perception component, and its
+/// default stays Autoware 1.5's (true), so every suite keeps the multi-channel tracker; false
+/// switches to the lidar merger (DNN + clustering) for CenterPoint runs.
+#[test]
+fn tracker_merger_choice_reaches_perception_with_upstream_default() {
+    let launch = read("launch/carla_simulator.launch.xml");
+    assert!(
+        launch.contains("<arg name=\"use_multi_channel_tracker_merger\" default=\"true\""),
+        "use_multi_channel_tracker_merger must default to true (Autoware 1.5's own)"
+    );
+    assert!(
+        launch.contains(
+            "<arg name=\"use_multi_channel_tracker_merger\" value=\"$(var use_multi_channel_tracker_merger)\"/>"
+        ),
+        "use_multi_channel_tracker_merger is not passed to the perception component"
+    );
+    let component = read("launch/components/tier4_perception_component.launch.xml");
+    assert!(component.contains("<arg name=\"use_multi_channel_tracker_merger\" default="));
+    assert!(component.contains(
+        "<arg name=\"use_multi_channel_tracker_merger\" value=\"$(var use_multi_channel_tracker_merger)\"/>"
+    ));
+}

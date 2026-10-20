@@ -113,6 +113,14 @@
   <arg name="lidar_detection_model" default="clustering"
        description="lidar object detection model: clustering (CPU, rule-based; default) or
                     centerpoint (TensorRT)"/>
+  <!-- Issue 028. true (Autoware 1.5's default): the multi-channel tracker takes the DNN's
+       objects and detection_by_tracker only, so with centerpoint an object CenterPoint has
+       not classified (clustering's UNKNOWN) never reaches planning. false: Autoware's lidar
+       merger (DNN + clustering, then + detection_by_tracker, lanelet filter) feeds a
+       one-channel tracker, as before the multi-channel tracker existed. -->
+  <arg name="use_multi_channel_tracker_merger" default="true"
+       description="true: multi-channel tracker (DNN + detection_by_tracker); false: the lidar
+                    merger (DNN + clustering + detection_by_tracker) into one channel"/>
   <arg name="occupancy_grid_map_method" default="pointcloud_based"
        description="'laserscan_based' avoids the CUDA occupancy grid node"/>
   <!-- Vehicle - bridge + monitor launched via acb_vehicle_launch/vehicle_interface.launch.xml -->
@@ -320,6 +328,7 @@
       <arg name="vehicle_model" value="$(var vehicle_model)"/>
       <arg name="lidar_detection_model" value="$(var lidar_detection_model)"/>
       <arg name="occupancy_grid_map_method" value="$(var occupancy_grid_map_method)"/>
+      <arg name="use_multi_channel_tracker_merger" value="$(var use_multi_channel_tracker_merger)"/>
       <!-- The component reads $(var perception_mode) without declaring it; when
            autoware.launch.xml includes it the parent's declaration leaks in. -->
       <arg name="perception_mode" value="lidar"/>
