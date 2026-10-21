@@ -155,6 +155,7 @@
   <arg name="relay" default="" description="tcp://host:port of the scenario's agent relay; empty = no relay"/>
   <arg name="entity" default="ego" description="the scenario entity this vehicle is"/>
   <arg name="goal_poses_file" default="" description="local goal(s) when there is no relay; empty = none"/>
+  <arg name="agent_config" default="" description="YAML/JSON of the agent's settings (csb_agent AutowareAgent DEFAULTS: converge_timeout, ready_timeout, scan_wait, ...); empty = defaults"/>
   <!-- A launch file of the user's own to start with this vehicle side, in its ROS domain and
        environment: a V2X or cooperative-perception node, a recorder. It receives
        vehicle_name, entity, map_path and use_sim_time; it may ignore them. Nothing in acb
@@ -444,10 +445,12 @@
         if="$(eval '&quot;$(var relay)&quot; != &quot;&quot;')">
     <param name="relay" value="$(var relay)"/>
     <param name="entity" value="$(var entity)"/>
+    <param name="agent_config" value="$(var agent_config)"/>
   </node>
   <node pkg="acb_pilot" exec="agent" name="acb_agent" output="screen"
         if="$(eval '&quot;$(var relay)&quot; == &quot;&quot; and &quot;$(var goal_poses_file)&quot; != &quot;&quot;')">
     <param name="goal_poses_file" value="$(var goal_poses_file)"/>
+    <param name="agent_config" value="$(var agent_config)"/>
   </node>
 
   <group if="$(eval '&quot;$(var extra_launch)&quot; != &quot;&quot;')">
