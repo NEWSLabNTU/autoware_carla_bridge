@@ -1,5 +1,5 @@
 # Brake response of vehicle.tesla.model3 on CARLA 0.9.16. Columns up to 6 m/s measured by scripts/probe_brake_lowspeed.py (0 m/s holds the 1 m/s value), the rest by scripts/probe_longitudinal.py
-# CARLA tick 0.050 s, physics substeps of 0.0031 s (max 16) -- the timing carla_scenario_bridge uses
+# CARLA tick 0.050 s, physics substeps of 0.0031 s (max 16) -- the timing carla_world uses
 # Rows: pedal position. Columns: vehicle speed in m/s.
 # Cells: measured longitudinal acceleration in m/s^2.
 default,0.0,1.0,2.0,3.0,4.0,5.0,6.0,8.0,11.0,14.0,17.0,20.0,24.0

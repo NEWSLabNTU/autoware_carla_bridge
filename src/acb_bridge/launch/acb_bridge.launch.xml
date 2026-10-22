@@ -13,7 +13,7 @@
 
   <!-- Clock ownership. Set false in the scenario ego's domain, where SSv2 publishes
        /clock; two publishers make localization log "Detected jump back in time". -->
-  <!-- Where carla_scenario_bridge announces upcoming despawns, so this bridge can stop
+  <!-- Where carla_world announces upcoming despawns, so this bridge can stop
        its sensors before they are destroyed underneath it. Must match that bridge's
        sensor_release.notify_endpoint / ack_endpoint. Empty notify endpoint disables it.
        See docs/issues/015. -->
@@ -81,13 +81,13 @@
   <arg name="control_cmd_timeout_s" default="1.0"
        description="Brake to a stop when control_cmd is older than this (s, sim time); 0 disables"/>
   <!-- Signal state from CARLA's lights, on the arbiter's V2X input. The file is the table
-       carla_scenario_bridge writes beside the Lanelet2 map at every Initialize; it is re-read
+       carla_world writes beside the Lanelet2 map at every Initialize; it is re-read
        when it changes. Empty turns the publisher off. Only one source may feed that topic:
        with this on, SSv2's publish_conventional_traffic_signals must be off. -->
   <arg name="traffic_light_map_path" default=""
-       description="the map dir's carla/traffic_lights.yaml (carla_scenario_bridge --generate-signal-table) to publish signals from; empty disables"/>
+       description="the map dir's carla/traffic_lights.yaml (carla_world --generate-signal-table) to publish signals from; empty disables"/>
   <!-- Where CARLA's world origin sits in the map frame (x, y, z in metres): the offset the
-       map's OpenDRIVE was converted with. carla_scenario_bridge reads the same file. Empty,
+       map's OpenDRIVE was converted with. carla_world reads the same file. Empty,
        or no file, means zero: the map is in CARLA's frame, as every TUM town is. -->
   <arg name="map_origin_path" default=""
        description="the map dir's carla/map_origin.yaml; empty or absent = origin zero"/>

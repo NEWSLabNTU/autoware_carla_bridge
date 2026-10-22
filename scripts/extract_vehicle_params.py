@@ -23,7 +23,7 @@ Usage:
 
 Settling a freshly spawned car needs the simulation to advance. The obvious way is to turn
 on synchronous mode and tick, and the first version of this script did exactly that -- on
-whatever server it found. That is unsafe here: `carla_scenario_bridge` is the only process
+whatever server it found. That is unsafe here: `carla_world` is the only process
 allowed to tick (invariant 1 of docs/design/multi-instance-architecture.md), and a second
 ticker corrupts a running scenario. Restoring the settings afterwards makes it worse, since
 it would stamp this script's idea of the world onto a run already in progress.
@@ -235,7 +235,7 @@ def main():
     if world.get_settings().synchronous_mode:
         print(
             "CARLA is in synchronous mode, so another process owns the tick -- almost\n"
-            "certainly carla_scenario_bridge, mid-scenario. Spawning and settling a car\n"
+            "certainly carla_world, mid-scenario. Spawning and settling a car\n"
             "here would interfere with that run. Stop the bridge, or wait for the run to\n"
             "finish, and try again.",
             file=sys.stderr,

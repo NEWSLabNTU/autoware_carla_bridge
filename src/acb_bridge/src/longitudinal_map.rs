@@ -26,7 +26,7 @@
 //! Regenerate the tables for a different vehicle with `scripts/probe_longitudinal.py` and
 //! `scripts/probe_brake_lowspeed.py`, then `scripts/build_longitudinal_maps.py`; their
 //! headers document how the tables were measured and what earlier methods got wrong. Measure
-//! under the physics timing carla_scenario_bridge runs (the probes' default): the physics
+//! under the physics timing carla_world runs (the probes' default): the physics
 //! substep changes the response by up to 0.6 m/s^2.
 
 use std::{fs, path::Path};

@@ -1,9 +1,11 @@
 """acb_agent: the Autoware vehicle agent, on carla-scenario-bridge's agent SDK.
 
-The agent itself is `csb_agent.adapters.autoware.AutowareAgent` (carla-scenario-bridge
-roadmap 030): Autoware's ADAPI as a `csb_agent.Agent`, simulator-neutral. This node runs it
-with acb's ROS parameters, so the launch file is unchanged. It needs `csb_agent` installed
-(carla-scenario-bridge's workspace, its release tarball or the `csb-agent` wheel).
+The agent itself is `swb_agent.adapters.autoware.AutowareAgent` (scenario-world-bridge, once
+carla-scenario-bridge, roadmap 030): Autoware's ADAPI as a `swb_agent.Agent`,
+simulator-neutral. This node runs it with acb's ROS parameters, so the launch file is
+unchanged. It needs `swb_agent` installed (scenario-world-bridge's workspace, its release
+tarball or the `swb-agent` wheel); a `csb_agent` from before the rename is used when that is
+what is installed.
 
 Two modes:
 
@@ -36,10 +38,16 @@ import yaml
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
-import csb_agent
-from csb_agent import protocol as P
-from csb_agent.adapters.autoware import AutowareAgent
-from csb_agent.adapters.autoware_ros import AutowarePort
+try:  # scenario-world-bridge's agent SDK; csb_agent before its roadmap 046 rename
+    import swb_agent as csb_agent
+    from swb_agent import protocol as P
+    from swb_agent.adapters.autoware import AutowareAgent
+    from swb_agent.adapters.autoware_ros import AutowarePort
+except ImportError:
+    import csb_agent
+    from csb_agent import protocol as P
+    from csb_agent.adapters.autoware import AutowareAgent
+    from csb_agent.adapters.autoware_ros import AutowarePort
 
 
 class AgentNode(Node):

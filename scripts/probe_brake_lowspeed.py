@@ -68,7 +68,7 @@ no-pedal row at 1 m/s is a fit across the approach to that creep equilibrium, no
 ## Timing
 
 Ticks are fixed at DT = 0.05 s of sim time, with physics substeps of 0.05/16 = 3.125 ms --
-the timing carla_scenario_bridge applies during a scenario (coordinator.rs `sync_timing`), so
+the timing carla_world applies during a scenario (coordinator.rs `sync_timing`), so
 the car measured here is the car the ego drives. `--carla-default-substeps` uses CARLA's
 default 10 ms substeps instead, which is what probe_longitudinal.py runs under, to check
 that the two agree where they overlap.
@@ -76,7 +76,7 @@ that the two agree where they overlap.
 ## Ownership
 
 Owns the tick and refuses to start if CARLA is already synchronous (that means
-carla_scenario_bridge, or another probe, owns it). Spawns its car with role_name
+carla_world, or another probe, owns it). Spawns its car with role_name
 `acb_probe`, never `hero`: a running ego stack's acb_bridge adopts any vehicle named hero.
 Destroys only that car, and hands the world back asynchronous.
 

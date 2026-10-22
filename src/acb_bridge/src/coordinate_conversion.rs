@@ -83,7 +83,7 @@ pub fn ros_to_carla_position(ros_position: &Vector3<f64>) -> Vector3<f64> {
 /// world stays near its origin. Every map-frame position crossing into or out of CARLA goes
 /// through this: `map = Y-flip(carla) + origin`. Rotations are unaffected.
 ///
-/// Read from `<map dir>/carla/map_origin.yaml` (`map_origin_path`); carla_scenario_bridge
+/// Read from `<map dir>/carla/map_origin.yaml` (`map_origin_path`); carla_world
 /// reads the same file for the scenario's poses, and the two must agree.
 #[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

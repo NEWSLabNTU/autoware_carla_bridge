@@ -8,7 +8,7 @@
 //! Two publishers on the topic would interleave: SSv2's own (`publish_conventional_traffic_
 //! signals`) must be off wherever this is on.
 //!
-//! Which CARLA light is which Lanelet2 signal is not worked out here. carla_scenario_bridge
+//! Which CARLA light is which Lanelet2 signal is not worked out here. carla_world
 //! resolves it once per map (`--generate-signal-table`) into the map dir's
 //! `carla/traffic_lights.yaml` and checks it at every Initialize (`resolved_signals.rs`
 //! there); this reads that file from `traffic_light_map_path` (empty =
@@ -334,7 +334,7 @@ impl FileWatch {
                     self.missing_reported = true;
                     tracing::warn!(
                         "signals: cannot read {} ({e}); publishing nothing until \
-                         carla_scenario_bridge writes it at the next Initialize",
+                         carla_world writes it at the next Initialize",
                         path.display()
                     );
                 }
@@ -645,7 +645,7 @@ mod tests {
     use super::*;
 
     const TABLE: &str = r#"
-# Written by carla_scenario_bridge
+# Written by carla_world
 town: Town01
 lanelet2_map: /m/Town01/lanelet2_map.osm
 signals:

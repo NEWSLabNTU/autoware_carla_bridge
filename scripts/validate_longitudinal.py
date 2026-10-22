@@ -12,7 +12,7 @@ Records three streams live and compares them:
   * the bridge's own /vehicle/status/velocity_status
   * Autoware's /control/command/control_cmd
 
-Never ticks. During a scenario the tick belongs to carla_scenario_bridge.
+Never ticks. During a scenario the tick belongs to carla_world.
 """
 import math, os, statistics, sys, threading, time
 import carla

@@ -134,7 +134,7 @@
   <arg name="publish_clock" default="true" description="acb publishes /clock from CARLA in this domain"/>
   <arg name="seed_localization_on_attach" default="true"/>
   <arg name="traffic_light_map_path" default="$(var map_path)/carla/traffic_lights.yaml"
-       description="the map dir's CARLA signal table (carla_scenario_bridge --generate-signal-table); empty disables V2X signals"/>
+       description="the map dir's CARLA signal table (carla_world --generate-signal-table); empty disables V2X signals"/>
   <arg name="map_origin_path" default="$(var map_path)/carla/map_origin.yaml"
        description="where CARLA's world origin sits in the map frame; no file = zero (TUM towns)"/>
   <arg name="accel_map_path" default="$(find-pkg-share acb_vehicle_description)/config/accel_map.csv"/>
@@ -149,7 +149,7 @@
   <arg name="allow_manual" default="false" description="accept a driver's MANUAL takeover (acb_bridge.launch.xml)"/>
   <arg name="honor_emergency_cmd" default="false" description="full brake on emergency_cmd instead of the control command (acb_bridge.launch.xml)"/>
   <arg name="control_cmd_timeout_s" default="1.0" description="brake to a stop when control_cmd is older than this, s of sim time; 0 disables (acb_bridge.launch.xml)"/>
-  <!-- carla_scenario_bridge's sensor-release sockets, its ssv2_port + 1 and + 2 (acb_bridge.launch.xml) -->
+  <!-- carla_world's sensor-release sockets, its ssv2_port + 1 and + 2 (acb_bridge.launch.xml) -->
   <arg name="release_notify_endpoint" default="tcp://127.0.0.1:5556" description="scenario runner's release-notice PUB socket; empty disables"/>
   <arg name="release_ack_endpoint" default="tcp://127.0.0.1:5557" description="scenario runner's release-acknowledgement PULL socket"/>
   <!-- The vehicle agent (acb_pilot agent): takes goals from a scenario's agent relay and
@@ -158,7 +158,7 @@
   <arg name="relay" default="" description="tcp://host:port of the scenario's agent relay; empty = no relay"/>
   <arg name="entity" default="ego" description="the scenario entity this vehicle is"/>
   <arg name="goal_poses_file" default="" description="local goal(s) when there is no relay; empty = none"/>
-  <arg name="agent_config" default="" description="YAML/JSON of the agent's settings (csb_agent AutowareAgent DEFAULTS: converge_timeout, ready_timeout, scan_wait, ...); empty = defaults"/>
+  <arg name="agent_config" default="" description="YAML/JSON of the agent's settings (swb_agent AutowareAgent DEFAULTS: converge_timeout, ready_timeout, scan_wait, ...); empty = defaults"/>
   <!-- A launch file of the user's own to start with this vehicle side, in its ROS domain and
        environment: a V2X or cooperative-perception node, a recorder. It receives
        vehicle_name, entity, map_path and use_sim_time; it may ignore them. Nothing in acb

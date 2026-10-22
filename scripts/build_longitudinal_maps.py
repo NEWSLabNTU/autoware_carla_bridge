@@ -157,7 +157,7 @@ def write(kind, path, note, pedals, table):
 
 t = ramps.get("timing", {})
 timing = ("CARLA tick %.3f s, physics substeps of %.4f s (max %d) -- the timing "
-          "carla_scenario_bridge uses" % (t.get("dt", 0), t.get("max_substep_delta_time", 0),
+          "carla_world uses" % (t.get("dt", 0), t.get("max_substep_delta_time", 0),
                                           t.get("max_substeps", 0)))
 
 pedals, table = ramp_grid("throttle", [s for s in SPEEDS if s > 0.0])

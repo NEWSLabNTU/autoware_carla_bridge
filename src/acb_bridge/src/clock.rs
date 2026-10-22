@@ -484,7 +484,7 @@ impl SimClock {
             Some(EpochChange::Reconnect { old, new, sim_ns }) => tracing::warn!(
                 "Episode change: epoch {:.9} -> {:.9}, sim_time continues at {:.9} -- after a \
                  reconnect (CARLA restarted?): the episode rule was applied to the last frame \
-                 received from the old server. carla_scenario_bridge does the same with the \
+                 received from the old server. carla_world does the same with the \
                  last frame it ticked; the epochs differ by one step if that frame's callback \
                  never arrived here",
                 old as f64 / 1e9,
@@ -537,7 +537,7 @@ impl SimClock {
             ),
             Some(MarkerEvent::NoMarker { sim_ns }) => tracing::info!(
                 "Episode {episode} carries no epoch marker (nothing reloaded it, or no \
-                 carla_scenario_bridge): epoch 0, sim_time {:.9}",
+                 carla_world): epoch 0, sim_time {:.9}",
                 secs(sim_ns)
             ),
             Some(MarkerEvent::GaveUp { sim_ns }) => tracing::warn!(
