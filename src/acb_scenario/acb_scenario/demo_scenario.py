@@ -264,6 +264,10 @@ class DemoScenario:
 
 
 def _interrupt(signum, frame):
+    # Once: a second SIGTERM (a launch and its process group both signal) must not cut the
+    # cleanup short, or CARLA is left synchronous with nobody ticking.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     raise KeyboardInterrupt
 
 
