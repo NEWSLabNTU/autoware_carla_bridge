@@ -70,6 +70,9 @@ _check-setuptools:
 build: _check-setuptools
     #!/usr/bin/env bash
     set -e
+    # CARLA_DIR (a host setting, .env) is CARLA's install; carla-sys would take it for a
+    # CARLA source tree to build from, and the build fails.
+    unset CARLA_DIR
     source "{{autoware_setup}}"
     colcon build \
         --base-paths src \
@@ -94,6 +97,9 @@ package:
     # Clean staging directory and stale build state
     rm -rf pkg_install .cargo/config.toml build/.colcon/bindgen.lock
 
+    # CARLA_DIR (a host setting, .env) is CARLA's install; carla-sys would take it for a
+    # CARLA source tree to build from, and the build fails.
+    unset CARLA_DIR
     # Build all packages with merge-install
     source "{{autoware_setup}}"
     colcon build \
@@ -147,6 +153,9 @@ check:
         echo "Error: .cargo/config.toml not found. Run 'just build' first."
         exit 1
     fi
+    # CARLA_DIR (a host setting, .env) is CARLA's install; carla-sys would take it for a
+    # CARLA source tree to build from, and the build fails.
+    unset CARLA_DIR
     cargo +nightly fmt --check
     cargo clippy --all-targets -- -D warnings
 
@@ -159,6 +168,9 @@ test:
         echo "Error: .cargo/config.toml not found. Run 'just build' first."
         exit 1
     fi
+    # CARLA_DIR (a host setting, .env) is CARLA's install; carla-sys would take it for a
+    # CARLA source tree to build from, and the build fails.
+    unset CARLA_DIR
     cargo nextest run --no-tests pass --no-fail-fast
 
 # Run CI checks: build, check (format + clippy), and tests
