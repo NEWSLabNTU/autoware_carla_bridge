@@ -204,6 +204,9 @@ struct BridgeParams {
     pub control_trace_path: String,
     pub accel_map_path: String,
     pub brake_map_path: String,
+    /// The Autoware vehicle package's `spec_hash.yaml` (autoware_sim_vehicle, roadmap 051);
+    /// empty: not checked. Compared with `vehicle_config`'s spec_hash at start.
+    pub autoware_spec_hash_file: String,
     /// Rear axle's position along the actor's x axis (metres, CARLA axes), overriding the
     /// measurement from CARLA's wheels. `None` -- the default -- measures it. An escape
     /// hatch for blueprints without wheel physics; see `CarlaVehicle::measure_base_link`.
@@ -383,6 +386,12 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        let autoware_spec_hash_file = node
+            .declare_parameter("autoware_spec_hash_file")
+            .default(Arc::from(""))
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         // Optional, with no default: unset means "measure the rear axle from the wheels",
         // which is right for every blueprint with wheel physics. See roadmap 014 in
         // carla-scenario-bridge, "Pose reference point".
@@ -462,6 +471,10 @@ impl BridgeParams {
             control_trace_path: control_trace_path_val.to_string(),
             accel_map_path: accel_map_path_val.to_string(),
             brake_map_path: brake_map_path_val.to_string(),
+            autoware_spec_hash_file: {
+                let v: Arc<str> = autoware_spec_hash_file.get();
+                v.to_string()
+            },
             base_link_offset_x: base_link_offset_x.get(),
         })
     }
@@ -629,6 +642,25 @@ fn classify_tick_error(error: &carla::CarlaError) -> TickOutcome {
 /// `World::actor` / `Actor::is_alive` it cannot answer from the client's own registry:
 /// `World::actors()` is a fresh `get_actors` call. Returns `true` on a transport error,
 /// so a hiccup is never mistaken for a despawn -- the tick path owns connection loss.
+/// The roadmap 051 start check without SSv2: the CARLA sensors (`vehicle_config`) and
+/// Autoware's vehicle package must come from one vehicle spec. A warning, not a refusal: on
+/// its own acb has no third party to say which is stale, and a scenario's bridge refuses.
+fn check_spec_hash(carla_sensors: &str, autoware_file: &str) {
+    if autoware_file.is_empty() || autoware_file == "none" {
+        return;
+    }
+    match sensor_config::autoware_spec_hash(std::path::Path::new(autoware_file)) {
+        Ok(autoware) => match sensor_config::spec_disagreement(carla_sensors, &autoware) {
+            Some(why) => tracing::warn!("{why}: rebuild the stale one (sim_vehicle_spec)"),
+            None => tracing::info!(
+                "Vehicle spec: {} (the CARLA sensors and Autoware's vehicle package agree)",
+                &autoware[..autoware.len().min(12)]
+            ),
+        },
+        Err(e) => tracing::warn!("No Autoware spec_hash to compare: {e}"),
+    }
+}
+
 fn actor_still_exists(world: &carla::client::World, id: carla::rpc::ActorId) -> bool {
     match world.actors() {
         Ok(actors) => actors.iter().any(|actor| actor.id() == id),
@@ -1036,6 +1068,7 @@ fn main() -> Result<()> {
         params.vehicle_config
     );
     let mut vehicle_config = sensor_config::VehicleConfig::from_file(&params.vehicle_config)?;
+    check_spec_hash(&vehicle_config.spec_hash, &params.autoware_spec_hash_file);
     for name in params
         .disabled_sensors
         .split(',')

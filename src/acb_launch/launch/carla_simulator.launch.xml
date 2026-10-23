@@ -65,6 +65,7 @@
     <include file="$(find-pkg-share acb_bridge)/launch/acb_bridge.launch.xml">
       <arg name="disabled_sensors" value="$(eval &quot;'camera6/camera_link' if '$(var traffic_light_fusion_only)' == 'true' else ''&quot;)"/>
       <arg name="vehicle_config" value="$(var vehicle_config)"/>
+      <arg name="autoware_spec_hash_file" value="$(find-pkg-share $(var vehicle_model)_description)/config/spec_hash.yaml"/>
       <arg name="carla_address" value="$(var carla_host)"/>
       <arg name="carla_port" value="$(var carla_port)"/>
       <arg name="vehicle_name" value="$(var vehicle_name)"/>

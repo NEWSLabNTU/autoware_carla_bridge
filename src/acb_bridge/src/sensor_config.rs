@@ -649,9 +649,49 @@ impl SensorParams {
     }
 }
 
+/// The spec_hash an Autoware vehicle package records (`<car>_description/config/spec_hash.yaml`,
+/// autoware_sim_vehicle, roadmap 051).
+pub fn autoware_spec_hash(path: &Path) -> Result<String> {
+    #[derive(Deserialize)]
+    struct File {
+        spec_hash: String,
+    }
+    let text = fs::read_to_string(path)
+        .map_err(|e| BridgeError::ConfigError(format!("reading {}: {e}", path.display())))?;
+    let file: File = serde_yaml::from_str(&text)
+        .map_err(|e| BridgeError::ConfigError(format!("parsing {}: {e}", path.display())))?;
+    Ok(file.spec_hash)
+}
+
+/// Why the CARLA sensors and Autoware's vehicle package came from different specs, `None`
+/// when they agree or either names none.
+pub fn spec_disagreement(carla_sensors: &str, autoware: &str) -> Option<String> {
+    (!carla_sensors.is_empty() && !autoware.is_empty() && carla_sensors != autoware).then(|| {
+        format!(
+            "vehicle_config was generated from spec {}, Autoware's vehicle package from {}",
+            &carla_sensors[..carla_sensors.len().min(12)],
+            &autoware[..autoware.len().min(12)]
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_spec_check_names_both_hashes_only_when_they_differ() {
+        assert_eq!(spec_disagreement("d5d4b266c7fd1fb4", "d5d4b266c7fd1fb4"), None);
+        assert_eq!(spec_disagreement("", "d5d4"), None);
+        assert_eq!(spec_disagreement("d5d4", ""), None);
+        assert_eq!(
+            spec_disagreement("d5d4b266c7fd1fb4", "0123456789abcdef").as_deref(),
+            Some(
+                "vehicle_config was generated from spec d5d4b266c7fd, Autoware's vehicle \
+                 package from 0123456789ab"
+            )
+        );
+    }
 
     #[test]
     fn test_merge() {
@@ -675,3 +715,4 @@ mod tests {
         assert_eq!(merged.image_size_y, Some(600)); // From defaults
     }
 }
+
