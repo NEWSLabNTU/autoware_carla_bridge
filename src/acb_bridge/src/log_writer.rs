@@ -47,6 +47,24 @@ pub struct NonBlockingLog {
     pending: Arc<AtomicU64>,
 }
 
+/// The process's guard, for an exit that skips destructors ([`flush`]).
+static PROCESS_GUARD: std::sync::Mutex<Option<LogGuard>> = std::sync::Mutex::new(None);
+
+/// Keep `guard` for the life of the process: [`flush`] writes out what is queued before a
+/// `std::process::exit`, which runs no destructors.
+pub fn keep_for_exit(guard: LogGuard) {
+    *PROCESS_GUARD.lock().unwrap_or_else(|e| e.into_inner()) = Some(guard);
+}
+
+/// Write out every line queued so far (before `std::process::exit`).
+pub fn flush() {
+    let guard = PROCESS_GUARD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    drop(guard);
+}
+
 /// Joins the writer thread on drop, after everything queued has been written.
 pub struct LogGuard {
     thread: Option<JoinHandle<()>>,

@@ -147,7 +147,7 @@ struct BridgeParams {
     /// Publish pose directly to /localization/kinematic_state (bypasses Autoware localization)
     /// Set to true for testing without Autoware localization pipeline
     pub publish_direct_localization: bool,
-    /// Publish `/clock` (CARLA `elapsed_seconds` plus the episode epoch, see `clock`).
+    /// Publish `/clock` (CARLA `elapsed_seconds` plus BASE_NS, see `clock`).
     ///
     /// An emergency off, not a mode switch: this bridge owns `/clock` in every domain
     /// (roadmap 015). Turning it off leaves every stamp unchanged -- they are CARLA frame
@@ -909,8 +909,11 @@ fn main() -> Result<()> {
     //
     // Through a writer thread, never straight to stdout: stdout is a file on a disk that
     // can hold a `write()` for seconds, and the main loop logs. See log_writer.
-    let (log, _log_guard) =
+    let (log, log_guard) =
         log_writer::NonBlockingLog::new(std::io::stdout(), log_writer::QUEUE_LINES);
+    // Flushed by an exit that runs no destructors too (an episode change, clock.rs).
+    log_writer::keep_for_exit(log_guard);
+    clock::before_exit(log_writer::flush);
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -962,9 +965,10 @@ fn main() -> Result<()> {
         );
     }
 
-    // Simulation time: CARLA frame time plus the episode epoch, for every stamp and for
-    // /clock. /clock runs on a client of its own from the moment CARLA answers -- not from
-    // hero attach -- and keeps running across vehicle sessions and reconnects. See clock.rs.
+    // Simulation time: CARLA frame time plus BASE_NS, for every stamp and for /clock.
+    // /clock runs on a client of its own from the moment CARLA answers -- not from hero
+    // attach -- and keeps running across vehicle sessions within its episode; another
+    // episode ends this process. See clock.rs.
     let sim_clock = SimClock::new(&node, params.publish_clock)?;
     let _clock_thread = clock::spawn_clock_source(
         params.carla_address.clone(),
@@ -1183,7 +1187,14 @@ fn main() -> Result<()> {
         // sensors attach into the episode the vehicle actually lives in.
         let (mut world, hero_vehicle) =
             match wait_for_vehicle(client, &params.vehicle_name, &running, &mut executor) {
-                WaitOutcome::Found(w, v) => (w, v),
+                WaitOutcome::Found(w, v) => {
+                    // A hero of another episode (CARLA restarted, or another town loaded)
+                    // ends this process before anything is attached (roadmap 051).
+                    if let Ok(id) = w.id() {
+                        sim_clock.check_episode(id);
+                    }
+                    (w, v)
+                }
                 WaitOutcome::Shutdown => return Ok(()),
                 WaitOutcome::Stale => {
                     reconnect_carla = true;
@@ -1288,8 +1299,8 @@ fn main() -> Result<()> {
 
         // === Create sensor bridges ===
         //
-        // Each sensor stamps with its measurement's own CARLA frame time plus the episode
-        // epoch (`SimClock::stamp`): the same nanoseconds as that frame's `/clock`.
+        // Each sensor stamps with its measurement's own CARLA frame time plus BASE_NS
+        // (`SimClock::stamp`): the same nanoseconds as that frame's `/clock`.
 
         // Optional: report CARLA's actors as perception output instead of deriving them
         // from the LiDAR. Off unless asked for, and only correct with Autoware's own
@@ -1682,9 +1693,11 @@ fn main() -> Result<()> {
                 break SessionExit::VehicleLost;
             }
 
-            // Everything this frame publishes carries the frame's own CARLA time plus the
-            // episode epoch -- the value of its `/clock`, to the nanosecond -- never the node
-            // clock, which is that `/clock` echoed back a frame late (roadmap 015).
+            // Everything this frame publishes carries the frame's own CARLA time plus BASE_NS
+            // -- the value of its `/clock`, to the nanosecond -- never the node clock, which
+            // is that `/clock` echoed back a frame late (roadmap 015). A frame of another
+            // episode ends this process first (roadmap 051).
+            sim_clock.check_episode(snapshot.id());
             let stamp = sim_clock.stamp(snapshot.timestamp().elapsed_seconds);
 
             // Spin executor to process ROS callbacks (subscriptions).
