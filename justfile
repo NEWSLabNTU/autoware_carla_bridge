@@ -235,6 +235,9 @@ sim *args:
         esac
     done
     map_name=$(just _map "${rest[@]}")
+    # The town first: acb_bridge ends the stack on an episode change, so the demo scenario
+    # must find its town loaded rather than load it under a running bridge.
+    "{{project}}/scripts/carla_load_town.py" --port {{carla_port}} --town "$map_name"
     source "{{project}}/install/setup.bash"
     if [ "$auto_drive" = "true" ]; then
         POSES_FILE="$(ros2 pkg prefix autoware_sim_pilot)/share/autoware_sim_pilot/config/poses/$map_name.yaml"
