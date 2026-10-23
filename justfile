@@ -7,7 +7,7 @@ set dotenv-load
 # map:=Town02`); the old MAP_NAME / CARLA_MAP / CARLA_QUALITY / CARLA_RENDER /
 # CARLA_EXTRA_ARGS variables are refused.
 carla_port := env_var_or_default('CARLA_PORT', '2000')
-# Autoware's writable model directory (populate once: ros2 run acb_launch setup_autoware_data).
+# Autoware's writable model directory (populate once: ros2 run autoware_sim_profile setup_autoware_data).
 # A host path: where this machine keeps the models, the same for every run.
 data_path := env_var_or_default('AUTOWARE_DATA_PATH', env_var('HOME') + '/autoware_data')
 project := justfile_directory()
@@ -48,7 +48,7 @@ _warn-if-setuptools-shadowed:
 #
 # colcon's --symlink-install runs `setup.py develop --editable`, which setuptools removed
 # in v80. When a pip-installed setuptools in ~/.local takes precedence over the apt one,
-# acb_scenario, acb_pilot, carla_map_gen and carla_manual_control all die with "option
+# acb_scenario, carla_map_gen and carla_manual_control all die with "option
 # --editable not recognized" -- and colcon then aborts acb_bridge before it compiles, so a
 # Rust change looks broken when it never ran. Check up front instead.
 _check-setuptools:
@@ -74,8 +74,9 @@ build: _check-setuptools
     # CARLA source tree to build from, and the build fails.
     unset CARLA_DIR
     source "{{autoware_setup}}"
+    # deps/autoware_sim_vehicle (a submodule): the Autoware profile acb_launch includes
     colcon build \
-        --base-paths src \
+        --base-paths src deps/autoware_sim_vehicle \
         --symlink-install \
         --cargo-args --profile dev-release
 
@@ -103,7 +104,7 @@ package:
     # Build all packages with merge-install
     source "{{autoware_setup}}"
     colcon build \
-        --base-paths src \
+        --base-paths src deps/autoware_sim_vehicle \
         --merge-install \
         --install-base pkg_install \
         --cargo-args --release
@@ -236,8 +237,8 @@ sim *args:
     map_name=$(just _map "${rest[@]}")
     source "{{project}}/install/setup.bash"
     if [ "$auto_drive" = "true" ]; then
-        POSES_FILE="$(ros2 pkg prefix acb_pilot)/share/acb_pilot/config/poses/$map_name.yaml"
-        ros2 run acb_pilot auto_drive --ros-args -p poses_file:="$POSES_FILE" &
+        POSES_FILE="$(ros2 pkg prefix autoware_sim_pilot)/share/autoware_sim_pilot/config/poses/$map_name.yaml"
+        ros2 run autoware_sim_pilot auto_drive --ros-args -p poses_file:="$POSES_FILE" &
     fi
     exec play_launch launch --web-addr 0.0.0.0:8080 \
         -c "{{project}}/config/play_launch.yaml" \
@@ -295,16 +296,16 @@ pilot poses_file="":
     source "{{project}}/install/setup.bash"
     POSES_FILE="{{poses_file}}"
     if [ -z "$POSES_FILE" ]; then
-        POSES_FILE="$(ros2 pkg prefix acb_pilot)/share/acb_pilot/config/example_poses.yaml"
+        POSES_FILE="$(ros2 pkg prefix autoware_sim_pilot)/share/autoware_sim_pilot/config/example_poses.yaml"
     fi
-    exec ros2 run acb_pilot auto_drive --ros-args -p poses_file:="$POSES_FILE"
+    exec ros2 run autoware_sim_pilot auto_drive --ros-args -p poses_file:="$POSES_FILE"
 
 # Capture poses from RViz interactively
 capture-poses output_file:
     #!/usr/bin/env bash
     set -euo pipefail
     source "{{project}}/install/setup.bash"
-    exec ros2 run acb_pilot capture_poses --ros-args -p output_file:="{{output_file}}"
+    exec ros2 run autoware_sim_pilot capture_poses --ros-args -p output_file:="{{output_file}}"
 
 # Pre-build TensorRT engines for lidar_centerpoint (first-time only, takes 2-5 min)
 build-engines:

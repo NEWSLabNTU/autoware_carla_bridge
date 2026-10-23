@@ -3,14 +3,15 @@
 <package format="3">
   <name>acb_launch</name>
   <version>0.1.0</version>
-  <description>Autoware launch files and configurations for CARLA simulation</description>
+  <description>Autoware on CARLA: the Autoware profile (autoware_sim_profile) with acb_bridge</description>
   <maintainer email="user@example.com">User</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake_auto</buildtool_depend>
 
-  <exec_depend>autoware_launch</exec_depend>
-  <exec_depend>tier4_localization_launch</exec_depend>
+  <exec_depend>autoware_sim_profile</exec_depend>
+  <exec_depend>acb_bridge</exec_depend>
+  <exec_depend>acb_vehicle_description</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

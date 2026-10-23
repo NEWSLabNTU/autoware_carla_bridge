@@ -38,8 +38,8 @@ Autoware's TensorRT nodes write their built engines next to the model files, so
 models into it once:
 
 ```bash
-ros2 run acb_launch setup_autoware_data            # /opt/autoware/1.5.0/data -> ~/autoware_data
-ros2 run acb_launch setup_autoware_data SRC DST    # other locations
+ros2 run autoware_sim_profile setup_autoware_data            # /opt/autoware/1.5.0/data -> ~/autoware_data
+ros2 run autoware_sim_profile setup_autoware_data SRC DST    # other locations
 ```
 
 `carla_simulator.launch.xml` refuses to start, naming this command, when `data_path` is
@@ -70,8 +70,8 @@ ros2 launch acb_launch carla_simulator.launch.xml \
 ros2 launch acb_scenario single_vehicle_scenario.launch.xml
 
 # Terminal 3 (optional): autonomous driving pilot
-ros2 run acb_pilot auto_drive --ros-args \
-    -p poses_file:=$(ros2 pkg prefix acb_pilot)/share/acb_pilot/config/poses/Town01.yaml
+ros2 run autoware_sim_pilot auto_drive --ros-args \
+    -p poses_file:=$(ros2 pkg prefix autoware_sim_pilot)/share/autoware_sim_pilot/config/poses/Town01.yaml
 ```
 
 With the pilot, the vehicle auto-initializes localization via GNSS, follows a preset route, and drives to the goal.

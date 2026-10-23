@@ -4689,13 +4689,13 @@ name = "autoware_planning_msgs"
 version = "0.0.0"
 
 [[patch.unused]]
-name = "csb_interfaces"
-version = "0.0.0"
-
-[[patch.unused]]
 name = "rcl_interfaces"
 version = "0.0.0"
 
 [[patch.unused]]
 name = "rmw_dds_common"
+version = "0.0.0"
+
+[[patch.unused]]
+name = "swb_interfaces"
 version = "0.0.0"
