@@ -12,6 +12,7 @@ for ticks via world.wait_for_tick().
 """
 
 import argparse
+import signal
 import sys
 import time
 from typing import Optional
@@ -226,10 +227,17 @@ class DemoScenario:
         try:
             tick_count = 0
             last_monitor = time.monotonic()
+            # Real time: one 0.05 s tick per 0.05 s of wall time. Unpaced, an idle offscreen
+            # CARLA ticks several times faster than real time, and Autoware, which computes in
+            # wall time, falls behind the world it drives (acb skipped 20 000 of 32 000 frames,
+            # 2026-10-24). A tick that takes longer than its slot is not caught up.
+            next_tick = time.monotonic()
             while True:
                 # Advance simulation by one step
                 world.tick()
                 tick_count += 1
+                next_tick = max(next_tick + 0.05, time.monotonic() - 0.05)
+                time.sleep(max(0.0, next_tick - time.monotonic()))
 
                 # Print monitor output every ~2 seconds
                 now = time.monotonic()
@@ -255,8 +263,15 @@ class DemoScenario:
             self.cleanup()
 
 
+def _interrupt(signum, frame):
+    raise KeyboardInterrupt
+
+
 def main():
     """Main entry point"""
+    # A launch or a supervisor stops this with SIGTERM: take the Ctrl-C path, which destroys
+    # the hero's sensors and the hero and gives CARLA back asynchronous mode.
+    signal.signal(signal.SIGTERM, _interrupt)
     parser = argparse.ArgumentParser(description="CARLA Demo Scenario for Autoware Bridge")
     parser.add_argument(
         "--host",

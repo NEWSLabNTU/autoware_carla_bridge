@@ -243,7 +243,13 @@ sim *args:
         POSES_FILE="$(ros2 pkg prefix autoware_sim_pilot)/share/autoware_sim_pilot/config/poses/$map_name.yaml"
         ros2 run autoware_sim_pilot auto_drive --ros-args -p poses_file:="$POSES_FILE" &
     fi
+    # Each composable a process of its own (play_launch's isolated mode), reloaded alone when
+    # it crashes, as swb's `just ego-av` runs Autoware: in one process per container, a
+    # composable whose constructor blocks holds up the rest of its container, and the stack
+    # never finished loading its perception (2026-10-24: 9 pointcloud_container composables
+    # pending for good, a map-less obstacle stopping the car at the first corner).
     exec play_launch launch --web-addr 0.0.0.0:8080 \
+        --container-mode isolated --composable-respawn on-crash \
         -c "{{project}}/config/play_launch.yaml" \
         acb_demo_launch single_vehicle_autoware.launch.xml \
         map_path:="{{project}}/data/carla-autoware-bridge/$map_name" \
@@ -260,6 +266,7 @@ autoware *args:
     map_name=$(just _map "$@")
     source "{{project}}/install/setup.bash"
     exec play_launch launch --web-addr 0.0.0.0:8080 \
+        --container-mode isolated --composable-respawn on-crash \
         acb_launch carla_simulator.launch.xml \
         map_path:="{{project}}/data/carla-autoware-bridge/$map_name" \
         data_path:="{{data_path}}"
