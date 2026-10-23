@@ -8,7 +8,7 @@
   <arg name="vehicle_name" default="hero" description="CARLA vehicle role_name to attach to"/>
 
   <!-- Vehicle configuration (single source of truth for sensors) -->
-  <arg name="vehicle_config" default="$(find-pkg-share acb_bridge)/config/vehicle_config.yaml"
+  <arg name="vehicle_config" default="$(find-pkg-share sim_vehicle_spec)/generated/tesla_model3/carla_sensors.yaml"
        description="Path to vehicle configuration YAML file"/>
 
   <!-- Clock ownership. Set false in the scenario ego's domain, where SSv2 publishes
@@ -54,10 +54,10 @@
   <arg name="control_trace_path" default=""
        description="Write per-stage control latency here as CSV; empty disables it"/>
   <arg name="accel_map_path"
-       default="$(find-pkg-share acb_vehicle_description)/config/accel_map.csv"
+       default="$(find-pkg-share tesla_model3_description)/config/accel_map.csv"
        description="Throttle response table: pedal x speed -> acceleration"/>
   <arg name="brake_map_path"
-       default="$(find-pkg-share acb_vehicle_description)/config/brake_map.csv"
+       default="$(find-pkg-share tesla_model3_description)/config/brake_map.csv"
        description="Brake response table: pedal x speed -> acceleration"/>
   <arg name="publish_clock" default="true"
        description="Publish /clock from CARLA simulation time"/>

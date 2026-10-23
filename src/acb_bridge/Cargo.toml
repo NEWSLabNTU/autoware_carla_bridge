@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 # cargo-ament-build metadata for installing additional files
 [package.metadata.ros]
-install_to_share = ["launch", "config"]
+install_to_share = ["launch"]
 
 [dependencies]
 # Side-channel to carla_world, so it can tell us to release our sensors before

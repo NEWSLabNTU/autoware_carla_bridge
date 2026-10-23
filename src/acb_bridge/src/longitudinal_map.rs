@@ -428,11 +428,11 @@ default,0.0,2.0,4.0,6.0
     fn shipped() -> LongitudinalCalibration {
         LongitudinalCalibration {
             accel_map: PedalMap::parse(include_str!(
-                "../../acb_vehicle_launch/acb_vehicle_description/config/accel_map.csv"
+                "../../../deps/autoware_sim_vehicle/cars/tesla_model3/tesla_model3_description/config/accel_map.csv"
             ))
             .unwrap(),
             brake_map: PedalMap::parse(include_str!(
-                "../../acb_vehicle_launch/acb_vehicle_description/config/brake_map.csv"
+                "../../../deps/autoware_sim_vehicle/cars/tesla_model3/tesla_model3_description/config/brake_map.csv"
             ))
             .unwrap(),
         }

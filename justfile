@@ -76,7 +76,7 @@ build: _check-setuptools
     source "{{autoware_setup}}"
     # deps/autoware_sim_vehicle (a submodule): the Autoware profile acb_launch includes
     colcon build \
-        --base-paths src deps/autoware_sim_vehicle \
+        --base-paths src deps/autoware_sim_vehicle deps/sim_vehicle_spec \
         --symlink-install \
         --cargo-args --profile dev-release
 
@@ -104,7 +104,7 @@ package:
     # Build all packages with merge-install
     source "{{autoware_setup}}"
     colcon build \
-        --base-paths src deps/autoware_sim_vehicle \
+        --base-paths src deps/autoware_sim_vehicle deps/sim_vehicle_spec \
         --merge-install \
         --install-base pkg_install \
         --cargo-args --release

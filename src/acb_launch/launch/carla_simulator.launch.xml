@@ -17,9 +17,13 @@
 <launch>
   <arg name="map_path" description="point cloud and lanelet2 map directory path"/>
   <arg name="use_sim_time" default="true" description="use simulation time"/>
-  <!-- The car: its vehicle and sensor kit packages, matched with acb_bridge's sensors -->
-  <arg name="vehicle_model" default="acb_vehicle" description="vehicle model name"/>
-  <arg name="sensor_model" default="acb_sensor_kit" description="sensor model name"/>
+  <!-- The car: its Autoware packages (autoware_sim_vehicle, generated from its vehicle spec)
+       and the sensors acb_bridge spawns for it (sim_vehicle_spec's carla_sensors.yaml), one
+       spec for both. -->
+  <arg name="vehicle_model" default="tesla_model3" description="vehicle model name (the spec's name)"/>
+  <arg name="sensor_model" default="$(var vehicle_model)_sensor_kit" description="sensor model name"/>
+  <arg name="vehicle_config" default="$(find-pkg-share sim_vehicle_spec)/generated/$(var vehicle_model)/carla_sensors.yaml"
+       description="the sensors acb_bridge spawns: the car's generated carla_sensors.yaml"/>
   <!-- Shared with the profile: fusion-only traffic lights leave the camera unspawned here,
        and ground-truth objects turn object recognition off there. -->
   <arg name="traffic_light_fusion_only" default="true"
@@ -34,8 +38,8 @@
        description="the map dir's CARLA signal table (carla_world --generate-signal-table); empty disables V2X signals"/>
   <arg name="map_origin_path" default="$(var map_path)/carla/map_origin.yaml"
        description="where CARLA's world origin sits in the map frame; no file = zero (TUM towns)"/>
-  <arg name="accel_map_path" default="$(find-pkg-share acb_vehicle_description)/config/accel_map.csv"/>
-  <arg name="brake_map_path" default="$(find-pkg-share acb_vehicle_description)/config/brake_map.csv"/>
+  <arg name="accel_map_path" default="$(find-pkg-share $(var vehicle_model)_description)/config/accel_map.csv"/>
+  <arg name="brake_map_path" default="$(find-pkg-share $(var vehicle_model)_description)/config/brake_map.csv"/>
   <arg name="report_measured_steering" default="false"/>
   <arg name="steering_multiplier" default="1.0"/>
   <arg name="steer_rate_limit_deg_s" default="0.0" description="steering actuator rate limit, deg/s; 0 = off"/>
@@ -60,6 +64,7 @@
 
     <include file="$(find-pkg-share acb_bridge)/launch/acb_bridge.launch.xml">
       <arg name="disabled_sensors" value="$(eval &quot;'camera6/camera_link' if '$(var traffic_light_fusion_only)' == 'true' else ''&quot;)"/>
+      <arg name="vehicle_config" value="$(var vehicle_config)"/>
       <arg name="carla_address" value="$(var carla_host)"/>
       <arg name="carla_port" value="$(var carla_port)"/>
       <arg name="vehicle_name" value="$(var vehicle_name)"/>

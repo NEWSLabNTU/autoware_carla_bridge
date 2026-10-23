@@ -64,7 +64,7 @@ fn bridge_sensor_type(
         ConfigType::Unsupported => {
             tracing::warn!(
                 "Sensor '{link_name}' has a blueprint this bridge does not recognise; it will \
-                 publish nothing. Check its `blueprint` in vehicle_config.yaml"
+                 publish nothing. Check its `carla.blueprint` in the vehicle spec (sim_vehicle_spec)"
             );
             None
         }

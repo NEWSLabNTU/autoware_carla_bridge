@@ -1,16 +1,18 @@
 //! CARLA vehicle and sensor configuration module
 //!
-//! This module provides CARLA-specific configuration for vehicles and sensors.
-//! The vehicle_config.yaml file is the **single source of truth** for which
-//! sensors to spawn and their CARLA blueprints/parameters.
+//! This module provides CARLA-specific configuration for vehicles and sensors: which sensors
+//! to spawn and their CARLA blueprints/parameters. The file is the car's `carla_sensors.yaml`,
+//! generated from its vehicle spec by sim_vehicle_spec (roadmap 051); the spec is the single
+//! source of truth, and `spec_hash` names the spec it came from.
 //!
 //! ## Design Philosophy
 //! - **Explicit over implicit**: Sensors are explicitly listed in the config file
 //! - **No name-based inference**: We don't guess sensor types from URDF link names
 //! - **TF for positions only**: URDF/TF is only used for sensor positions, not types
 //!
-//! ## Config File Format (vehicle_config.yaml)
+//! ## Config File Format (carla_sensors.yaml)
 //! ```yaml
+//! spec_hash: "d5d4..."                # the vehicle spec this was generated from
 //! vehicle:
 //!   blueprint: "vehicle.tesla.model3"
 //! sensors:
@@ -27,7 +29,7 @@ use std::{collections::HashMap, fs, path::Path};
 use crate::error::{BridgeError, Result};
 
 // ============================================================================
-// VehicleConfig - Single source of truth for sensor spawning
+// VehicleConfig - the sensors to spawn, generated from the vehicle spec
 // ============================================================================
 
 /// Vehicle and sensor configuration loaded from vehicle_config.yaml
@@ -39,6 +41,11 @@ use crate::error::{BridgeError, Result};
 /// - Parameters - CARLA-specific sensor attributes
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VehicleConfig {
+    /// The vehicle spec this file was generated from (sim_vehicle_spec's spec_hash); empty for
+    /// a hand-written file.
+    #[serde(default)]
+    pub spec_hash: String,
+
     /// Vehicle configuration
     #[serde(default)]
     pub vehicle: VehicleSettings,

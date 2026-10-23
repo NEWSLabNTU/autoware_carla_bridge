@@ -11,7 +11,12 @@
 
   <exec_depend>autoware_sim_profile</exec_depend>
   <exec_depend>acb_bridge</exec_depend>
-  <exec_depend>acb_vehicle_description</exec_depend>
+  <exec_depend>sim_vehicle_spec</exec_depend>
+  <exec_depend>tesla_model3_description</exec_depend>
+  <exec_depend>tesla_model3_launch</exec_depend>
+  <exec_depend>tesla_model3_sensor_kit_description</exec_depend>
+  <exec_depend>tesla_model3_sensor_kit_launch</exec_depend>
+  <exec_depend>individual_params</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
