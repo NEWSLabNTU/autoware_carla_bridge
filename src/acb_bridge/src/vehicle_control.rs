@@ -1969,7 +1969,7 @@ impl VehicleControlBridge {
     /// Should be called in the main loop at regular intervals (e.g., 20 Hz)
     ///
     /// # Arguments
-    /// * `stamp` - the frame's CARLA time plus the episode epoch (`SimClock::stamp`)
+    /// * `stamp` - the frame's CARLA time plus BASE_NS (`SimClock::stamp`)
     pub fn publish_status(&self, stamp: &builtin_interfaces::msg::Time) -> Result<()> {
         let vehicle_guard = self.vehicle.lock().unwrap();
         if let Some(ref vehicle) = *vehicle_guard {

@@ -8,7 +8,7 @@ use carla::{
         SemanticLidarMeasurement,
     },
     // `SensorDataBase` gives `SensorData::timestamp()`, the CARLA frame time the measurement
-    // was taken at. `SimClock::stamp` adds the episode epoch and nothing else, so the stamp
+    // was taken at. `SimClock::stamp` adds BASE_NS and nothing else, so the stamp
     // is bit-exact with that frame's `/clock` (roadmap 015).
     sensor::SensorDataBase,
 };
@@ -266,7 +266,7 @@ fn register_camera_rgb(
 
     // Setup CARLA listener
     actor.listen(move |data| {
-        // The CARLA frame time of the measurement, plus the episode epoch: the same value
+        // The CARLA frame time of the measurement, plus BASE_NS: the same value
         // as that frame's `/clock`.
         let header = std_msgs::msg::Header {
             stamp: clock.stamp(data.timestamp()),
@@ -309,7 +309,7 @@ fn register_lidar_raycast(
     let frame_id = frame_id.to_string();
 
     actor.listen(move |data| {
-        // The CARLA frame time of the measurement, plus the episode epoch: the same value
+        // The CARLA frame time of the measurement, plus BASE_NS: the same value
         // as that frame's `/clock`.
         let header = std_msgs::msg::Header {
             stamp: clock.stamp(data.timestamp()),
@@ -346,7 +346,7 @@ fn register_lidar_raycast_semantic(
     let frame_id = frame_id.to_string();
 
     actor.listen(move |data| {
-        // The CARLA frame time of the measurement, plus the episode epoch: the same value
+        // The CARLA frame time of the measurement, plus BASE_NS: the same value
         // as that frame's `/clock`.
         let header = std_msgs::msg::Header {
             stamp: clock.stamp(data.timestamp()),
@@ -381,7 +381,7 @@ fn register_imu(
     let frame_id = frame_id.to_string();
 
     actor.listen(move |data| {
-        // The CARLA frame time of the measurement, plus the episode epoch: the same value
+        // The CARLA frame time of the measurement, plus BASE_NS: the same value
         // as that frame's `/clock`.
         let header = std_msgs::msg::Header {
             stamp: clock.stamp(data.timestamp()),
@@ -416,7 +416,7 @@ fn register_gnss(
     let frame_id = frame_id.to_string();
 
     actor.listen(move |data| {
-        // The CARLA frame time of the measurement, plus the episode epoch: the same value
+        // The CARLA frame time of the measurement, plus BASE_NS: the same value
         // as that frame's `/clock`.
         let header = std_msgs::msg::Header {
             stamp: clock.stamp(data.timestamp()),

@@ -568,7 +568,7 @@ impl Autoware {
     /// 4. Handling localization initialization/re-initialization
     ///
     /// # Arguments
-    /// * `stamp` - the frame's CARLA time plus the episode epoch (`SimClock::stamp`)
+    /// * `stamp` - the frame's CARLA time plus BASE_NS (`SimClock::stamp`)
     ///
     /// # Returns
     /// Result indicating success or error
