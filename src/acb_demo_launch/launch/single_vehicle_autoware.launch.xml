@@ -16,6 +16,7 @@
   <!-- Autoware + acb_bridge -->
   <include file="$(find-pkg-share acb_launch)/launch/carla_simulator.launch.xml">
     <arg name="map_path" value="$(var map_path)"/>
+    <arg name="carla_port" value="$(var carla_port)"/>
     <arg name="data_path" value="$(var data_path)"/>
   </include>
 

@@ -272,6 +272,7 @@ autoware *args:
         --container-mode isolated --composable-respawn on-crash \
         acb_launch carla_simulator.launch.xml \
         map_path:="{{project}}/data/carla-autoware-bridge/$map_name" \
+        carla_port:={{carla_port}} \
         data_path:="{{data_path}}"
 
 # vehicle_check (autoware_sim_vehicle's autoware_sim_check) on CARLA, without SSv2 or Autoware:
