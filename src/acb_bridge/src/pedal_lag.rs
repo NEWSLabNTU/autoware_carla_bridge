@@ -35,13 +35,24 @@ pub struct PedalLag {
     last: Option<f64>,
 }
 
+/// Within this of its target a lagged pedal is its target. An exponential never gets
+/// there: a released brake decayed through 1e-3, 1e-10, ... and reached 0.0 only when the
+/// f32 underflowed, 5.2 s later at 0.06 s, and any brake at all with the throttle held the
+/// car at a standstill in CARLA that long.
+const SNAP: f32 = 1e-3;
+
 /// One first-order step towards `target` over `dt` with time constant `tau`.
 fn first_order(value: f32, target: f32, dt: f64, tau: f64) -> f32 {
     if tau <= 0.0 {
         return target;
     }
     let k = 1.0 - (-dt / tau).exp();
-    value + (target - value) * k as f32
+    let next = value + (target - value) * k as f32;
+    if (next - target).abs() < SNAP {
+        target
+    } else {
+        next
+    }
 }
 
 impl PedalLag {
@@ -134,6 +145,21 @@ mod tests {
         f.step(0.0, 0.0, 0.0);
         let (t, _) = f.step(1.0, 0.0, 0.04);
         assert!((t - (1.0 - (-1.0f32).exp())).abs() < 1e-4, "{t}");
+    }
+
+    #[test]
+    fn a_released_brake_reaches_zero() {
+        // It used to reach exactly 0 only when the f32 underflowed, 5.2 s on.
+        let mut f = PedalLag::new(SPEC);
+        f.step(0.0, 1.0, 0.0);
+        let mut b = 1.0;
+        let mut t = 0.0;
+        while b > 0.0 && t < 1.0 {
+            t += 0.05;
+            b = f.step(0.3, 0.0, t).1;
+        }
+        assert_eq!(b, 0.0, "still {b} at {t} s");
+        assert!(t < 0.6, "{t}");
     }
 
     #[test]
