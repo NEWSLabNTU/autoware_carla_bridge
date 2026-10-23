@@ -9,7 +9,6 @@ pub mod error;
 pub mod sensor_config;
 pub mod tf_bridge;
 pub mod types;
-pub mod urdf_parser;
 pub mod utils;
 
 // Re-export commonly used items

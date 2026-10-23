@@ -32,7 +32,7 @@ reset between ramps, never during one.
 ## Physics timing
 
 Ticks are DT = 0.05 s with physics substeps of DT/16 = 3.125 ms: the timing
-carla_world applies during a scenario since csb ddf64d7 (coordinator.rs
+swb_carla_world applies during a scenario since csb ddf64d7 (coordinator.rs
 `sync_timing`). The maps shipped before 2026-09-28 were measured under CARLA's default 10 ms
 substeps, and the substep is not a detail: at 6 m/s it moves coasting by 0.36 m/s^2 and full
 brake by 0.6, and under 10 ms substeps a braked car decelerates at about -27 m/s^2 for several
@@ -43,7 +43,7 @@ Below 5 m/s the brake map is measured by the companion `probe_brake_lowspeed.py`
 one short run at each speed instead of sweeping through them.
 
 Owns the tick deliberately -- it refuses to start if CARLA is already synchronous, because that
-means carla_world or another probe owns it. The car's role_name is `acb_probe`: a
+means swb_carla_world or another probe owns it. The car's role_name is `acb_probe`: a
 running ego stack's acb_bridge adopts any vehicle named `hero`.
 
     probe_longitudinal.py [BLUEPRINT] [OUT.json] [--carla-default-substeps]
@@ -87,7 +87,7 @@ s.substepping = True
 if DEFAULT_SUBSTEPS:
     s.max_substep_delta_time, s.max_substeps = 0.01, 10
 else:
-    s.max_substep_delta_time, s.max_substeps = DT / 16, 16   # carla_world's
+    s.max_substep_delta_time, s.max_substeps = DT / 16, 16   # swb_carla_world's
 world.apply_settings(s)
 timing = {"dt": DT, "max_substep_delta_time": s.max_substep_delta_time,
           "max_substeps": s.max_substeps}

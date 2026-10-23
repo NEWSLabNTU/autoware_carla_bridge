@@ -19,7 +19,6 @@ mod tf_bridge;
 mod tick_follower;
 mod traffic_light_publisher;
 mod types;
-mod urdf_parser;
 mod utils;
 mod vehicle_control;
 mod vehicle_physics;

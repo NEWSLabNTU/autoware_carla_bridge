@@ -39,3 +39,4 @@ log/
 staging/
 pkg_install/
 *.deb
+play_log/

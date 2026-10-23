@@ -4,7 +4,6 @@ use acb_bridge::{
         carla_to_ros_position, euler_to_quaternion, quaternion_to_euler, ros_to_carla_position,
     },
     tf_bridge::TFBuffer,
-    urdf_parser::parse_urdf_links,
 };
 use nalgebra::Vector3;
 use rclrs::{CreateBasicExecutor, SpinOptions};
@@ -56,27 +55,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get the URDF
     if let Some(urdf) = detector.get_urdf() {
         tracing::info!("URDF received ({} bytes)", urdf.len());
-
-        // Parse URDF for sensors
-        tracing::info!("Parsing URDF for sensors...");
-        match parse_urdf_links(&urdf) {
-            Ok(sensors) => {
-                tracing::info!("Found {} links in URDF:", sensors.len());
-                for sensor in &sensors {
-                    tracing::info!("  - {}", sensor.link_name);
-                    tracing::info!(
-                        "    Parent: {}, Position: [{:.3}, {:.3}, {:.3}]",
-                        sensor.parent_frame,
-                        sensor.position.x,
-                        sensor.position.y,
-                        sensor.position.z
-                    );
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to parse URDF: {:?}", e);
-            }
-        }
     } else {
         tracing::warn!("No URDF available yet");
     }
