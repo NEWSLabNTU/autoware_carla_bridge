@@ -222,15 +222,17 @@ carla-logs *args:
     journalctl --user -u "carla-run-{{carla_port}}" {{args}}
 
 # CARLA must be running.
-# Run Autoware + bridge + demo scenario (loads the town first); auto_drive:=true adds the pilot; map:=<town>
+# Run Autoware + bridge + demo scenario (loads the town first); auto_drive:=true adds the pilot; map:=<town>;
+# spawn_index:=<n> the hero's spawn point (default 0)
 [positional-arguments]
 sim *args:
     #!/usr/bin/env bash
     set -e
-    auto_drive=false; rest=()
+    auto_drive=false; spawn_index=0; rest=()
     for a in "$@"; do
         case "$a" in
             auto_drive:=*) auto_drive="${a#*:=}" ;;
+            spawn_index:=?*) spawn_index="${a#*:=}" ;;
             *) rest+=("$a") ;;
         esac
     done
@@ -255,6 +257,7 @@ sim *args:
         map_path:="{{project}}/data/carla-autoware-bridge/$map_name" \
         carla_port:={{carla_port}} \
         map_name:="$map_name" \
+        spawn_index:="$spawn_index" \
         data_path:="{{data_path}}"
 
 # CARLA must be running; the scenario is started separately.
