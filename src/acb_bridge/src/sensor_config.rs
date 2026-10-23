@@ -681,7 +681,10 @@ mod tests {
 
     #[test]
     fn the_spec_check_names_both_hashes_only_when_they_differ() {
-        assert_eq!(spec_disagreement("d5d4b266c7fd1fb4", "d5d4b266c7fd1fb4"), None);
+        assert_eq!(
+            spec_disagreement("d5d4b266c7fd1fb4", "d5d4b266c7fd1fb4"),
+            None
+        );
         assert_eq!(spec_disagreement("", "d5d4"), None);
         assert_eq!(spec_disagreement("d5d4", ""), None);
         assert_eq!(
@@ -715,4 +718,3 @@ mod tests {
         assert_eq!(merged.image_size_y, Some(600)); // From defaults
     }
 }
-

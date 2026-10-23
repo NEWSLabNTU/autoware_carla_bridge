@@ -97,6 +97,8 @@
        camera then feeds nothing, and rendering it every tick is CARLA's largest cost. -->
   <!-- Autoware's vehicle package's spec_hash.yaml: acb warns when vehicle_config came from
        another vehicle spec (roadmap 051). none = no check (an empty parameter is refused). -->
+  <arg name="carla_physics" default="none" description="sim_vehicle_spec's carla_physics.yaml; none = the blueprint's own physics"/>
+  <arg name="carla_physics_mode" default="apply" description="apply (put it on the hero) | verify (read it back)"/>
   <arg name="autoware_spec_hash_file" default="none" description="the Autoware vehicle package's spec_hash.yaml; none = no check"/>
   <arg name="disabled_sensors" default="" description="comma-separated vehicle_config sensor frames not to spawn"/>
 
@@ -107,6 +109,8 @@
     <param name="vehicle_name" value="$(var vehicle_name)"/>
     <param name="vehicle_config" value="$(var vehicle_config)"/>
     <param name="autoware_spec_hash_file" value="$(var autoware_spec_hash_file)"/>
+    <param name="carla_physics" value="$(var carla_physics)"/>
+    <param name="carla_physics_mode" value="$(var carla_physics_mode)"/>
     <param name="disabled_sensors" value="$(var disabled_sensors)"/>
     <param name="publish_clock" value="$(var publish_clock)"/>
     <param name="release_notify_endpoint" value="$(var release_notify_endpoint)"/>

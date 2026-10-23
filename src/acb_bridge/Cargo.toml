@@ -58,6 +58,8 @@ urdf-rs = "0.8.0"
 serde = { version = "1.0.226", features = ["derive"] }
 serde_json = "1.0.145"
 serde_yaml = "0.9"
+# sim_vehicle_spec's carla_physics.yaml as types (roadmap 051 K3)
+carla_physics_spec = { path = "../../deps/sim_vehicle_spec/crates/carla_physics_spec" }
 thiserror = "2.0.16"
 eyre = "0.6"
 color-eyre = "0.6"

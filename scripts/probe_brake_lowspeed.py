@@ -85,6 +85,7 @@ Destroys only that car, and hands the world back asynchronous.
                             [--carla-default-substeps]
 """
 import argparse, json, math, sys, time
+from pathlib import Path
 import carla
 
 PEDALS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
@@ -114,6 +115,8 @@ ap.add_argument("--targets", default=",".join(str(t) for t in TARGETS))
 ap.add_argument("--carla-default-substeps", action="store_true")
 ap.add_argument("--host", default="localhost")
 ap.add_argument("--port", type=int, default=2000)
+ap.add_argument("--physics", default="",
+                help="the vehicle spec's carla_physics.yaml for the probe car (roadmap 051)")
 args = ap.parse_args()
 pedals = [float(p) for p in args.pedals.split(",")]
 targets = [float(t) for t in args.targets.split(",")]
@@ -150,6 +153,27 @@ if actor is None:
     world.apply_settings(orig)
     sys.exit("every point on the measurement straight is occupied; clear it and retry")
 assert actor.attributes.get("role_name") == ROLE_NAME, actor.attributes
+
+
+def put_physics(actor, path):
+    """The vehicle spec's CARLA physics (roadmap 051 K3: the maps are measured on the car
+    Autoware drives), applied, settled by a few ticks and read back."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "deps/sim_vehicle_spec"))
+    from sim_vehicle_spec import carla_physics
+
+    doc = carla_physics.load(path)
+    carla_physics.apply(actor, doc)
+    for _ in range(5):
+        world.tick()
+    off = carla_physics.differences(actor, doc)
+    if off:
+        actor.destroy()
+        world.apply_settings(orig)
+        sys.exit(f"{path} did not take: {off}")
+    return doc
+
+
+physics = put_physics(actor, args.physics) if args.physics else None
 
 
 def tick():
@@ -274,6 +298,7 @@ finally:
 
 with open(args.out, "w") as f:
     json.dump({"blueprint": args.blueprint, "timing": timing, "entry_margin": ENTRY_MARGIN,
+               "physics_hash": physics["physics_hash"] if physics else None,
                "settle_ticks": SETTLE_TICKS,
                "window": WINDOW, "v_stop": V_STOP, "pre_stop_ticks": PRE_STOP_TICKS,
                "runs": runs}, f)

@@ -5,6 +5,9 @@ members = [
     "src/carla_pcd_gen",
     "src/carla_manual_control",
 ]
+# The components under deps/ (roadmap 051) keep workspaces of their own: their crates are
+# path dependencies, built here, never members.
+exclude = ["deps"]
 
 [workspace.dependencies]
 # The feature names the CARLA this workspace talks to; carla-rust refuses to build without

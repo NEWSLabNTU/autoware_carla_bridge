@@ -48,7 +48,8 @@ running ego stack's acb_bridge adopts any vehicle named `hero`.
 
     probe_longitudinal.py [BLUEPRINT] [OUT.json] [--carla-default-substeps]
 """
-import json, math, sys, time
+import json, math, os, sys, time
+from pathlib import Path
 import carla
 
 PEDALS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
@@ -59,6 +60,9 @@ V_TOP = 27.0
 V_FLOOR_THROTTLE = 0.3
 V_FLOOR_BRAKE = 3.0
 DEFAULT_SUBSTEPS = "--carla-default-substeps" in sys.argv
+# --physics=<carla_physics.yaml>: the vehicle spec's physics on the probe car (roadmap 051)
+PHYSICS = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--physics=")), "")
+PORT = int(os.environ.get("CARLA_PORT", "2000"))
 argv = [a for a in sys.argv[1:] if not a.startswith("--")]
 BLUEPRINT = argv[0] if len(argv) > 0 else "vehicle.tesla.model3"
 OUT = argv[1] if len(argv) > 1 else "/tmp/longitudinal.json"
@@ -69,7 +73,7 @@ X_START, X_END, Y = 322.0, 108.0, 129.8
 # Brake ramps accelerate to speed first, and must leave themselves room to stop in.
 X_TURNAROUND = 215.0
 
-client = carla.Client("localhost", 2000)
+client = carla.Client("localhost", PORT)
 client.set_timeout(30.0)
 world = client.get_world()
 if world.get_settings().synchronous_mode:
@@ -100,6 +104,27 @@ for offset in range(0, 60, 6):
 if actor is None:
     world.apply_settings(orig)
     sys.exit("every point on the measurement straight is occupied; clear it and retry")
+
+
+def put_physics(actor, path):
+    """The vehicle spec's CARLA physics (roadmap 051 K3: the maps are measured on the car
+    Autoware drives), applied, settled by a few ticks and read back."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "deps/sim_vehicle_spec"))
+    from sim_vehicle_spec import carla_physics
+
+    doc = carla_physics.load(path)
+    carla_physics.apply(actor, doc)
+    for _ in range(5):
+        world.tick()
+    off = carla_physics.differences(actor, doc)
+    if off:
+        actor.destroy()
+        world.apply_settings(orig)
+        sys.exit(f"{path} did not take: {off}")
+    return doc
+
+
+physics = put_physics(actor, PHYSICS) if PHYSICS else None
 
 
 def speed_of():
@@ -192,5 +217,6 @@ finally:
     world.apply_settings(orig)
 
 with open(OUT, "w") as f:
-    json.dump({"blueprint": BLUEPRINT, "dt": DT, "timing": timing, "rows": rows}, f)
+    json.dump({"blueprint": BLUEPRINT, "dt": DT, "timing": timing, "rows": rows,
+               "physics_hash": physics["physics_hash"] if physics else None}, f)
 print("\n%d samples in %.0f s -> %s" % (len(rows), time.time() - t0, OUT))

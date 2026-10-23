@@ -38,6 +38,11 @@
        description="the map dir's CARLA signal table (carla_world --generate-signal-table); empty disables V2X signals"/>
   <arg name="map_origin_path" default="$(var map_path)/carla/map_origin.yaml"
        description="where CARLA's world origin sits in the map frame; no file = zero (TUM towns)"/>
+  <!-- The vehicle spec's CARLA physics (roadmap 051): apply = acb puts it on the hero (no
+       scenario bridge: a hero any client spawned becomes the spec's car); verify = a
+       scenario's CARLA world server applied it and acb reads it back. none = the blueprint's. -->
+  <arg name="carla_physics" default="$(find-pkg-share sim_vehicle_spec)/generated/$(var vehicle_model)/carla_physics.yaml"/>
+  <arg name="carla_physics_mode" default="apply" description="apply | verify"/>
   <arg name="accel_map_path" default="$(find-pkg-share $(var vehicle_model)_description)/config/accel_map.csv"/>
   <arg name="brake_map_path" default="$(find-pkg-share $(var vehicle_model)_description)/config/brake_map.csv"/>
   <arg name="report_measured_steering" default="false"/>
@@ -65,6 +70,8 @@
     <include file="$(find-pkg-share acb_bridge)/launch/acb_bridge.launch.xml">
       <arg name="disabled_sensors" value="$(eval &quot;'camera6/camera_link' if '$(var traffic_light_fusion_only)' == 'true' else ''&quot;)"/>
       <arg name="vehicle_config" value="$(var vehicle_config)"/>
+      <arg name="carla_physics" value="$(var carla_physics)"/>
+      <arg name="carla_physics_mode" value="$(var carla_physics_mode)"/>
       <arg name="autoware_spec_hash_file" value="$(find-pkg-share $(var vehicle_model)_description)/config/spec_hash.yaml"/>
       <arg name="carla_address" value="$(var carla_host)"/>
       <arg name="carla_port" value="$(var carla_port)"/>

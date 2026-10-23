@@ -15,6 +15,7 @@ dependencies = [
  "builtin_interfaces",
  "bytemuck",
  "carla",
+ "carla_physics_spec",
  "color-eyre",
  "ctrlc",
  "eyre",
@@ -832,6 +833,14 @@ dependencies = [
  "pcd-rs",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "carla_physics_spec"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_yaml",
 ]
 
 [[package]]

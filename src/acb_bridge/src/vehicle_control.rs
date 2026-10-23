@@ -991,6 +991,7 @@ impl VehicleControlBridge {
         base_link_in_actor: nalgebra::Vector3<f64>,
         mode: Arc<ControlMode>,
         control_cmd_timeout_s: f64,
+        pedal_lags: crate::pedal_lag::Lags,
     ) -> Result<Self> {
         let steer_geometry = Self::read_steer_geometry(&vehicle);
         // A new vehicle session starts under Autoware, whatever the last one ended in.
@@ -1030,6 +1031,8 @@ impl VehicleControlBridge {
         let vehicle_for_control = vehicle.clone();
         let state_for_control = state.clone();
         let stall_for_control = stall.clone();
+        // What CARLA's model lacks between pedal and wheel (roadmap 051 K3); off: none.
+        let pedal_lag = Mutex::new(crate::pedal_lag::PedalLag::new(pedal_lags));
         // Trim on the steering command, applied to the normalized value sent to CARLA.
         // 1.0 sends exactly what the Ackermann inverse asks for, which is right for the
         // blueprints measured so far (docs/issues/006). It exists because that inverse is
@@ -1086,6 +1089,7 @@ impl VehicleControlBridge {
                     calibration.as_ref(),
                     trace.as_deref(),
                     &stall_for_control,
+                    &pedal_lag,
                     received,
                     crate::utils::ros_time_now_secs(&node_for_clock),
                     &msg,
@@ -1460,6 +1464,7 @@ impl VehicleControlBridge {
         longitudinal: Option<&crate::longitudinal_map::LongitudinalCalibration>,
         trace: Option<&crate::control_trace::ControlTrace>,
         stall: &Mutex<StallWatch>,
+        pedal_lag: &Mutex<crate::pedal_lag::PedalLag>,
         received: std::time::Instant,
         now_sim_s: f64,
         cmd: &autoware_control_msgs::msg::Control,
@@ -1608,6 +1613,16 @@ impl VehicleControlBridge {
                     control.throttle = 0.0;
                 }
             }
+
+            // The brake hydraulics and motor lag CARLA's model lacks (roadmap 051 K3), on the
+            // pedals as decided: what the car gets is what a real one would by now.
+            let (throttle, brake) =
+                pedal_lag
+                    .lock()
+                    .unwrap()
+                    .step(control.throttle, control.brake, now_sim_s);
+            control.throttle = throttle;
+            control.brake = brake;
 
             // The two stages the bridge owns: turning the command into a CARLA control, and
             // the RPC that delivers it. Recorded rather than inferred -- see control_trace.

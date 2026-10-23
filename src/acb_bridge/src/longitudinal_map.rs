@@ -477,13 +477,14 @@ default,0.0,2.0,4.0,6.0
         }
     }
 
-    /// The stop that tripped the MRM: -2.5 m/s^2 at 2 m/s. The brake map now says pedal 0.5
-    /// delivers -2.49 there, which the low-speed probe measured directly.
+    /// The stop that tripped the MRM: -2.5 m/s^2 at 2 m/s. On the spec's physics (roadmap 051
+    /// K3) the brake map says pedal 0.1 delivers -1.78 there and 0.2 -3.55, which the
+    /// low-speed probe measured directly: 0.141 between them.
     #[test]
     fn shipped_maps_stop_from_low_speed_on_the_brake() {
         let cmd = shipped().command_for(-2.5, 2.0);
         assert_eq!(cmd.throttle, 0.0, "{cmd:?}");
-        assert!((cmd.brake - 0.503).abs() < 0.01, "{cmd:?}");
+        assert!((cmd.brake - 0.141).abs() < 0.01, "{cmd:?}");
     }
 
     #[test]

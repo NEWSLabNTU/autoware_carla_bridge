@@ -12,6 +12,7 @@ mod error;
 mod ground_truth_objects;
 mod log_writer;
 mod longitudinal_map;
+mod pedal_lag;
 mod sensor_config;
 mod sensor_release;
 mod tf_bridge;
@@ -21,6 +22,7 @@ mod types;
 mod urdf_parser;
 mod utils;
 mod vehicle_control;
+mod vehicle_physics;
 
 use bridge::{actor_bridge::BridgeType, sensor_bridge::SensorBridge};
 
@@ -207,6 +209,10 @@ struct BridgeParams {
     /// The Autoware vehicle package's `spec_hash.yaml` (autoware_sim_vehicle, roadmap 051);
     /// empty: not checked. Compared with `vehicle_config`'s spec_hash at start.
     pub autoware_spec_hash_file: String,
+    /// sim_vehicle_spec's carla_physics.yaml, or "none" (the blueprint's own physics).
+    pub carla_physics: String,
+    /// `apply` (acb's own launches) or `verify` (a scenario's CARLA world server applied it).
+    pub carla_physics_mode: String,
     /// Rear axle's position along the actor's x axis (metres, CARLA axes), overriding the
     /// measurement from CARLA's wheels. `None` -- the default -- measures it. An escape
     /// hatch for blueprints without wheel physics; see `CarlaVehicle::measure_base_link`.
@@ -392,6 +398,18 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        let carla_physics = node
+            .declare_parameter("carla_physics")
+            .default(Arc::from("none"))
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
+        let carla_physics_mode = node
+            .declare_parameter("carla_physics_mode")
+            .default(Arc::from("apply"))
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         // Optional, with no default: unset means "measure the rear axle from the wheels",
         // which is right for every blueprint with wheel physics. See roadmap 014 in
         // carla-scenario-bridge, "Pose reference point".
@@ -473,6 +491,14 @@ impl BridgeParams {
             brake_map_path: brake_map_path_val.to_string(),
             autoware_spec_hash_file: {
                 let v: Arc<str> = autoware_spec_hash_file.get();
+                v.to_string()
+            },
+            carla_physics: {
+                let v: Arc<str> = carla_physics.get();
+                v.to_string()
+            },
+            carla_physics_mode: {
+                let v: Arc<str> = carla_physics_mode.get();
                 v.to_string()
             },
             base_link_offset_x: base_link_offset_x.get(),
@@ -1069,6 +1095,40 @@ fn main() -> Result<()> {
     );
     let mut vehicle_config = sensor_config::VehicleConfig::from_file(&params.vehicle_config)?;
     check_spec_hash(&vehicle_config.spec_hash, &params.autoware_spec_hash_file);
+    // The vehicle spec's physics (roadmap 051 K3): put on, or checked on, every hero.
+    let carla_physics = if params.carla_physics.is_empty() || params.carla_physics == "none" {
+        tracing::info!("carla_physics none: the hero runs its blueprint's own physics");
+        None
+    } else {
+        let p = carla_physics_spec::CarlaPhysics::load(&params.carla_physics)
+            .map_err(error::BridgeError::ConfigError)?;
+        let mode = vehicle_physics::Mode::parse(&params.carla_physics_mode)
+            .map_err(error::BridgeError::ConfigError)?;
+        if !vehicle_config.spec_hash.is_empty() && vehicle_config.spec_hash != p.spec_hash {
+            tracing::warn!(
+                "carla_physics was generated from spec {}, vehicle_config from {}: rebuild \
+                 the stale one (sim_vehicle_spec)",
+                &p.spec_hash[..p.spec_hash.len().min(12)],
+                &vehicle_config.spec_hash[..vehicle_config.spec_hash.len().min(12)]
+            );
+        }
+        tracing::info!(
+            "carla_physics {} ({mode:?}): {} for {}, {} kg",
+            params.carla_physics,
+            &p.spec_hash[..p.spec_hash.len().min(12)],
+            p.blueprint,
+            p.vehicle.mass
+        );
+        Some((p, mode))
+    };
+    let pedal_lags = carla_physics
+        .as_ref()
+        .map(|(p, _)| pedal_lag::Lags {
+            brake_dead_time: p.command_lags.brake_dead_time,
+            brake_time_constant: p.command_lags.brake_time_constant,
+            motor_time_constant: p.command_lags.motor_time_constant,
+        })
+        .unwrap_or_default();
     for name in params
         .disabled_sensors
         .split(',')
@@ -1130,6 +1190,44 @@ fn main() -> Result<()> {
                     continue;
                 }
             };
+
+        if let Some((physics, mode)) = &carla_physics {
+            let blueprint = hero_vehicle.type_id();
+            // CARLA applies physics at the next tick, and under a scenario the world server
+            // applies it a tick after the hero appears: the check reads again for a while
+            // before refusing.
+            let mut result = match vehicle_physics::wrong_blueprint(physics, &blueprint) {
+                Some(why) => Err(why),
+                None if *mode == vehicle_physics::Mode::Apply => {
+                    vehicle_physics::apply(&hero_vehicle, physics)
+                }
+                None => Ok(()),
+            };
+            if result.is_ok() {
+                result = vehicle_physics::check(&hero_vehicle, physics, *mode);
+                for _ in 0..20 {
+                    if result.is_ok() {
+                        break;
+                    }
+                    pump_ros_for(&mut executor, Duration::from_millis(500));
+                    result = vehicle_physics::check(&hero_vehicle, physics, *mode);
+                }
+            }
+            match result {
+                Ok(()) => tracing::info!(
+                    "The hero runs the vehicle spec's physics ({})",
+                    match mode {
+                        vehicle_physics::Mode::Apply => "applied",
+                        vehicle_physics::Mode::Verify => "verified",
+                    }
+                ),
+                Err(why) => {
+                    tracing::error!("{why}; looking again in 5 s");
+                    pump_ros_for(&mut executor, Duration::from_secs(5));
+                    continue;
+                }
+            }
+        }
 
         tracing::info!("Attaching sensors to hero vehicle...");
         let carla_vehicle = match CarlaVehicle::new(
@@ -1340,6 +1438,7 @@ fn main() -> Result<()> {
             base_link_in_actor,
             control_mode.clone(),
             params.control_cmd_timeout_s,
+            pedal_lags,
         )?;
         tracing::info!("Vehicle control bridge created");
 

@@ -40,7 +40,8 @@ where the band has samples on both sides of the column, the cell is a least-squa
 through (v, accel) read at the column; otherwise (the table's edges, or a pedal that stops
 short of the column) the median as before.
 """
-import json, statistics, sys
+import json
+import time, statistics, sys
 
 # Up to 24 m/s only. The straight is not long enough to hold a steady state above that, so
 # samples near the top of a ramp are entry transients rather than response.
@@ -57,6 +58,11 @@ lowspeed = json.load(open(lowspeed_src))
 if ramps.get("timing") != lowspeed.get("timing"):
     sys.exit("the two probes ran under different physics timing: %s vs %s"
              % (ramps.get("timing"), lowspeed.get("timing")))
+# The vehicle spec's physics both probes ran (roadmap 051: --physics), or the blueprint's own.
+PHYSICS_HASH = ramps.get("physics_hash")
+if PHYSICS_HASH != lowspeed.get("physics_hash"):
+    sys.exit("the two probes ran on different physics: physics_hash %s vs %s"
+             % (PHYSICS_HASH, lowspeed.get("physics_hash")))
 
 
 def line_at(pts, s):
@@ -180,3 +186,19 @@ write("brake", out_dir + "/brake_map.csv",
        "scripts/probe_brake_lowspeed.py (0 m/s holds the %.0f m/s value), the rest by "
        "scripts/probe_longitudinal.py" % (ramps["blueprint"], LOWSPEED_MAX, ZERO_FROM), timing],
       pedals, table)
+
+# What the maps were measured on, for autoware_sim_vehicle's check (roadmap 051): it refuses
+# maps whose physics_hash is not the spec's.
+with open(out_dir + "/pedal_maps.yaml", "w") as f:
+    f.write("# accel_map.csv and brake_map.csv beside this file: Autoware's pedal maps for this "
+            "car,\n# measured on CARLA (acb's scripts/build_longitudinal_maps.py), read by "
+            "acb_bridge and by\n# Autoware's raw_vehicle_cmd_converter. Measured, not "
+            "generated: what they were measured\n# against is recorded here and checked by "
+            "`just check-generated`.\n")
+    if PHYSICS_HASH:
+        f.write("measured_on: spec\nphysics_hash: %s\n" % PHYSICS_HASH)
+    else:
+        f.write("measured_on: blueprint\nphysics_hash: null\n")
+    f.write('basis: "%s, %s, %s"\n' % (ramps["blueprint"], timing,
+                                      time.strftime("%Y-%m-%d")))
+print("wrote", out_dir + "/pedal_maps.yaml")
