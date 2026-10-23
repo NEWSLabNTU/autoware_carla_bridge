@@ -7,10 +7,17 @@
 - **`carla_args.bash`** - The `name:=value` CARLA launch arguments `carla_start.sh` and
   `third_party/carla/run.sh` share, and the refusal of the env variables they replaced
 - **`carla_stop.sh`** - Stop CARLA simulator service
+- **`carla_load_town.py`** - Load a town unless it is already loaded (`--port`, `--town`).
+  `just sim` runs it before its launch: a load is a new CARLA episode, which ends a running
+  acb_bridge and its stack
 
 ## Demo
 
-- **`demo_scenario.py`** - Load CARLA map, configure weather/traffic, monitor actors. Waits for CARLA connection with retry.
+- **`demo_scenario.py`** - Load CARLA map, spawn the hero, tick CARLA, destroy the hero's sensors and then the hero on exit. Waits for CARLA connection with retry. (`just sim` and `just scenario` run `acb_scenario`'s copy, `src/acb_scenario/acb_scenario/demo_scenario.py`.)
+
+## Vehicle check
+
+- **`vehicle_check_host.py`** - The scene `just vehicle-check` drives: a hero on a straight lane, CARLA ticked synchronously in real time (`--port`, `--blueprint`)
 
 ## Setup
 

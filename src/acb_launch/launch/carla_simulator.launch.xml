@@ -35,7 +35,7 @@
   <arg name="publish_clock" default="true" description="acb publishes /clock from CARLA in this domain"/>
   <arg name="seed_localization_on_attach" default="true"/>
   <arg name="traffic_light_map_path" default="$(var map_path)/carla/traffic_lights.yaml"
-       description="the map dir's CARLA signal table (carla_world --generate-signal-table); empty disables V2X signals"/>
+       description="the map dir's CARLA signal table (swb_carla_world --generate-signal-table); empty disables V2X signals"/>
   <arg name="map_origin_path" default="$(var map_path)/carla/map_origin.yaml"
        description="where CARLA's world origin sits in the map frame; no file = zero (TUM towns)"/>
   <!-- The vehicle spec's CARLA physics (roadmap 051): apply = acb puts it on the hero (no
@@ -54,7 +54,7 @@
   <arg name="allow_manual" default="false" description="accept a driver's MANUAL takeover (acb_bridge.launch.xml)"/>
   <arg name="honor_emergency_cmd" default="false" description="full brake on emergency_cmd instead of the control command (acb_bridge.launch.xml)"/>
   <arg name="control_cmd_timeout_s" default="1.0" description="brake to a stop when control_cmd is older than this, s of sim time; 0 disables (acb_bridge.launch.xml)"/>
-  <!-- carla_world's sensor-release sockets, its ssv2_port + 1 and + 2 (acb_bridge.launch.xml) -->
+  <!-- swb_carla_world's sensor-release sockets, its ssv2_port + 1 and + 2 (acb_bridge.launch.xml) -->
   <arg name="release_notify_endpoint" default="tcp://127.0.0.1:5556" description="scenario runner's release-notice PUB socket; empty disables"/>
   <arg name="release_ack_endpoint" default="tcp://127.0.0.1:5557" description="scenario runner's release-acknowledgement PULL socket"/>
 

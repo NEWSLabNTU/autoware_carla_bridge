@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Single Vehicle Demo (All-in-One)
-     Launches Autoware (with bridge + monitor via vehicle interface) and a scenario.
+     Launches Autoware with acb_bridge (carla_simulator.launch.xml) and the demo scenario.
      CARLA must be started separately.
 -->
 <launch>
@@ -13,7 +13,7 @@
   <arg name="spawn_index" default="0" description="Spawn point index"/>
   <arg name="data_path" default="$(env HOME)/autoware_data" description="Autoware ML models and data directory; must be writable, populate with: ros2 run autoware_sim_profile setup_autoware_data"/>
 
-  <!-- Autoware + bridge + monitor (via vehicle interface) -->
+  <!-- Autoware + acb_bridge -->
   <include file="$(find-pkg-share acb_launch)/launch/carla_simulator.launch.xml">
     <arg name="map_path" value="$(var map_path)"/>
     <arg name="data_path" value="$(var data_path)"/>

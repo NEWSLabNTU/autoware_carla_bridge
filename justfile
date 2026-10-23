@@ -222,7 +222,7 @@ carla-logs *args:
     journalctl --user -u "carla-run-{{carla_port}}" {{args}}
 
 # CARLA must be running.
-# Run Autoware + bridge + scenario + monitor; auto_drive:=true adds the pilot; map:=<town>
+# Run Autoware + bridge + demo scenario (loads the town first); auto_drive:=true adds the pilot; map:=<town>
 [positional-arguments]
 sim *args:
     #!/usr/bin/env bash
@@ -252,7 +252,7 @@ sim *args:
         data_path:="{{data_path}}"
 
 # CARLA must be running; the scenario is started separately.
-# Run Autoware + bridge + monitor; map:=<town> (default Town01)
+# Run Autoware + bridge (`just monitor` for the GUI); map:=<town> (default Town01)
 [positional-arguments]
 autoware *args:
     #!/usr/bin/env bash

@@ -1,205 +1,22 @@
-# Autoware CARLA Bridge
+# Autoware CARLA Bridge (acb)
 
 ## Project Overview
 
-Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs.
+Native ROS 2 bridge between CARLA and Autoware, written in Rust using rclrs: CARLA's vehicle
+interface for Autoware. `acb_bridge` attaches to the CARLA vehicle with `role_name="hero"`,
+spawns and publishes its sensors, publishes the vehicle status and `/clock`, and applies
+Autoware's control.
 
-**Repository**: https://github.com/NEWSLabNTU/ros_zenoh_bridge
+**Repository**: https://github.com/NEWSLabNTU/autoware_carla_bridge (branch `target-shape`
+during roadmap 051)
 
-**Status**: ✅ Phases 1-4 Complete - End-to-end autonomous driving working (CARLA + Bridge + Autoware). Remaining: vehicle calibration, map automation, formal testing.
-
-**Recent**: ✅ Bridge workflow redesign (2026-03-22) - Scenario script owns vehicle lifecycle; bridge finds hero vehicle and attaches sensors only. GNSS auto-initializes Autoware localization without manual intervention.
-
----
-
-## Current State
-
-### What Works
-
-**Rust Bridge (rclrs)**:
-- ✅ Native ROS 2 publishers/subscribers (no Zenoh/CDR serialization)
-- ✅ Clock publisher and utility functions
-- ✅ Autoware integration:
-  - Autoware instance detection via `/robot_description`
-  - TF2 transform buffer with multi-hop chain traversal
-  - ROS ↔ CARLA coordinate conversion
-  - Config-driven sensor spawning (`vehicle_config.yaml`)
-  - **Hero vehicle pattern**: bridge polls CARLA for vehicle with `role_name="hero"`, attaches sensors only (vehicle lifecycle owned by scenario script)
-- ✅ Sensor data publishing (all verified via autonomous driving):
-  - Camera (Image + CameraInfo)
-  - LiDAR (PointCloud2 with PointXYZIRC format for NDT)
-  - IMU (acceleration, angular velocity, orientation)
-  - GNSS (NavSatFix)
-- ✅ Vehicle control:
-  - Subscribes to `/control/command/actuation_cmd` (ActuationCommandStamped)
-  - Publishes VelocityReport, SteeringReport, ControlModeReport, GearReport at ~20Hz
-  - GNSS NavSatFix → gnss_poser → `autoware_automatic_pose_initializer_node` → NDT align → localization initialized automatically (no manual intervention)
-- ✅ Connection robustness:
-  - Infinite retry loops for CARLA connection with panic catching
-  - Infinite wait for Autoware detection with executor spinning
-  - Graceful Ctrl-C handling during retry/wait phases
-- ✅ Sensor cleanup on Autoware loss (sensors destroyed; vehicle owned by scenario script, not destroyed)
-- ✅ Responsive shutdown (100ms Ctrl-C exit)
-
-**Autonomous Driving (standalone scripts)**:
-- ✅ **`scripts/auto_drive.py`** - Route + engage workflow (localization now auto-handled by GNSS)
-  - Sets route via `/api/routing/set_route_points`, engages autonomous mode, waits for arrival
-  - Uses Autoware AD API v1 services with retry logic and state monitoring
-  - Options: `--poses`, `--timeout`, `--no-wait-arrival`
-- ✅ **`scripts/demo_scenario.py`** - Spawns hero vehicle in CARLA
-  - Sets `role_name="hero"` on spawned vehicle so bridge can find it
-  - Options: `--blueprint`, `--spawn-index`
-  - Owns vehicle lifecycle: destroys vehicle on exit
-- ✅ **`scripts/capture_poses.py`** - Captures poses from RViz
-  - Subscribes to `/initialpose`, `/planning/mission_planning/goal`, `/rviz/routing/rough_goal`
-  - Saves to YAML with flat format `{x, y, z, qx, qy, qz, qw}` + covariance
-  - Partial save on Ctrl-C
-
-**Pre-converted Maps**:
-- ✅ Town01, Town02, Town03, Town05, Town10 in `data/carla-autoware-bridge/`
-- ✅ Each with lanelet2_map.osm, pointcloud_map.pcd, map_config.yaml, map_projector_info.yaml
-
-### What's Next
-- [x] Vehicle calibration per CARLA model -- `scripts/extract_vehicle_params.py` reads wheel
-  geometry from `physics_control` and the body from the actor bounding box, and
-  `vehicle_info.param.yaml` now carries the measured Tesla rather than Lexus-like defaults.
-  A `steering_multiplier` parameter trims the command per blueprint. Re-run the script when
-  changing blueprint.
-- [x] Vehicle respawn without a bridge restart -- works, and is exercised on every scenario.
-  `SessionExit::VehicleLost` cleans up the orphaned sensors, reconnects to CARLA to drop the
-  stale streams, and waits for the next spawn; `SessionExit::AutowareRestarted` rebuilds
-  sensors and bridges against the vehicle that exists now while keeping the CARLA connection
-  and its clock. Verified across eight consecutive scenarios on one stack, each despawning
-  and respawning the ego, with the bridge re-attaching every time.
-  The Autoware-restart branch is not exercised in this deployment, where acb_bridge and
-  Autoware are launched together by the same `play_launch` and therefore restart together.
-  An attempt to force it by removing `/robot_description` did not reach the health check,
-  which only runs while a vehicle is attached.
-- [ ] Formal test scripts and performance benchmarks
-- [ ] Map conversion automation (custom maps beyond pre-converted TUMFTM)
-
----
-
-## Build & Run System
-
-### Build (Rust Bridge)
-
-Uses colcon-cargo-ros2 for seamless Rust + ROS 2 integration:
-
-```bash
-just build  # Standard colcon build
-just clean  # Clean build artifacts (optional, for fresh rebuild)
-```
-
-**IMPORTANT**: Always use `just build` (and optionally `just clean`) to rebuild the project. Do NOT use `colcon build` directly with specific packages, as `just build` ensures proper environment setup and consistent build configuration.
-
-No manual staging or configuration required - builds like any ROS 2 package.
-
-### Runtime Management (justfile)
-
-**CARLA Management** (systemd service):
-```bash
-just carla-start    # Start CARLA as background service
-                    #   [map:=Town01] [quality:=epic|low] [render:=offscreen|window] [extra_args:=]
-                    #   quality:=low only if no run changes towns (Low segfaults on
-                    #   load_world/reload_world, carla-simulator/carla#4940)
-just carla-stop     # Stop CARLA service
-just carla-status   # Check CARLA service status
-just carla-logs     # View CARLA service logs
-```
-
-**Foreground Commands**:
-```bash
-just run-autoware   # Start Autoware planning simulator (foreground)
-just run-bridge     # Start CARLA-Autoware bridge (foreground)
-just run-demo       # Start Autoware + bridge + scenario + pilot + monitor (foreground)
-just run-monitor    # Start vehicle monitor GUI (foreground)
-just run-scenario   # Start demo scenario (foreground)
-just run-pilot      # Start autonomous driving pilot (foreground)
-```
-
-**Demo Workflow** (two-step):
-```bash
-# 1. Start CARLA (background service, takes ~30s)
-just carla-start
-
-# 2. Start everything else (Autoware + bridge + scenario + pilot + monitor)
-just run-demo
-
-# Check CARLA status
-just carla-status
-
-# Stop CARLA when done
-just carla-stop
-```
-
-CARLA is started separately because it takes a long time to initialize. The bridge and scenario have retry loops for CARLA connection.
-
-**Autonomous Driving**:
-```bash
-# Start CARLA
-just carla-start
-
-# Start demo
-just run-demo
-
-# (Optional) Capture poses from RViz
-just run-capture-poses /path/to/output.yaml
-
-# (Optional) Run pilot separately
-just run-pilot /path/to/poses.yaml
-
-# Stop CARLA
-just carla-stop
-```
-
----
-
-## Environment Setup
-
-**CRITICAL**: Always source `.envrc` before working on this project.
-
-The `.envrc` file sets up the required environment:
-- ROS 2 Humble
-- Autoware workspace (provides Autoware message packages)
-- Local install directory
-
-### Using direnv (Recommended)
-
-```bash
-# Install direnv if not already installed
-sudo apt install direnv
-
-# Add to ~/.bashrc
-eval "$(direnv hook bash)"
-
-# Allow .envrc in this directory (one-time)
-cd /path/to/autoware_carla_bridge
-direnv allow
-```
-
-Environment is automatically sourced when entering the directory.
-
-### Manual Sourcing
-
-If not using direnv, source manually each session:
-
-```bash
-source /opt/ros/humble/setup.sh
-source third_party/autoware/autoware_repo/install/setup.sh
-source install/setup.sh  # After first build
-```
-
-### Verification
-
-Check that Autoware packages are available:
-
-```bash
-# Should list Autoware message packages
-colcon list | grep autoware_vehicle_msgs
-```
-
-**Note for Claude Code**: When starting a new session, always verify the environment is properly sourced. Build failures with "package not found" errors typically indicate missing environment setup.
+**Its place**: one of the eight repositories of scenario-world-bridge's roadmap 051 ("the
+target shape", `docs/roadmap/051-target-shape.md` in scenario-world-bridge). acb holds the
+CARLA vehicle bridge, CARLA's stand-alone bring-up and demo (`demo_scenario.py`, the pilot
+from `autoware_sim_pilot`) and the map tools. It depends on `sim_vehicle_spec` and
+`autoware_sim_vehicle` (submodules under `deps/`), and on nothing of scenario-world-bridge
+(swb): acb plus those two is a complete Autoware-on-CARLA system without SSv2. swb runs the
+same `acb_bridge` as a scenario's ego, next to its CARLA world server `swb_carla_world`.
 
 ---
 
@@ -208,67 +25,206 @@ colcon list | grep autoware_vehicle_msgs
 ```
 .
 ├── src/
-│   ├── acb_bridge/                # Main bridge (rclrs)
-│   ├── acb_launch/                # Autoware launch + config
-│   ├── acb_demo_launch/           # Demo orchestration
-│   ├── acb_pilot/                 # Autonomous driving pilot (Python)
-│   ├── individual_params/         # Sensor calibrations (name fixed by Autoware, see docs/issues/013)
-│   ├── acb_sensor_kit_launch/     # Sensor kit launch + description
-│   ├── acb_vehicle_launch/        # Vehicle launch + description
-│   ├── carla_pcd_gen/             # Standalone PCD generator
-│   ├── carla_map_gen/             # Standalone map generator
-│   ├── carla_manual_control/      # Standalone vehicle control GUI
-│   └── external/
-│       ├── autoware@              # Symlink to Autoware workspace
-│       ├── carla-rust/            # CARLA Rust bindings
-│       └── zenoh_carla_bridge/    # Reference implementation
-├── docs/                          # Technical documentation
-│   ├── README.md                  # Docs index
-│   ├── design/                    # Architecture & design docs
-│   ├── guides/                    # How-to guides
-│   ├── roadmap/                   # Phase 1-6 roadmap docs
-│   └── archive/                   # Historical migration docs
-├── scripts/                       # Python utilities
-│   ├── auto_drive.py              # Autonomous driving sequence
-│   ├── capture_poses.py           # Capture poses from RViz
-│   ├── get_carla_spawn_points.py  # Get valid CARLA spawn points
-│   ├── poses.yaml                 # Current poses (auto-generated)
-│   └── README.md                  # Scripts documentation
-├── third_party/
-│   ├── autoware@                  # Symlink for just commands
-│   └── carla/                     # CARLA run scripts
-├── data/
-│   └── carla-autoware-bridge/     # Pre-converted maps (Town01-10)
-├── justfile                       # Service management commands
-└── build/, install/, log/         # Colcon artifacts
+│   ├── acb_bridge/                # The bridge (Rust, rclrs); launch/acb_bridge.launch.xml
+│   ├── acb_launch/                # carla_simulator.launch.xml: the Autoware profile + acb_bridge
+│   ├── acb_demo_launch/           # single_vehicle_autoware.launch.xml: the above + acb_scenario
+│   ├── acb_scenario/              # demo_scenario (spawns the hero, ticks CARLA at 20 Hz)
+│   ├── carla_manual_control/      # Vehicle monitor / manual control GUI (Rust)
+│   ├── carla_map_gen/             # Lanelet2 map from a running CARLA (Python)
+│   ├── carla_pcd_gen/             # Point cloud map from a running CARLA (Rust)
+│   └── external/                  # COLCON_IGNORE only
+├── deps/                          # Submodules (branch target-shape), COLCON_IGNOREd
+│   ├── sim_vehicle_spec/          #   the car's spec; generated/<car>/carla_sensors.yaml,
+│   │                              #   carla_physics.yaml; crates/carla_physics_spec (Rust reader)
+│   └── autoware_sim_vehicle/      #   cars/<car>/ (Autoware packages), individual_params,
+│                                  #   autoware_sim_profile, autoware_sim_pilot, autoware_sim_check
+├── scripts/                       # CARLA service, demo, map, probe and debug scripts (README.md)
+├── config/play_launch.yaml        # Composable-node load timeout for `just sim`
+├── third_party/carla/run.sh       # CARLA in the foreground (`just run-carla`)
+├── data/carla-autoware-bridge/    # Pre-converted TUM maps (`just setup`; git-ignored)
+├── docs/                          # design/, guides/, issues/ (one defect per file), roadmap/
+└── justfile
 ```
+
+### The car (roadmap 051 K2, K3)
+
+The car is the spec `tesla_model3`; everything selects it with `vehicle_model:=tesla_model3`.
+acb has no vehicle packages of its own any more (`acb_vehicle*`, `acb_sensor_kit*`,
+`individual_params` and `vehicle_config.yaml` are gone). From the spec:
+
+- `sim_vehicle_spec/generated/<car>/carla_sensors.yaml` -- the sensors acb spawns
+  (parameter `vehicle_config`). Positions come from TF (`/robot_description`), not the file.
+  A `map_origin` key is refused by name: the origin is the map's
+  (`<map dir>/carla/map_origin.yaml`, parameter `map_origin_path`).
+- `sim_vehicle_spec/generated/<car>/carla_physics.yaml` -- CARLA's `VehiclePhysicsControl`
+  for the car, plus `command_lags` (brake dead time and time constant, motor time constant),
+  `spec_hash` and `physics_hash`. Read through `carla_physics_spec` (`vehicle_physics.rs`).
+- `autoware_sim_vehicle/cars/<car>/` -- `<car>_description` (with `config/accel_map.csv`,
+  `brake_map.csv`, `spec_hash.yaml`), `<car>_launch`, `<car>_sensor_kit_description`,
+  `<car>_sensor_kit_launch`; `individual_params` beside them.
+
+Never edit generated files: change the spec and regenerate (`just generate` in
+sim_vehicle_spec, and autoware_sim_vehicle's generator).
+
+### Launch layering
+
+- `acb_bridge.launch.xml`: the node, every parameter documented inline.
+  `on_exit="shutdown"`, never respawned (see "Time"). Its own `carla_physics` default is
+  `none` (blueprint physics), so `just bridge` runs the blueprint's car.
+- `carla_simulator.launch.xml`: `autoware_sim_profile/launch/autoware.launch.xml` plus
+  `acb_bridge.launch.xml`, with `carla_physics` = the spec's file and
+  `carla_physics_mode:=apply`. Any argument it does not declare reaches the profile
+  (`max_velocity`, `lidar_detection_model`, `rviz`, `gpu`, `extra_launch`, `data_path`, the
+  `sim_*` switches).
+- The profile's switches are `sim_localization`, `sim_perception`, `sim_system`,
+  `sim_control`, `sim_planning`, `sim_clock_guard` (formerly `carla_*`).
+  `autoware_sim_profile`'s `check_launch_args` names the replacement for an old argument; swb's
+  wrappers run it. acb's own `just autoware` and `just sim` accept only `map:=` (and
+  `auto_drive:=`) and refuse anything else. A raw `ros2 launch`/`play_launch launch` with
+  `carla_control:=false` is silently ignored by ROS launch.
+- The profile's settings (MRM handler timeouts, component-state topics, MPC without steering
+  offset learning, the tracker's UNKNOWN pruning, `max_velocity`, perception without object
+  recognition) and their sync scripts live in `autoware_sim_vehicle` now; read its
+  `autoware_sim_profile/launch/autoware.launch.xml` and `config/`, and acb's `docs/issues/`
+  021-028 for why.
+
+---
+
+## Build & Run
+
+```bash
+git submodule update --init --recursive   # deps/ first: the build needs them
+just setup    # one-time: system deps, Autoware 1.5.0 Debian, TUM maps, play_launch
+just build    # colcon over src, deps/autoware_sim_vehicle, deps/sim_vehicle_spec;
+              #   --symlink-install, cargo profile dev-release
+just check    # rustfmt (nightly) + clippy -D warnings
+just test     # cargo nextest
+just clean
+```
+
+Recipes (`just --list`):
+
+```bash
+just carla-start [map:=] [quality:=epic|low] [render:=] [extra_args:=]  # systemd user unit carla-run-<port>
+just carla-stop | carla-status | carla-logs
+just run-carla ...         # CARLA in the foreground, same arguments
+just sim [map:=Town01] [auto_drive:=true]   # load the town, then Autoware + bridge + demo scenario
+just autoware [map:=]      # Autoware + bridge (does not load the town)
+just scenario [map:=]      # demo scenario only
+just bridge                # acb_bridge only, blueprint physics
+just vehicle-check [vehicle_model:=tesla_model3] [out:=<dir>]
+just pilot [poses_file]    # autoware_sim_pilot auto_drive
+just capture-poses <file>  # autoware_sim_pilot capture_poses
+just monitor               # carla_manual_control
+just generate-lanelet2|generate-pcd|generate-map <dir>; compare-lanelet2 <gen> <ref>
+just build-engines         # CenterPoint TensorRT engines
+just package               # release tarball (src + deps, merge-install)
+```
+
+None of `sim`, `autoware`, `scenario` or `bridge` starts the vehicle monitor; run
+`just monitor` for it.
+
+Project settings are `name:=value` arguments; host settings (`CARLA_PORT`, `CARLA_DIR`,
+`DISPLAY`, `AUTOWARE_DATA_PATH`, `AUTOWARE_SETUP`) come from the environment or `.env`
+(just's `dotenv-load`). `MAP_NAME`, `CARLA_MAP`, `CARLA_QUALITY`, `CARLA_RENDER` and
+`CARLA_EXTRA_ARGS` are refused.
+
+`quality:=low` must never change towns: CARLA 0.9.16 at Low segfaults on `load_world` to
+another town and on `reload_world()` (carla-simulator/carla#4940).
+
+### vehicle-check
+
+`just vehicle-check` checks the car on CARLA without Autoware or SSv2: CARLA running and
+ticked by nobody else; `scripts/vehicle_check_host.py` spawns the hero on a straight and ticks
+in real time; `acb_bridge` with `carla_physics_mode:=apply`; `autoware_sim_check`'s
+`vehicle_check.launch.xml` checks the contract (topics, types, rates, frames, stamps,
+`/robot_description`) and the dynamics (acceleration and brake steps against 0.35 m/s^2, a
+steering sweep against the bicycle model). It prints PASS/FAIL per step and exits 0 only if
+everything passed; logs and `report.json` in `play_log/vehicle_check/<time>/` (or `out:=`).
+
+### Under scenario-world-bridge
+
+The workspace builds acb twice: acb's own `just build` (`src/autoware_carla_bridge/install`)
+and swb's (`--base-paths src`, which includes acb's packages). Which `acb_bridge` an ego
+stack runs depends on how acb's workspace was built; swb's CLAUDE.md ("Use just build")
+explains it. After an acb change, rebuild both from a clean environment, acb's first, and
+check what the live process loaded (`/proc/<pid>/cmdline`) before trusting a measurement. A
+stale `acb_bridge` measures plausibly and wrongly.
+
+---
+
+## Environment Setup
+
+`.envrc` (direnv) sources `/opt/autoware/1.5.0/setup.bash` (ROS 2 Humble included; falls back
+to `/opt/ros/humble`) and `install/setup.bash`. Without direnv:
+
+```bash
+source /opt/autoware/1.5.0/setup.bash
+source install/setup.bash  # after the first build
+```
+
+Build failures with "package not found" usually mean the environment is not sourced, or
+`deps/` is not initialised (`tesla_model3_description`, `autoware_sim_profile`,
+`carla_physics_spec` all come from there).
+
+### CARLA version is a Cargo feature
+
+`carla = { version = "0.15.1", features = ["carla-0916"] }` (workspace `Cargo.toml`, crates.io,
+no local carla-rust). `CARLA_DIR` (CARLA's install) is read by carla-sys as a CARLA source
+tree and breaks the build; the cargo recipes unset it, a bare `cargo` or `colcon build` in a
+shell that exports it fails. A stray `CARLA_VERSION` overrides the feature. At run time
+acb_bridge compares its CARLA version with the server's on connect and exits on a mismatch.
 
 ---
 
 ## Key Technical Decisions
 
 ### Architecture
-- **Single client**: One CARLA connection vs two separate clients
-- **Synchronous mode**: CARLA runs in sync mode (20 Hz, fixed_delta_seconds=0.05). `demo_scenario.py` is the sole ticker; bridge passively waits via `wait_for_tick_or_timeout()`
-- **Sensor-only CarlaVehicle**: Bridge attaches sensors to an existing hero vehicle; does not spawn or destroy the vehicle
-- **Linear workflow**: Sequential steps (detect Autoware → parse URDF → wait for hero vehicle → attach sensors)
-- **Direct publishing**: `Arc<Publisher>` from CARLA callbacks (no threading/channels)
-- **GNSS auto-localization**: GNSS → gnss_poser → `autoware_automatic_pose_initializer_node` → NDT align → localization (no manual init needed)
+- **Hero pattern**: acb attaches to an existing vehicle with `role_name="hero"`; it never
+  spawns or destroys it. Whoever spawned it (demo_scenario, swb's world server, a hand-made
+  scene) owns it. acb owns the sensors it spawned and destroys them when the hero goes.
+- **Synchronous mode**: CARLA at 20 Hz (`fixed_delta_seconds=0.05`); the scene's owner is the
+  sole ticker (demo_scenario, `vehicle_check_host.py`, or swb's world server). acb follows.
+- **Physics, one writer per mode** (`vehicle_physics.rs`): `carla_physics_mode:=apply` (acb's
+  launches) puts `carla_physics.yaml` on the hero at attach; `verify` (swb's ego launches;
+  the world server applied it) reads it back. Both refuse a hero of another blueprint than
+  the file's, and a read-back that differs from the file. CARLA applies physics at its next
+  tick, so read back after a tick, never straight after the apply.
+- **Pedal lags** (`pedal_lag.rs`): first-order lag on each pedal plus the brake's dead time,
+  from `command_lags`, on simulation time. The filter snaps to its target within 1e-3:
+  without that, f32 decay left a ~1e-6 brake for 5 s after release, and CARLA held the car
+  with it.
+- **Pedal maps**: measured on the spec's physics (`measured_on: spec` and the
+  `physics_hash` in `<car>_description/config/pedal_maps.yaml`). Re-measure them when the
+  physics changes; a single-constant conversion is wrong by 2x at full throttle (issue 019).
+- **spec_hash** (`main.rs::check_spec_hash`): the sensor file's `spec_hash` against
+  `autoware_spec_hash_file` (`<car>_description/config/spec_hash.yaml`). A warning, not a
+  refusal: stand-alone acb has no third party to say which side is stale (under SSv2, swb's
+  bridge refuses a mismatch). `none` skips the check.
+- **GNSS auto-localization**: NavSatFix → gnss_poser → `autoware_automatic_pose_initializer_node`
+  → NDT align → initialized; no manual pose estimate.
 
-### Dependencies
-- **rclrs**: Native ROS 2 Rust bindings
-- **tracing**: Structured logging (replaced `log`)
-- **color-eyre**: Enhanced error reporting (replaced `anyhow`)
-- **nalgebra**: Math for transforms (must match carla-rust version)
-- **roxmltree**: Lightweight URDF XML parsing
-- **autoware_adapi_v1_msgs**: Modern Autoware API message types (for localization state)
-- **nav_msgs**: Standard ROS navigation messages (for odometry/kinematic state)
+### Time (roadmap 051 K4)
+
+- Every stamp and `/clock` value is `nanos(elapsed_seconds) + BASE_NS` (`clock.rs`;
+  `BASE_NS` = 1000 s, rounding half away from zero). No epoch, no wall clock. It must stay
+  bit-identical to swb_world_protocol's `sim_time` (swb's `scripts/test_sim_time.py` checks
+  both against one table).
+- acb attaches to the CARLA episode (world id) it first sees. On a frame or a hero of another
+  episode -- a world load, a restarted CARLA -- it logs the change naming both ids, flushes its
+  log writer and exits with status 3 (`EPISODE_CHANGED_EXIT`) before publishing anything of
+  the new episode. Its launch node is `on_exit="shutdown"`, so the whole Autoware stack ends;
+  whoever started the stack restarts it (swb: `swb-agent supervise`). The profile's
+  `clock_guard` (`sim_clock_guard`) ends the stack if `/clock` ever goes back.
+- So load the town **before** the stack starts. `just sim` runs `scripts/carla_load_town.py`
+  first; `just autoware` + `just scenario` on a CARLA showing another town ends the stack at
+  the scenario's load. An exit with status 3 is the end of an episode, not a crash.
+- `/clock` comes from its own `on_tick` subscription on its own client, established when
+  CARLA is reachable (not when a hero is found), so it runs between scenarios too.
 
 ### Coordinate Systems
 
 CARLA uses a left-handed system (Y = right), ROS uses right-handed (Y = left). The conversion is a Y-axis flip on positions and roll/yaw sign flips on rotations (see `coordinate_conversion.rs`).
-
-**The Y-flip is NOT applied uniformly.** LiDAR point data stays in CARLA's native coordinates, while poses and velocities are converted to ROS coordinates:
 
 | Data | Coordinate System | Y-Flip? | Why |
 |------|-------------------|---------|-----|
@@ -279,9 +235,17 @@ CARLA uses a left-handed system (Y = right), ROS uses right-handed (Y = left). T
 | Velocities | ROS (right-handed) | Yes | Autoware control expects ROS coords |
 | Lanelet2 map | Local coordinates | No | Generated from OpenDRIVE, consistent with poses |
 
-NDT scan matching is purely geometric -- it aligns point cloud shapes. As long as the live LiDAR scans and PCD map are in the same coordinate system, NDT works regardless of handedness convention. The raw numbers are unchanged; handedness only affects interpretation.
+NDT scan matching is purely geometric: as long as the live scans and the PCD map share a
+frame, NDT works regardless of handedness. Maps use `projector_type: TransverseMercator`
+(matching CARLA's `+proj=tmerc +lat_0=0 +lon_0=0`). `base_link` is the rear-axle centre,
+measured from CARLA's rear wheel positions.
 
-- Transform chain: Multi-hop TF2 traversal (max depth: 20)
+### Dependencies
+- **rclrs** 0.7: native ROS 2 Rust bindings
+- **carla** 0.15.1 (`carla-0916`), **carla_physics_spec** (path dependency into `deps/sim_vehicle_spec`)
+- **tracing** for logging (through a writer thread, `log_writer.rs`: a node logging from its
+  real-time loop to a busy disk stalls), **color-eyre** for errors
+- **nalgebra**: must match carla-rust's version
 
 ---
 
@@ -294,236 +258,115 @@ NDT scan matching is purely geometric -- it aligns point cloud shapes. As long a
 - Automatic serialization (no CDR)
 - **Subscription callbacks**: Use `Arc<std::sync::Mutex<T>>` for shared state between callbacks
   - Clone the Arc before moving into closures
-  - Example: State monitoring (localization_init_state) and data capture (kinematic_state) in separate callbacks
   - Subscriptions must be kept alive as struct fields (e.g., `_localization_init_state_sub`)
+- A double parameter given an integer stops the node at startup
+  (`OverrideValueTypeMismatch`): coerce in the launch file (`$(eval 'float(...)')`).
 
-### rclpy API (Python - Autonomous Driving Scripts)
+### rclpy API (Python scripts)
 - Use `call_async()` for service calls, followed by `spin_until_future_complete()`
 - Don't instantiate service classes directly (raises `NotImplementedError`)
 - Use `ServiceClass.Request()` to create request objects
 - QoS profiles: `TRANSIENT_LOCAL` for latched topics, `VOLATILE` for streaming data
 
-### Modern Autoware API (2024/2025)
-**Service Endpoints** (used by Python scripts):
-- `/api/localization/initialize` - Initialize localization (not `/initialpose` topic)
-- `/api/routing/set_route_points` - Set route to goal
-- `/api/routing/clear_route` - Clear existing route
-- `/api/operation_mode/change_to_autonomous` - Engage autonomous mode (not `change_operation_mode`)
-
-**Topic Endpoints** (monitored by Rust bridge):
-- `/localization/initialization_state` (autoware_adapi_v1_msgs/LocalizationInitializationState)
-  - State values: 0=UNKNOWN, 1=UNINITIALIZED, 2=INITIALIZING, 3=INITIALIZED
-  - Bridge monitors state changes (reserved for future respawn support)
-- `/localization/kinematic_state` (nav_msgs/Odometry)
-  - Provides current vehicle pose in map frame
-  - Bridge captures pose when state becomes INITIALIZED (reserved for future respawn)
-
-**Bridge Integration**:
-- Bridge subscribes to both topics on startup for monitoring and future respawn support
-- Localization initialization is triggered automatically: GNSS NavSatFix → gnss_poser → `autoware_automatic_pose_initializer_node` → NDT align → initialized
-- Maps use `projector_type: TransverseMercator` (matching CARLA's `+proj=tmerc +lat_0=0 +lon_0=0`)
-
-**Important**:
-- Route planning requires poses on **connected lanes** in lanelet2 map
-- Use RViz "2D Pose Estimate" and "2D Goal Pose" for guaranteed valid poses
-- Service calls may fail if Autoware not fully initialized (wait 10-15s after launch)
-- **Timing for automated workflows**:
-  - 15s wait after localization initialization (vehicle spawn + diagnostics stabilization)
-  - 10s wait after route is set (planning/control pipeline activation)
-  - These waits are critical for autonomous mode engagement
+### Autoware AD API
+- `/api/localization/initialize`, `/api/routing/set_route_points`, `/api/routing/clear_route`,
+  `/api/operation_mode/change_to_autonomous` (services used by `auto_drive`)
+- Route planning requires poses on **connected lanes**; RViz "2D Pose Estimate" / "2D Goal
+  Pose" give valid ones (`just capture-poses`)
+- Service calls fail until Autoware is fully up; `auto_drive` retries, and engaging needs the
+  planning/control pipeline active after the route is set
 
 ### CARLA Integration
 - Sensor callbacks run in separate threads
-- Shutdown requires 1s tick timeout + flag checks
 - Executor must spin in wait loops for callbacks
 - carla-rust uses nalgebra types: `.to_na()` / `Transform::from_na()`
+- **Destroy a vehicle's sensors before the vehicle**, in every client: CARLA leaves them alive
+  and an orphaned IMU segfaults the server (`AInertialMeasurementUnit::ComputeGyroscope`).
+  In Rust `destroy_with_children()`; in Python sweep `sensor.*` whose `parent.id` is the
+  vehicle (`scripts/demo_scenario.py::destroy_attached_sensors`).
+- A LibCarla client must not outlive its server: its streaming side reconnects to the next
+  server on the port and can hang a synchronous CARLA. acb drops and rebuilds such clients
+  (and now exits anyway, the episode being gone).
+- Pin Vulkan to the NVIDIA card when starting CARLA by hand
+  (`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json`; `third_party/carla/run.sh`
+  sets it when unset).
 
 ### use_sim_time Parameter Propagation - CRITICAL
 
-**Problem**: ROS 2 launch files don't automatically propagate `use_sim_time` through nested includes. Autoware's `global_params.launch.py` uses `SetParameter` but this only affects nodes launched in the same context.
+ROS 2 launch files don't propagate `use_sim_time` through nested includes; Autoware's
+`global_params.launch.py` only affects nodes in its own context. Symptom: the Auto button
+stays disabled, and logs show
+`Lookup would require extrapolation into the past. Requested time 527.29 but earliest data is at time 1765365855.01`
+(TF on wall clock, sensors on sim time → MessageFilter drops every pointcloud → no occupancy
+grid → no trajectory → autonomous mode unavailable).
 
-**Symptom**: Auto button disabled in RViz despite valid route. Check logs for:
-```
-Lookup would require extrapolation into the past. Requested time 527.290747 but earliest data is at time 1765365855.014771
-```
+Fix: a global `<set_parameter name="use_sim_time" value="$(var use_sim_time)"/>` in the
+top-level launch file, before any include. The profile (`autoware_sim_profile`'s
+`autoware.launch.xml`) does this, and also sets `system_run_mode=logging_simulation`, which
+turns off pose_initializer's stop check. Any new top-level launch must do the same.
 
-**Root Cause Chain**:
-```
-Localization nodes have use_sim_time=false
-  → TF transforms published with wall clock (~1.77 billion seconds)
-  → Sensor data uses simulation time (~527 seconds)
-  → MessageFilter drops all pointclouds (TF lookup fails)
-  → occupancy_grid_map produces no output
-  → behavior_path_planner blocked
-  → No trajectory/control commands
-  → Diagnostic rate checks fail
-  → is_autonomous_mode_available = false
-```
-
-**Fix**: Add global `<set_parameter>` in top-level launch file:
-```xml
-<launch>
-  <arg name="use_sim_time" default="true"/>
-
-  <!-- CRITICAL: Set use_sim_time globally for ALL nodes -->
-  <set_parameter name="use_sim_time" value="$(var use_sim_time)"/>
-
-  <!-- Include Autoware launch files after set_parameter -->
-  <include file="$(find-pkg-share autoware_launch)/launch/autoware.launch.xml">
-    ...
-  </include>
-</launch>
-```
-
-**Verification**:
 ```bash
-# Check localization nodes have use_sim_time=true
-ros2 param get /localization/pose_estimator/ndt_scan_matcher use_sim_time
-ros2 param get /localization/ekf_localizer use_sim_time
+ros2 param get /localization/pose_estimator/ndt_scan_matcher use_sim_time   # True
+ros2 param get /localization/util/pose_initializer stop_check_enabled       # False
 ```
-
-**File**: `src/acb_launch/launch/carla_simulator.launch.xml` (fixed 2025-12-11)
-
-### Dependency Synchronization
-When using local carla-rust (`path = "..."`), match critical dependency versions (nalgebra, ndarray) to avoid type incompatibility errors.
 
 ### URDF/Xacro XML Comments - CRITICAL
 
-**NEVER use colons in URDF/Xacro XML comments**
+**NEVER use colons in URDF/Xacro XML comments.** ROS 2 launch parses the robot_description
+parameter as YAML, and a colon, even inside an XML comment, becomes a YAML mapping:
 
-ROS 2 launch validates the robot_description parameter as YAML, and colons in XML comments trigger YAML key-value syntax interpretation, causing parsing failures.
-
-**Failure Example**:
-```xml
-<!-- NOTE: This causes an error -->
-<!-- Example: This also fails -->
-<!-- Position: center at wheelbase/2 -->
-```
-
-**Error Message**:
 ```
 mapping values are not allowed here
   in "<unicode string>", line XX, column YY:
-      NOTE: This causes an error ...
-          ^
 ```
 
-**Correct Usage**:
-```xml
-<!-- NOTE - This works fine -->
-<!-- Example - This also works -->
-<!-- Position - center at wheelbase/2 -->
-```
+Use `<!-- NOTE - ... -->`, not `<!-- NOTE: ... -->`. The impact is total:
+robot_state_publisher crashes → no `/robot_description` → acb never detects Autoware → no
+sensors → localization never initializes. The URDFs are generated in autoware_sim_vehicle
+now; the rule applies to its templates and to any hand-written xacro.
 
-**Files Affected**:
-- `src/acb_vehicle_launch/acb_vehicle_description/urdf/vehicle.xacro`
-- `src/acb_sensor_kit_launch/acb_sensor_kit_description/urdf/sensor_kit.xacro`
+### Diagnostics (known, harmless)
 
-**Impact**: robot_state_publisher crashes → no /robot_description published → bridge can't detect Autoware → vehicle fails to spawn → localization can't initialize → "The vehicle is not stopped" error
-
-**Root Cause**: ROS 2 launch system parses robot_description as YAML before passing to robot_state_publisher. Colons are interpreted as YAML mapping syntax regardless of being inside XML comments.
-
-**Fixed** (2025-12-03): Removed problematic commented-out sections (lines 232-265 in sensor_kit.xacro) that contained colon-heavy documentation about default macro invocation. Even commented XML sections can cause YAML parsing failures.
+Seen during autonomous driving with `/autoware/modes/autonomous` OK: `/autoware/debug/tools`,
+`duplicated_node_checker` (traffic light nodes with fusion-only lights),
+`service_log_checker`, and `control_command_gate` (absent in Autoware 1.5.0) report ERROR;
+`ndt_align_service_status` says "Waiting for pcd loader service" after the first alignment;
+`/adapi/node/vehicle_door` is unknown (CARLA has no door API). AD API adapter nodes may time
+out in LoadNode and still start. `pose_instability_detector` sometimes dies with "cannot
+store a negative time point" at stack start; the stack runs on without it.
 
 ---
 
 ## Coding Practices
 
-### Background Commands for Demo
-
-**When starting demo, use simple background commands with run_in_background=true**
-
-```bash
-# Correct - simple command in background
-just run-demo 2>&1
-# (with run_in_background=true)
-
-# Incorrect - don't add sleep/echo/wait patterns
-just run-demo 2>&1 &
-sleep 80
-echo "=== Done ==="
-```
-
-The Bash tool's `run_in_background` parameter handles background execution properly. Adding shell backgrounding (`&`), sleep/wait patterns clutters the command and makes output harder to track.
-
-**Checking status**: Use `just carla-status` or `BashOutput` tool to check background job output.
-
-### Systemd Service Commands
-
-**`just bridge start`, `just bridge stop`, etc. start/stop systemd services and return immediately**
-
-```bash
-# Correct - run directly, no background needed
-just bridge start
-just bridge stop
-
-# Incorrect - don't put in background
-just bridge start &
-```
-
-These commands control systemd services that run in the background themselves. They complete immediately after starting/stopping the service.
-
 ### Build Commands - CRITICAL
 
-**Always use `just build` instead of direct `colcon build`**
+**Always use `just build` instead of direct `colcon build`.** The justfile passes
+`--symlink-install` and the `deps/` base paths; a plain `colcon build` creates file copies
+that conflict with the symlinks, and without `deps/` misses the car's packages. If it
+happened: `just clean && just build`. For one broken package: `rm -rf build/<pkg>
+install/<pkg> && just build`. Never fix `install/` by hand.
 
-```bash
-# Correct - use just build
-just build
+`just build` refuses to start when a pip-installed setuptools shadows the system one
+(`option --editable not recognized`); fix with `pip uninstall -y setuptools`.
 
-# Incorrect - don't use colcon build directly
-colcon build --packages-select some_package
-```
+### Background Commands
 
-**Why**: The justfile passes `--symlink-install` to colcon, which creates symbolic links in the `install/` directory instead of file copies. Running `colcon build` directly creates file copies that conflict with previously created symlinks, causing unpredictable behavior.
+Start long-running recipes (`just sim`, `just autoware`) with the Bash tool's
+`run_in_background`, not with `&`, `sleep` and `echo` in the command. `just carla-start` and
+`carla-stop` control a systemd user unit and return at once; do not background them.
 
-**If you accidentally ran `colcon build` directly**:
-```bash
-just clean && just build
-```
+### ROS 2 Topic Monitoring
 
-This removes all build artifacts and rebuilds cleanly with proper symlinks.
+Bound streaming commands with `timeout`: `timeout 5 ros2 topic hz /some/topic --window 3`,
+not a background job and `kill`.
 
-**If install/ files are broken for a specific package** (e.g., stale launch files):
-```bash
-# Clean specific package and rebuild
-rm -rf build/acb_bridge install/acb_bridge
-just build
-```
+### Processes
 
-Never manually fix symlinks or copy files to install/. Always use `just build` after removing the broken package directories.
-
-### ROS 2 Topic Monitoring Commands
-
-**Use Bash tool's timeout parameter instead of shell patterns**
-
-When running streaming ROS 2 commands like `ros2 topic hz` or `ros2 topic echo`, use the Bash tool's `timeout` parameter:
-
-```bash
-# Correct - use timeout parameter on Bash tool
-timeout 5 ros2 topic hz /some/topic --window 3
-
-# Incorrect - don't use sleep/kill patterns
-ros2 topic hz /some/topic --window 3 &
-sleep 3
-kill %1 2>/dev/null
-```
-
-**Why**: The Bash tool's timeout parameter handles process cleanup properly. Shell backgrounding with manual kill creates race conditions and cluttered output.
-
-### Temporary Files
-
-**Always use project's tmp/ directory for temporary files**
-
-```bash
-# Correct - use project tmp/
-$project/tmp/test_file.txt
-
-# Incorrect - don't use system /tmp/
-/tmp/test_file.txt
-```
-
-The project's `tmp/` directory is gitignored and provides better isolation for project-specific temporary files.
+- Never `pkill -f` a pattern your own shell's command line contains; match the executable
+  (`pgrep -x`, but `comm` is truncated to 15 characters) or read `/proc/<pid>/cmdline`, or
+  start the tree under `setsid` and signal the group.
+- Kill CARLA by pid; if it ignores SIGTERM, SIGKILL it before starting another on the port.
 
 ### Error Handling
 
@@ -533,319 +376,46 @@ The project's `tmp/` directory is gitignored and provides better isolation for p
 // Preferred: Propagate errors
 blueprint.set_attribute("fov", &value.to_string())?;
 
-// Alternative: Explicit handling
-if let Err(e) = operation() {
-    tracing::error!("Failed: {}", e);
-    return Err(e);
-}
-
 // Last resort: Document why ignoring is safe
 // SAFETY: Best-effort operation, failure is non-critical
 let _ = optional_operation();
 ```
 
+### No shims
+
+A renamed or removed package, argument, parameter or entry point is gone, not aliased;
+where a user could still pass the old one, refuse it with a message naming the new one (as
+`map_origin` in a sensor config, the `carla_*` profile arguments, the retired environment
+variables).
+
 ### Unused Code
 
-**Delete unused code unless documented**
-
-Keep only when:
-- Resource management (e.g., subscriptions kept alive): Document with `/// NOTE:`
-- Planned for future phases: `/// TODO(Phase X):`
-- Module-level: `#![allow(dead_code)]` with explanation
-
-Delete:
-- Experimental code
-- Old implementations
-- Helpers with no clear use
+**Delete unused code unless documented.** Keep only resource holders (subscriptions kept
+alive: `/// NOTE:`), planned work (`/// TODO(...)`), or a module-level
+`#![allow(dead_code)]` with a reason. Delete experiments, old implementations and helpers
+with no use.
 
 ---
 
-## Using Local carla-rust
+## Debugging
 
-**Location**: `~/repos/carla-rust/`
-
-Provides latest APIs and multi-version support (0.9.14-0.9.16).
-
-**Integration**: Update `src/acb_bridge/Cargo.toml`:
-```toml
-carla = { version = "0.12.0", path = "../../carla-rust/carla" }
-```
-
-**Important**: Synchronize dependency versions (nalgebra, ndarray) with carla-rust's `Cargo.toml`.
-
----
-
-## Autonomous Driving Workflow (Python Scripts)
-
-### Quick Start
-
-1. **Start CARLA** (background service):
-   ```bash
-   just carla-start
-   ```
-
-2. **Start demo** (Autoware + bridge + scenario + pilot + monitor):
-   ```bash
-   just run-demo
-   ```
-
-3. **Capture Poses in RViz** (if not already captured):
-   ```bash
-   # In RViz:
-   # - Click "2D Pose Estimate" → set initial position
-   # - Click "2D Goal Pose" → set goal position
-
-   # Capture poses:
-   just run-capture-poses /path/to/output.yaml
-   ```
-
-4. **Monitor** (optional, in another terminal):
-   ```bash
-   just carla-logs -f
-   ```
-
-5. **Stop CARLA**:
-   ```bash
-   just carla-stop
-   ```
-
-### Script Details
-
-**`scripts/demo_scenario.py`** spawns the hero vehicle:
-- Sets `role_name="hero"` attribute so bridge can find it via poll
-- Owns vehicle lifecycle: destroys on exit (Ctrl-C or completion)
-- Options: `--blueprint <model>`, `--spawn-index <n>`
-
-**`scripts/auto_drive.py`** performs route + engage (localization happens automatically via GNSS):
-1. Wait for localization to be INITIALIZED (monitors `/api/operation_mode/state`)
-2. Set route via `/api/routing/set_route_points` (with retry)
-3. Wait for route state to become SET
-4. Engage autonomous mode via `/api/operation_mode/change_to_autonomous` (with retry)
-5. Wait for arrival (route state becomes ARRIVED)
-
-**Options**: `--poses <file>`, `--timeout <secs>`, `--no-wait-arrival`
-
-**`scripts/capture_poses.py`** captures poses from RViz to a YAML file.
-**Options**: `-o <file>`
-
----
-
-## Debugging Autoware
-
-### Autoware Node Logs (play_launch)
-
-When Autoware is running via `just autoware start`, individual node logs are stored at:
-```
-third_party/autoware/autoware_repo/play_log/<timestamp>/node/<node-name>/{out,err}
-```
-
-Example - check NDT scan matcher logs:
-```bash
-# List available log sessions
-ls third_party/autoware/autoware_repo/play_log/
-
-# Check specific node logs
-cat third_party/autoware/autoware_repo/play_log/2025-12-08_03-24-49/node/ndt_scan_matcher/err
-cat third_party/autoware/autoware_repo/play_log/2025-12-08_03-24-49/node/autoware_pose_initializer_node-78/out
-```
-
-### CARLA-Specific System Configurations
-
-The `acb_launch` package provides CARLA-optimized configurations that override Autoware defaults:
-
-**MRM Handler** (`config/system/mrm_handler/mrm_handler.param.yaml`):
-- `timeout_operation_mode_availability: 30.0` (default: 0.5s) - Large timeout prevents NORMAL↔MRM_OPERATING oscillation that triggers emergency_stop
-- `timeout_call_mrm_behavior: 5.0` (default: 0.01s) - Allow time for service responses in simulation
-- `timeout_cancel_mrm_behavior: 5.0` (default: 0.01s)
-- `use_pull_over: false`, `use_comfortable_stop: false` - Disabled for simulation
-
-**Component State Monitor Topics** (`config/system/component_state_monitor/topics.yaml`):
-- Excludes traffic light recognition topic monitoring (not available in CARLA)
-- Map/localization/perception topic timeouts relaxed to 30 s (sim time); the planning trajectory and both control commands stay at 2.5 s, since they are what turns a dead planner or controller into an MRM (docs/issues/024)
-
-**Control** (`config/control/trajectory_follower/lateral/mpc.param.yaml`, generated with
-`launch/components/tier4_control_component.launch.xml` by `scripts/sync_control_component.sh`):
-- MPC's `steering_offset.enable_auto_steering_offset_removal: false`. On CARLA the estimator
-  only learns collisions and transients and keeps them for the stack's lifetime, so an aged
-  ego stack steered differently from a fresh one (docs/issues/025). `carla_control:=false`
-  restores upstream's control. Run the script with `--check` after an Autoware upgrade.
-
-**Perception without object recognition** (docs/issues/026): `perception:=false` and
-`publish_ground_truth_objects:=true` each drop only detection/tracking/prediction (acb_launch's
-generated copy of `perception.launch.xml`, `object_recognition` arg); obstacle segmentation,
-the occupancy grid and traffic light fusion always run -- planning waits for them.
-
-**Tracker** (`config/perception/.../multi_object_tracker/multi_object_tracker_node.param.yaml`,
-generated by `scripts/sync_perception_component.sh`; docs/issues/027): upstream's but for
-`pruning_generalized_iou_thresholds[UNKNOWN]` 0.1 (was -0.3, which merged non-overlapping
-UNKNOWN pairs: a pedestrian standing 1.4 m from a parked car flickered out of the objects).
-
-**Tracker input with CenterPoint** (`use_multi_channel_tracker_merger:=false`; docs/issues/028):
-Autoware 1.5's default (true) feeds `multi_object_tracker` CenterPoint's objects and
-detection_by_tracker only, so with `lidar_detection_model:=centerpoint` an object CenterPoint
-has not classified (clustering's UNKNOWN, seen ~2x further out on CARLA) never reaches
-planning. false: the lidar merger (CenterPoint + clustering, + detection_by_tracker, lanelet
-filter) into a one-channel tracker. Default true, so suites are unchanged.
-
-**Max velocity** (`max_velocity:=<m/s>`, default 4.17; csb roadmap 033): Autoware's `max_vel`
-from autoware_launch's `common.param.yaml`, the cap on the planners and on the external
-velocity limit a scenario's SpeedAction sets (15 km/h upstream; Town01's Lanelet2 map has no
-`speed_limit` tags, so its lanes allow 50 km/h and the cap is all that binds on a straight).
-Planning launches from `launch/components/tier4_planning_component.launch.xml`, a copy
-generated by `scripts/sync_planning_component.sh` (run `--check` after an Autoware upgrade)
-that takes the common parameter file as an argument; `scripts/planning_common_param` (installed
-in `lib/acb_launch`, run by a `$(command)` substitution) hands back upstream's own file at
-4.17, so the default stack resolves node for node as upstream's, and otherwise writes
-upstream's file with only `max_vel` changed to `~/.cache/acb_launch/`. Under csb's `just
-ego-av`: `EGO_LAUNCH_ARGS="max_velocity:=11.11"`. Nodes that read it: velocity_smoother,
-external_velocity_limit_selector, behavior_path_planner. Other limits that still bind at
-11.11 m/s: the smoother's 1.0 m/s^2 lateral acceleration (corners), `obstacle_slow_down`
-(8.0 m/s at most past an obstacle beside the path, 4.0 for a static one close by) and the
-dynamic `obstacle_velocity_limiter`; vehicle_cmd_gate's `vel_lim` is 25 and the pedal maps
-reach 24 m/s. `carla_planning:=false` restores upstream's planning (max_velocity ignored).
-
-**Launch File** (`launch/carla_simulator.launch.xml`):
-- Sets `use_sim_time` globally via `<set_parameter>`
-- Sets `system_run_mode=logging_simulation` to disable pose_initializer stop check
-- Disables traffic light recognition (`use_traffic_light_recognition=false`)
-- Uses CARLA-optimized localization config path
-- Launches system component with CARLA-specific topics and MRM handler configs
-
-### Diagnostics Status (Known Issues)
-
-During autonomous driving, 4 diagnostic graph nodes show ERROR status. **None are in the autonomous mode critical path** (`/autoware/modes/autonomous` is OK).
-
-| Node | Status | Impact | Notes |
-|------|--------|--------|-------|
-| `/autoware/debug/tools` | ERROR | None | Debug-only, depends on service_log_checker |
-| `/autoware/system/duplicated_node_checker` | ERROR | None | Traffic light node duplication expected with `use_traffic_light_recognition=false` |
-| `/autoware/system/service_log_checker` | ERROR | None | Not in `/autoware/system` critical path |
-| `/autoware/control/node_alive_monitoring/control_command_gate` | ERROR | None | Node doesn't exist in Autoware 1.5.0; parent `command_gate` is OR with `vehicle_cmd_gate` (OK) |
-
-**Unknown diagnostics with errors:**
-- `ndt_scan_matcher: ndt_align_service_status` - "Waiting for pcd loader service" after initial alignment succeeds. Non-blocking; NDT continues to work via map_update.
-- `/adapi/node/vehicle_door: state` - "The door status is unknown." Expected; CARLA has no door API.
-
-**Composable node startup timeouts:**
-- AD API adapter nodes (autoware_state, routing, motion, localization, planning, local, remote) may timeout during LoadNode (30s limit) but eventually start successfully. This is a startup timing issue, not a failure.
-
-**Monitored topic rates (all healthy during autonomous driving):**
-- Vehicle: velocity ~21 Hz, steering ~21 Hz
-- Localization: pose_twist_fusion_filter ~22 Hz, TF map→base_link ~18 Hz
-- Perception: obstacle_segmentation ~21 Hz, objects ~7 Hz
-- Planning: trajectory ~11 Hz
-- Control: control_cmd ~20 Hz, emergency_control_cmd ~18 Hz
-
-### Pose Initializer Stop Check
-
-The pose_initializer requires the vehicle to be stopped before accepting initialization:
-
-- **Topic**: `/sensing/vehicle_velocity_converter/twist_with_covariance`
-- **Message type**: `geometry_msgs::msg::TwistWithCovarianceStamped`
-- **Parameters** (on `/localization/util/pose_initializer`):
-  - `stop_check_enabled`: Whether stop check is required (default: true in `online` mode)
-  - `stop_check_duration`: How long vehicle must be stopped (default: 3.0s)
-
-**CRITICAL**: The `stop_check_enabled` parameter is controlled by `system_run_mode` at launch time:
-- `system_run_mode=online` → `stop_check_enabled=true` (default)
-- `system_run_mode=logging_simulation` → `stop_check_enabled=false`
-
-Our `carla_simulator.launch.xml` sets `system_run_mode=logging_simulation` to disable stop check because:
-1. CARLA simulation has timing issues with `use_sim_time`
-2. Localization nodes have `use_sim_time=False` due to parameter propagation issues
-3. This causes timestamp mismatch that makes stop check always fail
-
-**Verification**: `ros2 param get /localization/util/pose_initializer stop_check_enabled` should return `False`.
+- play_launch logs: `play_log/<time>/node/<node>/{out,err}` under the directory the recipe
+  ran in (`just vehicle-check`: `<out>/acb_log`, `check_log`).
+- acb_bridge exited 3: an episode change (its log names both episode ids); see "Time".
+- acb_bridge refused the hero: wrong blueprint or physics read-back mismatch, both named in
+  the error; check `carla_physics_mode` (`verify` with nobody applying) and the blueprint.
+- "vehicle_config was generated from spec X, Autoware's vehicle package from Y": one install
+  is stale; update `deps/` and `just build`.
+- Probes for the control chain, steering and pedals are in `scripts/probe_*.py`; defects with
+  their evidence are in `docs/issues/` (index in its README).
 
 ---
 
 ## Documentation
 
-**In-repo**:
-- `scripts/README.md` - **Autonomous driving scripts guide** ⭐
-- `docs/README.md` - Docs index (design, guides, roadmap, archive)
-- `docs/guides/automated-map-generation.md` - Map conversion guide
-- `docs/design/sensor-configuration-strategy.md` - Sensor config & gap analysis
-- `README.md` - Setup & quick start
-
-**External**:
-- [Autoware Documentation](https://autowarefoundation.github.io/autoware-documentation/main/)
-- [Autoware AD API](https://autowarefoundation.github.io/autoware-documentation/main/design/autoware-interfaces/ad-api/)
-- [carla-rust](https://github.com/jerry73204/carla-rust)
-- [rclrs](https://github.com/ros2-rust/ros2_rust)
-- [CARLA Simulator](https://carla.org/)
-
----
-
-**Last Updated**: 2026-03-29
-**Status**: Phases 1-4 Complete - End-to-end autonomous driving working
-**Remaining**: Vehicle calibration (Phase 4.4), map automation (Phase 5), formal testing (Phase 6)
-**Recent Changes**:
-- ✅ **CARLA synchronous mode + diagnostic timeout fixes** (2026-03-29):
-  - Switched CARLA from async to sync mode (20 Hz) to ensure deterministic simulation timing
-  - `demo_scenario.py` is the sole ticker; bridge passively waits via `wait_for_tick_or_timeout()`
-  - Cleanup restores async mode so CARLA isn't stuck waiting for ticks on exit
-  - Component state monitor topic timeouts relaxed from 1.0s to 3.0s
-  - MRM handler timeouts increased (operation_mode_availability: 30s, behavior calls: 5s)
-  - Auto-drive engage uses retry loop for availability flicker
-  - Result: Vehicle arrives at goal in ~220s with zero MRM emergency_stop interrupts
-- ✅ **Package rename to acb_* convention** (2026-03-29):
-  - All packages renamed: carla_autoware_launch→acb_launch, autoware_carla_bridge→acb_bridge, etc.
-- ✅ **Bridge workflow redesign - scenario script owns vehicle** (2026-03-22):
-  - Scenario script (`demo_scenario.py`) spawns hero vehicle with `role_name="hero"`
-  - Bridge polls `world.actors()` for hero vehicle via `wait_for_hero_vehicle()`, attaches sensors only
-  - `CarlaVehicle::new()` takes existing `Vehicle` instead of spawning
-  - `CarlaVehicle::cleanup()` destroys sensors only (vehicle not destroyed; owned by scenario script)
-  - Removed `bridge_config.rs` (spawn_pose no longer needed)
-  - Removed `acb_pilot`/`auto_drive` from `demo.launch.xml` (localization is now fully automatic)
-  - GNSS → gnss_poser → `autoware_automatic_pose_initializer_node` → NDT align → localization initialized with no manual steps
-  - Verified: EKF pose vs CARLA actual ~6.5cm error, exact orientation match
-- ✅ **Coordinate projection fixes for correct map localization** (2026-03-21):
-  - Fixed LiDAR Y-flip: points now published in ROS frame (`y: -det.point.y`) to match pre-built PCD map
-  - Fixed GNSS latitude negation: `latitude: -measure.latitude()` so gnss_poser outputs y = -CARLA_y (map frame)
-  - Fixed gnss_poser orientation: set `use_gnss_ins_orientation: false` (CARLA IMU is sensor_msgs/Imu, not GnssInsOrientationStamped)
-  - Fixed AutowareDetector health timeout: `Duration::MAX` instead of 86400s (robot_description is latched, published once; health check was destroying vehicle after 24h)
-  - Verified: gnss_poser outputs (189.3, -129.3), NDT converges to (190.76, -130.07), EKF covariance ~0.002
-- ✅ **Standard GNSS→NDT localization pipeline** (2026-03-11):
-  - Removed bridge localization init bypass (no longer publishes to `/sensing/gnss/pose_with_covariance` or calls `/api/localization/initialize`)
-  - Enabled gnss_poser in sensing pipeline (`sensing.launch.xml`)
-  - Changed map projector from `local` to `TransverseMercator` (matches CARLA's `+proj=tmerc +lat_0=0 +lon_0=0`)
-  - Localization initialization now handled automatically by GNSS → gnss_poser → `autoware_automatic_pose_initializer_node`
-- ✅ **MRM handler timeout configuration for CARLA** (2025-12-12):
-  - Fixed MRM oscillation causing EMERGENCY_STOP flickering and autonomous mode unavailability
-  - Root cause: Default MRM handler timeouts too aggressive for simulation (0.5s availability, 0.01s behavior calls)
-  - Created CARLA-specific MRM handler config: `src/acb_launch/config/system/mrm_handler/mrm_handler.param.yaml`
-  - Relaxed timeouts: `timeout_operation_mode_availability: 2.0s`, `timeout_call_mrm_behavior: 0.5s`
-  - Updated `carla_simulator.launch.xml` to use CARLA-specific MRM handler config
-  - Result: MRM state stable at NORMAL (1), autonomous mode can now be engaged successfully
-- ✅ **use_sim_time parameter propagation fix** (2025-12-11):
-  - Fixed Auto button disabled in RViz despite valid route
-  - Root cause: Localization nodes had `use_sim_time=false` causing TF timestamp mismatch
-  - TF transforms used wall clock time (~1.77B sec) while sensors used sim time (~527 sec)
-  - MessageFilter dropped all pointclouds → cascading failure through perception/planning/control
-  - Fix: Added `<set_parameter name="use_sim_time" value="$(var use_sim_time)"/>` in carla_simulator.launch.xml
-- ✅ **Localization stop_check fix** (2025-12-10):
-  - Fixed "vehicle is not stopped" error during pose initialization
-  - Updated `carla_simulator.launch.xml` to set `system_run_mode=logging_simulation`
-  - This disables `stop_check_enabled` in pose_initializer at launch time
-  - Root cause: `use_sim_time=False` on localization nodes caused timestamp mismatch
-- ✅ **ROS parameters migration** (2025-12-08):
-  - Replaced clap command-line args with native ROS 2 parameters
-  - Single config file: `src/acb_bridge/config/vehicle_config.yaml`
-  - Parameters set via `--ros-args -p param:=value` (e.g., `carla_port`, `vehicle_config`)
-  - Removed duplicate config files, consolidated to single source of truth
-- ✅ **CARLA localization configuration** (2025-12-05):
-  - Created `acb_launch` package with CARLA-optimized NDT parameters
-  - Disabled `stop_check_enabled` in pose_initializer (CARLA timing issues caused false "vehicle not stopped" errors)
-  - Custom NDT params: resolution=1.0m, max_iterations=50, particles_num=500, map_radius=200m
-- ✅ **Connection robustness improvements** (2025-12-03):
-  - Infinite retry loops for CARLA connection with panic catching (main.rs:167-196)
-  - Infinite wait for Autoware detection with executor spinning (main.rs:223-259)
-  - Graceful Ctrl-C handling during all wait phases
-  - Progress logging every 2-5 seconds
-- ✅ **URDF/YAML parsing fixes** (2025-12-03):
-  - Fixed duplicate link error in sensor_kit.xacro
-  - Removed colon-containing XML comments causing YAML parsing failures
-  - Demo environment stability verified (all services running)
-- ✅ Bridge monitors Autoware localization state for future respawn support (2025-11-23)
-- ✅ End-to-end autonomous driving test confirmed working (2025-11-23)
+- `README.md` -- setup, the car, time and episodes, recipes
+- `scripts/README.md` -- the scripts
+- `docs/README.md` -- docs index (design, guides, issues, roadmap, archive)
+- scenario-world-bridge `docs/roadmap/051-target-shape.md` -- the target shape and its progress (K1-K5)
+- [carla-rust](https://github.com/jerry73204/carla-rust), [rclrs](https://github.com/ros2-rust/ros2_rust),
+  [Autoware AD API](https://autowarefoundation.github.io/autoware-documentation/main/design/autoware-interfaces/ad-api/)
