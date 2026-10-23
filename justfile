@@ -264,6 +264,58 @@ autoware *args:
         map_path:="{{project}}/data/carla-autoware-bridge/$map_name" \
         data_path:="{{data_path}}"
 
+# vehicle_check (autoware_sim_vehicle's autoware_sim_check) on CARLA, without SSv2 or Autoware:
+# a hero on a straight of the current town (scripts/vehicle_check_host.py ticks CARLA in real
+# time), acb_bridge applying the spec's physics, then the contract (topics, types, rates,
+# frames, stamps, /robot_description) and the dynamics run (acceleration and brake steps
+# against 0.35 m/s^2, a steering sweep against the bicycle model). CARLA must be running and
+# not ticked by anyone else. Writes <out>/report.json; exits 0 only if every check passed.
+#
+# Usage: just vehicle-check [vehicle_model:=tesla_model3] [out:=<dir>]
+[positional-arguments]
+vehicle-check *args:
+    #!/usr/bin/env bash
+    set -e
+    model=tesla_model3; out="{{project}}/play_log/vehicle_check/$(date +%F_%H-%M-%S)"
+    for a in "$@"; do
+        case "$a" in
+            vehicle_model:=?*) model="${a#*:=}" ;;
+            out:=?*) out="${a#*:=}" ;;
+            *) echo "[just] unknown argument '$a' (vehicle_model:=, out:=)" >&2; exit 2 ;;
+        esac
+    done
+    mkdir -p "$out"
+    source "{{project}}/install/setup.bash"
+    physics="$(ros2 pkg prefix sim_vehicle_spec)/share/sim_vehicle_spec/generated/$model/carla_physics.yaml"
+    blueprint=$(sed -n 's/^blueprint: *//p' "$physics" | tr -d "'\"")
+    groups=()
+    stop() { for g in "${groups[@]}"; do kill -TERM -"$g" 2>/dev/null || true; done
+             sleep 8; for g in "${groups[@]}"; do kill -KILL -"$g" 2>/dev/null || true; done; }
+    trap stop EXIT
+    setsid python3 "{{project}}/scripts/vehicle_check_host.py" --port {{carla_port}} \
+        --blueprint "$blueprint" > "$out/host.log" 2>&1 < /dev/null &
+    groups+=($!)
+    sleep 8
+    setsid play_launch launch --disable-web-ui --log-dir "$out/acb_log" \
+        acb_bridge acb_bridge.launch.xml carla_port:={{carla_port}} \
+        carla_physics:="$physics" carla_physics_mode:=apply \
+        autoware_spec_hash_file:="$(ros2 pkg prefix ${model}_description)/share/${model}_description/config/spec_hash.yaml" \
+        seed_localization_on_attach:=false > "$out/acb.log" 2>&1 < /dev/null &
+    groups+=($!)
+    play_launch launch --disable-web-ui --log-dir "$out/check_log" \
+        autoware_sim_check vehicle_check.launch.xml simulator:=carla vehicle_model:="$model" \
+        out:="$out/report.json" > "$out/check.log" 2>&1 < /dev/null || true
+    [ -f "$out/report.json" ] || { echo "[vehicle-check] no report; see $out/check.log" >&2; exit 1; }
+    python3 - "$out/report.json" <<'PY'
+    import json, sys
+    r = json.load(open(sys.argv[1]))
+    bad = [t for t, p in r["contract"].items() if p] + [s["step"] for s in r["dynamics"] if not s["pass"]]
+    for s in r["dynamics"]:
+        print(f'  {s["step"]:12} {"pass" if s["pass"] else "FAIL"}  ' + ", ".join(f"{k} {v}" for k, v in s.items() if k not in ("step", "pass")))
+    print(f'[vehicle-check] {r["vehicle_model"]} on {r["simulator"]}: ' + ("PASS" if not bad else "FAIL: " + ", ".join(bad)))
+    sys.exit(1 if bad else 0)
+    PY
+
 # Run CARLA-Autoware bridge only
 bridge:
     #!/usr/bin/env bash
