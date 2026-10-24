@@ -26,9 +26,16 @@ scenario-world-bridge): the route from spawn point 0 has no other way out.
 
 Not an acb_bridge fault: the lamp is in the lidar, the clustering pipeline reports it, and
 the profile's obstacle stop holds the ego for it. Nothing in roadmap 051 changed that part of
-the stack, and no scenario-world-bridge scenario starts at spawn point 0 or drives this
-corner, which is why nothing caught it. The same stack from spawn point 74 (the start of
-scenario-world-bridge's `town01_traffic_light.xosc`) drives to that scenario's goal.
+the stack. No scenario-world-bridge scenario starts at spawn point 0, which is why nothing
+caught it. The same stack from spawn point 74 (the start of scenario-world-bridge's
+`town01_traffic_light.xosc`) drives to that scenario's goal.
+
+One scenario does drive this corner: scenario-world-bridge's demo incident
+`town01_i3_red_light` passes it after its light. On the default stack (clustering) the lamp
+holds that ego too (seen 2026-10-24, roadmap 051 K5, after issue 030's repair). The suite
+runs the incidents on the CenterPoint stack (`lidar_detection_model:=centerpoint`), which
+does not report the lamp, and i3 passes there in 87 s. So the incident passes or not by
+which detector the stack runs.
 
 ## Closing it
 
