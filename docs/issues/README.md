@@ -39,7 +39,7 @@ conventions.
 | [026](026-ground-truth-stack-never-engages.md) | With `perception:=false` the stack never leaves PLANNING | High | Fixed (`perception:=false` drops object recognition only) |
 | [027](027-a-standing-pedestrian-is-pruned-into-a-parked-car.md) | A pedestrian standing near a parked car flickers out of the tracked objects | High | Fixed (tracker's UNKNOWN pruning GIoU 0.1) |
 | [028](028-centerpoint-drops-what-it-has-not-classified.md) | With CenterPoint, an object it has not classified never reaches planning | High | Fixed by option (`use_multi_channel_tracker_merger:=false`; default unchanged) |
-| [029](029-town01-spawn-0-is-held-by-a-corner-lamp.md) | From Town01's spawn point 0 the ego is held at the first corner by a street lamp | Medium | Open |
+| [029](029-town01-spawn-0-is-held-by-a-corner-lamp.md) | From Town01's spawn point 0 the ego is held at the first corner by a street lamp | Medium | Fixed (compare-map filter loads the map statically) |
 | [030](030-town01-lights-link-to-the-wrong-stop-lines.md) | Town01's lanelets link most traffic lights to the wrong stop line | High | Fixed (map repair) |
 
 ## Severity

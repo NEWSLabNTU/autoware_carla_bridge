@@ -63,7 +63,5 @@ The manual scene stops for CARLA's red at its stop line and leaves on green.
 `town01_traffic_light` and `town01_i3_red_light` stop for SSv2's red at CARLA's line, 2.6 to
 2.8 m from the centre of the car.
 
-Not fixed by this: on the default clustering stack the ego is still held at Town01's
-south-east corner by the street lamp of issue 029, which `town01_i3_red_light` drives past
-after its light. The suite runs the incidents on the CenterPoint stack, which does not
-report the lamp.
+The street lamp that held the ego at Town01's south-east corner on the default clustering
+stack was issue 029, since fixed (the compare-map filter loads the map statically).

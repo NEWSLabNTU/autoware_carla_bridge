@@ -1,6 +1,7 @@
 # 029: From Town01's spawn point 0 the ego is held at the first corner by a street lamp
 
-**Severity**: Medium (the stand-alone demo's default route never arrives). **Status**: Open.
+**Severity**: Medium (the stand-alone demo's default route never arrives). **Status**: Fixed
+(autoware_sim_vehicle `25c4f29`: detection's compare-map filter loads the map statically).
 Found 2026-10-24 (scenario-world-bridge roadmap 051, the "Without SSv2" acceptance).
 
 ## What happens
@@ -37,10 +38,34 @@ runs the incidents on the CenterPoint stack (`lidar_detection_model:=centerpoint
 does not report the lamp, and i3 passes there in 87 s. So the incident passes or not by
 which detector the stack runs.
 
-## Closing it
+## Cause
 
-Find why the lamp is an obstacle on this route: whether the TUM point cloud map lacks the
-lamp (so the compare-map filter keeps its points), whether the Lanelet2 lane runs closer to
-the kerb here than CARLA's lane, or whether the obstacle stop's lateral margin catches the
-pole on the turn. Until then, `just sim spawn_index:=74` gives the stand-alone demo a start
-whose route arrives.
+Not the map, the lane or the obstacle stop's margin. The TUM point cloud map has the lamp:
+its pole at (385.2, -333.3), sampled every 0.1-0.2 m from the ground to 7.8 m, and the arm.
+What failed was detection's compare-map filter (`voxel_based_compare_map_filter`), which is
+there to drop the points the map already has before clustering. Measured 2026-10-24 on
+`town01_i3_red_light`, the ego held at (379.4, -330.6) by `route-obstacle`:
+
+- 305 lamp points within 1.5 m of the pole in `/perception/obstacle_segmentation/pointcloud`,
+  53 of them still in the filter's output, every one within 0.13 m of a map point;
+- within 80 m of the ego the output held 7903 points, 7332 of them within 0.3 m of the map:
+  the filter was removing almost nothing.
+
+The filter ran with upstream's `use_dynamic_map_loading: true`. The CARLA towns' maps are one
+unsplit `pointcloud_map.pcd`, which the map loader serves as a single cell (Town01: one
+497 x 418 m cell); the dynamic loader in Autoware 1.5 fetched it (after about 80 s of
+`Waiting for response...`) and still matched next to nothing. The grid index arithmetic in
+`voxel_grid_map_loader.hpp` is also fragile for a single cell: its float origin can put the
+cell and the points in different grid slots by a rounding (at an ego near (100, -100) the
+cell lands in slot 0 and the points in slot 1). CenterPoint does not use this filter, which
+is why the incidents passed on it.
+
+## The fix
+
+autoware_sim_profile passes detection its own copy of `pointcloud_map_filter.param.yaml`,
+upstream's but with `use_dynamic_map_loading: false` (derived by
+`scripts/sync_perception_component.sh`, its fourth change). The static loader voxelises the
+whole map once from `/map/pointcloud_map`. Same run, same place: the filter's output fell to
+1504 points within 80 m, none on the lamp, the ego took the corner, and
+`town01_i3_red_light` passed on the clustering stack (it failed on its 300 s limit
+without the fix).
