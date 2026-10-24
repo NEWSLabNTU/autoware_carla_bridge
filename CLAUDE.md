@@ -7,8 +7,7 @@ interface for Autoware. `acb_bridge` attaches to the CARLA vehicle with `role_na
 spawns and publishes its sensors, publishes the vehicle status and `/clock`, and applies
 Autoware's control.
 
-**Repository**: https://github.com/NEWSLabNTU/autoware_carla_bridge (branch `target-shape`
-during roadmap 051)
+**Repository**: https://github.com/NEWSLabNTU/autoware_carla_bridge (branch `main`)
 
 **Its place**: one of the eight repositories of scenario-world-bridge's roadmap 051 ("the
 target shape", `docs/roadmap/051-target-shape.md` in scenario-world-bridge). acb holds the
@@ -33,7 +32,7 @@ same `acb_bridge` as a scenario's ego, next to its CARLA world server `swb_carla
 │   ├── carla_map_gen/             # Lanelet2 map from a running CARLA (Python)
 │   ├── carla_pcd_gen/             # Point cloud map from a running CARLA (Rust)
 │   └── external/                  # COLCON_IGNORE only
-├── deps/                          # Submodules (branch target-shape), COLCON_IGNOREd
+├── deps/                          # Submodules (branch main), COLCON_IGNOREd
 │   ├── sim_vehicle_spec/          #   the car's spec; generated/<car>/carla_sensors.yaml,
 │   │                              #   carla_physics.yaml; crates/carla_physics_spec (Rust reader)
 │   └── autoware_sim_vehicle/      #   cars/<car>/ (Autoware packages), individual_params,
