@@ -70,8 +70,9 @@ whole map once from `/map/pointcloud_map`. Same run, same place: the filter's ou
 `town01_i3_red_light` passed on the clustering stack (it failed on its 300 s limit
 without the fix).
 
-Repeated on 2026-10-24 with the fix, each on a fresh clustering stack with i3 first: 6 of 7
-passed (5 in a row, then 2 more), plus once inside the regression set. The one failure never
+Repeated on 2026-10-24 with the fix, on two fresh clustering stacks with i3 their first
+scenario: 6 of 7 passed (4 of 5 on the first stack, 2 of 2 on the second), and it passed once
+inside the regression set. The one failure never
 reached the corner: SSv2 gave up waiting for WAITING_FOR_ROUTE because the stack's first NDT
 alignment took 105 s, against 6-9 s in every other stack that day, while other users' work
 held the host's load near 40 on 48 cores. Not this issue; a start on a loaded host.
