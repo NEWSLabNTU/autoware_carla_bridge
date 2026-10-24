@@ -32,11 +32,38 @@ been run through that repair.
 
 ## The fix
 
-`scripts/repair_lanelet_signal_links.py Town01 --port <CARLA port>` in scenario-world-bridge,
-with CARLA holding Town01 and ticking. It changed the links of 41 lanelets and gave every
-element a stop line at its light's stop waypoints. Afterwards every stop waypoint is within
-2.0 m of its element's stop line, which is the half-width of a lane. The script keeps the
-file before it as `lanelet2_map.osm.orig-signal-links`. The map pack lives under `data/`,
-which git ignores, so every host has to run the repair itself. acb's README says so.
+Run `scripts/repair_lanelet_signal_links.py Town01 --port <CARLA port>` from
+scenario-world-bridge (`fe33862` or later), with CARLA holding Town01 and something ticking
+it. The script linked 38 lanelets and gave each element a stop line across its approach.
+It keeps the file it started from as `lanelet2_map.osm.orig-signal-links`. Two checks pass
+afterwards:
 
-After the repair, the same scene: see scenario-world-bridge's roadmap 051, K5.
+- each CARLA light's approach lies in a road lanelet that runs the light's way and
+  references the light's element: 36 of 36 (28 failed in the shipped map);
+- each such lanelet's centre line crosses its stop line: 36 of 36.
+
+The first version of the repair had two bugs of its own, both found here:
+
+- Its heading test was unsigned. Town01's two-lane roads share one middle line, and where
+  CARLA's stop waypoint lies on that line, the test picked the oncoming lanelet about half
+  the time. Light 373 went to the westbound lane, and in scenario-world-bridge's
+  `town01_i3_red_light` the ego drove through SSv2's red at 4.2 m/s.
+- On roads where the map's lanes sit 2.2 m off CARLA's, the stop line only spanned CARLA's
+  lane, and it missed Autoware's path by 0.2 m.
+
+Restart the vehicle stack after the repair: a stack started earlier keeps the old map, and
+did so here once.
+
+The map pack lives under `data/`, which git ignores, so every host has to run the repair
+itself. acb's README says so.
+
+## After the repair
+
+The manual scene stops for CARLA's red at its stop line and leaves on green.
+`town01_traffic_light` and `town01_i3_red_light` stop for SSv2's red at CARLA's line, 2.6 to
+2.8 m from the centre of the car.
+
+Not fixed by this: on the default clustering stack the ego is still held at Town01's
+south-east corner by the street lamp of issue 029, which `town01_i3_red_light` drives past
+after its light. The suite runs the incidents on the CenterPoint stack, which does not
+report the lamp.
