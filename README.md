@@ -143,6 +143,12 @@ Available towns: Town01, Town02, Town03, Town05, Town10HD. A town directory may 
 `carla/map_origin.yaml` (where CARLA's origin sits in the map frame; absent means zero, as
 for every TUM town).
 
+The pack's lanelets are linked to the wrong traffic lights: on Town01, 34 of 36 lights had
+their stop line on the next lane or at another junction, and Autoware drove through CARLA's
+red. scenario-world-bridge's `scripts/repair_lanelet_signal_links.py <Town> --port <CARLA
+port>` relinks them from CARLA's own stop waypoints (CARLA holding the town, something
+ticking it); its user guide lists the other repairs the pack needs.
+
 ## Architecture
 
 ```mermaid
