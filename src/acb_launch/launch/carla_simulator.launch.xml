@@ -40,8 +40,10 @@
        description="where CARLA's world origin sits in the map frame; no file = zero (TUM towns)"/>
   <!-- The vehicle spec's CARLA physics (roadmap 051): apply = acb puts it on the hero (no
        scenario bridge: a hero any client spawned becomes the spec's car); verify = a
-       scenario's CARLA world server applied it and acb reads it back. none = the blueprint's. -->
-  <arg name="carla_physics" default="$(find-pkg-share sim_vehicle_spec)/generated/$(var vehicle_model)/carla_physics.yaml"/>
+       scenario's CARLA world server applied it and acb reads it back. none (the default) = the
+       blueprint's own physics; the spec's is
+       $(find-pkg-share sim_vehicle_spec)/generated/<vehicle_model>/carla_physics.yaml. -->
+  <arg name="carla_physics" default="none"/>
   <arg name="carla_physics_mode" default="apply" description="apply | verify"/>
   <arg name="accel_map_path" default="$(find-pkg-share $(var vehicle_model)_description)/config/accel_map.csv"/>
   <arg name="brake_map_path" default="$(find-pkg-share $(var vehicle_model)_description)/config/brake_map.csv"/>
