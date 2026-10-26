@@ -45,8 +45,13 @@
        $(find-pkg-share sim_vehicle_spec)/generated/<vehicle_model>/carla_physics.yaml. -->
   <arg name="carla_physics" default="none"/>
   <arg name="carla_physics_mode" default="apply" description="apply | verify"/>
-  <arg name="accel_map_path" default="$(find-pkg-share $(var vehicle_model)_description)/config/accel_map.csv"/>
-  <arg name="brake_map_path" default="$(find-pkg-share $(var vehicle_model)_description)/config/brake_map.csv"/>
+  <!-- The pedal maps belong to the physics: with carla_physics none the blueprint's, measured
+       on CARLA's own car (acb_launch config/blueprint/<vehicle_model>/), otherwise the spec
+       car's (<vehicle_model>_description). The spec car's maps on the blueprint's physics
+       ask too little throttle to start the car. -->
+  <arg name="vehicle_maps_dir" default="$(eval &quot;'$(find-pkg-share acb_launch)/config/blueprint/$(var vehicle_model)' if '$(var carla_physics)' == 'none' else '$(find-pkg-share $(var vehicle_model)_description)/config'&quot;)"/>
+  <arg name="accel_map_path" default="$(var vehicle_maps_dir)/accel_map.csv"/>
+  <arg name="brake_map_path" default="$(var vehicle_maps_dir)/brake_map.csv"/>
   <arg name="report_measured_steering" default="false"/>
   <arg name="steering_multiplier" default="1.0"/>
   <arg name="steer_rate_limit_deg_s" default="0.0" description="steering actuator rate limit, deg/s; 0 = off"/>
