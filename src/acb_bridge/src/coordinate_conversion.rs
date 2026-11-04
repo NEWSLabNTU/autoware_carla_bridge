@@ -184,11 +184,10 @@ pub fn carla_to_ros_position(carla_position: &Vector3<f64>) -> Vector3<f64> {
 /// NOTE: Kept for API completeness and potential future use in rotation conversions.
 #[allow(dead_code)]
 pub fn ros_to_carla_rotation(roll: f64, pitch: f64, yaw: f64) -> (f64, f64, f64) {
-    (
-        -roll * 180.0 / PI, // Sign flip for left-handed system
-        pitch * 180.0 / PI,
-        -yaw * 180.0 / PI, // Sign flip for left-handed system
-    )
+    // LibCarla's rotation is Rz(yaw) Ry(-pitch) Rx(-roll) (`carla_rotation_matrix`); mirrored
+    // into ROS's frame that is Rz(-yaw) Ry(-pitch) Rx(roll): pitch and yaw change sign, roll
+    // does not. CARLA pitch +10 is nose up, ROS pitch +10 nose down.
+    (roll * 180.0 / PI, -pitch * 180.0 / PI, -yaw * 180.0 / PI)
 }
 
 /// Convert rotation from CARLA Euler angles (degrees) to ROS Euler angles (radians)
@@ -212,11 +211,8 @@ pub fn ros_to_carla_rotation(roll: f64, pitch: f64, yaw: f64) -> (f64, f64, f64)
 /// assert!((ros_yaw - PI / 2.0).abs() < 1e-6); // -90° in CARLA → 90° counterclockwise
 /// ```
 pub fn carla_to_ros_rotation(roll: f64, pitch: f64, yaw: f64) -> (f64, f64, f64) {
-    (
-        -roll * PI / 180.0, // Sign flip for right-handed system
-        pitch * PI / 180.0,
-        -yaw * PI / 180.0, // Sign flip for right-handed system
-    )
+    // Pitch and yaw change sign, roll does not (see `ros_to_carla_rotation`).
+    (roll * PI / 180.0, -pitch * PI / 180.0, -yaw * PI / 180.0)
 }
 
 /// Convert ROS quaternion to CARLA Euler angles (degrees)
@@ -496,10 +492,8 @@ pub fn ros_pose_to_carla_isometry(pose: &geometry_msgs::msg::Pose) -> nalgebra::
 
     // Convert to Euler, apply coordinate system transform, back to quaternion (f32)
     let (roll, pitch, yaw) = quaternion_to_euler(&q_f64);
-    let carla_quat = euler_to_quaternion(
-        -roll, // Roll sign flip for left-handed
-        pitch, -yaw, // Yaw sign flip for left-handed
-    );
+    // Pitch and yaw change sign, roll does not (see `ros_to_carla_rotation`).
+    let carla_quat = euler_to_quaternion(roll, -pitch, -yaw);
 
     // Create nalgebra Isometry3<f32>
     let translation = nalgebra::Translation3::new(
@@ -753,6 +747,29 @@ mod tests {
         let flip_then_ros = carla_to_ros_velocity(&v)
             + carla_to_ros_angular_velocity(&w).cross(&carla_to_ros_position(&r));
         assert_vec_close(&carla_then_flip, &flip_then_ros, 1e-12);
+    }
+
+    #[test]
+    fn test_carla_pitch_up_is_ros_pitch_down() {
+        // CARLA pitch +10: nose up (forward z = sin 10 > 0); in ROS that attitude is pitch -10.
+        assert!((carla_rotation_matrix(0.0, 10.0, 0.0) * Vector3::x()).z > 0.17);
+        let (r, p, y) = carla_to_ros_rotation(0.0, 10.0, 0.0);
+        assert!(r.abs() < 1e-12 && y.abs() < 1e-12);
+        assert!((p + 10.0_f64.to_radians()).abs() < 1e-12);
+        let (_, cp, _) = ros_to_carla_rotation(0.0, -10.0_f64.to_radians(), 0.0);
+        assert!((cp - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_rotation_conversion_is_carlas_matrix_mirrored() {
+        // M R_carla M == R_ros (M = diag(1, -1, 1)) for general attitudes: roll kept, pitch and
+        // yaw negated.
+        let m = Matrix3::new(1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0);
+        for &(cr, cp, cy) in &[(7.0, -12.0, 143.0), (-3.0, 9.7, -91.0), (20.0, 30.0, 10.0)] {
+            let (r, p, y) = carla_to_ros_rotation(cr, cp, cy);
+            let ros = Rotation3::from_euler_angles(r, p, y).into_inner();
+            assert!((m * carla_rotation_matrix(cr, cp, cy) * m - ros).norm() < 1e-12);
+        }
     }
 
     #[test]
