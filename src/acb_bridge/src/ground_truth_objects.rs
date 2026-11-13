@@ -179,16 +179,26 @@ fn pose_sample(
         tf.location.y as f64,
         tf.location.z as f64,
     ));
-    let (_, _, yaw_deg) = coordinate_conversion::carla_to_ros_rotation(
+    // carla_to_ros_rotation takes degrees and returns radians.
+    let (_, _, yaw) = coordinate_conversion::carla_to_ros_rotation(
         tf.rotation.roll as f64,
         tf.rotation.pitch as f64,
         tf.rotation.yaw as f64,
     );
-    PoseSample {
-        t,
-        pos,
-        yaw: yaw_deg.to_radians(),
-    }
+    PoseSample { t, pos, yaw }
+}
+
+/// An actor's orientation in the ROS map frame.
+fn ros_orientation(rotation: &carla::geom::Rotation) -> nalgebra::Quaternion<f64> {
+    // carla_to_ros_rotation already returns radians: converting them again shrank every
+    // heading by pi/180, so every object faced east (yaw ~0) and its predicted path ran
+    // across the lanes beside it (roadmap 074 C3: obstacle_stop for a car in the next lane).
+    let (roll, pitch, yaw) = coordinate_conversion::carla_to_ros_rotation(
+        rotation.roll as f64,
+        rotation.pitch as f64,
+        rotation.yaw as f64,
+    );
+    coordinate_conversion::euler_to_quaternion(roll, pitch, yaw)
 }
 
 /// CARLA's own twist when it has one, the pose-history estimate otherwise.
@@ -442,16 +452,7 @@ impl GroundTruthObjectPublisher {
         twist: ObjectTwist,
     ) -> autoware_perception_msgs::msg::PredictedObject {
         let pos = pose.pos;
-        let (roll, pitch, yaw) = coordinate_conversion::carla_to_ros_rotation(
-            tf.rotation.roll as f64,
-            tf.rotation.pitch as f64,
-            tf.rotation.yaw as f64,
-        );
-        let q = coordinate_conversion::euler_to_quaternion(
-            roll.to_radians(),
-            pitch.to_radians(),
-            yaw.to_radians(),
-        );
+        let q = ros_orientation(&tf.rotation);
         // World-frame velocity in the ROS frame, for the prediction below.
         let (vx_ros, vy_ros) = twist.world_xy(pose.yaw);
 
@@ -689,6 +690,21 @@ mod tests {
         close(tw.longitudinal, 5.0, 1e-5);
         close(tw.lateral, 0.0, 1e-5);
         close(tw.yaw_rate, -10f64.to_radians(), 1e-6);
+    }
+
+    #[test]
+    fn heading_is_carried_over_in_radians() {
+        // CARLA yaw 90 (facing CARLA +y) is ROS yaw -90 (facing -y), in the sample and in
+        // the published orientation alike.
+        let tf = carla::geom::Transform {
+            location: carla::geom::Location::new(0.0, 0.0, 0.0),
+            rotation: carla::geom::Rotation::new(0.0, 90.0, 0.0),
+        };
+        let p = pose_sample(&tf, 0.0, &coordinate_conversion::MapOrigin::default());
+        close(p.yaw, -std::f64::consts::FRAC_PI_2, 1e-6);
+        let q = ros_orientation(&tf.rotation);
+        let yaw = (2.0 * (q.w * q.k + q.i * q.j)).atan2(1.0 - 2.0 * (q.j * q.j + q.k * q.k));
+        close(yaw, -std::f64::consts::FRAC_PI_2, 1e-6);
     }
 
     #[test]
