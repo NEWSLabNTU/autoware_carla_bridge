@@ -36,6 +36,8 @@
   <arg name="seed_localization_on_attach" default="true"/>
   <arg name="traffic_light_map_path" default="$(var map_path)/carla/traffic_lights.yaml"
        description="the map dir's CARLA signal table (swb_carla_world --generate-signal-table); empty disables V2X signals"/>
+  <arg name="traffic_light_state_path" default=""
+       description="the stack's &lt;state_dir&gt;/&lt;map&gt;/carla/traffic_lights.yaml (swb_carla_world writes it at the first Initialize on a map); read before traffic_light_map_path once it exists; empty: none"/>
   <arg name="map_origin_path" default="$(var map_path)/carla/map_origin.yaml"
        description="where CARLA's world origin sits in the map frame; no file = zero (TUM towns)"/>
   <!-- The vehicle spec's CARLA physics (roadmap 051): apply = acb puts it on the hero (no
@@ -92,6 +94,7 @@
       <arg name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)"/>
       <arg name="ground_truth_range_m" value="$(var ground_truth_range_m)"/>
       <arg name="traffic_light_map_path" value="$(var traffic_light_map_path)"/>
+      <arg name="traffic_light_state_path" value="$(var traffic_light_state_path)"/>
       <arg name="map_origin_path" value="$(var map_origin_path)"/>
       <arg name="control_trace_path" value="$(var control_trace_path)"/>
       <arg name="accel_map_path" value="$(var accel_map_path)"/>

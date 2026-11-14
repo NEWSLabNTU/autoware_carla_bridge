@@ -15,6 +15,13 @@
 //! off, as is `none`) and reads it again whenever its mtime changes. Each group is one Lanelet2
 //! regulatory element, which is what Autoware's `TrafficLightGroup` id means.
 //!
+//! Since carla-scenario-bridge roadmap 076 (A9) the world server writes the table itself, at
+//! the first Initialize that finds it missing or stale, into the stack's state directory
+//! (`<state_dir>/<map>/carla/traffic_lights.yaml`), never into the map dir. That path is
+//! `traffic_light_state_path`: when it is set and the file exists it is read, else
+//! `traffic_light_map_path` is; the choice is made again at every recheck, so a table that
+//! appears in the state directory mid-run takes over at once.
+//!
 //! It runs on a CARLA client and `on_tick` subscription of its own, like the clock, and from
 //! node start rather than hero attach: Autoware's topic monitor on the arbiter's output
 //! times out between scenarios otherwise (/clock keeps running then). Every message is
@@ -239,21 +246,41 @@ pub struct Config {
     pub address: String,
     pub port: u16,
     pub map_path: PathBuf,
+    /// The table in the stack's state directory, read before `map_path` when it exists;
+    /// empty: none.
+    pub state_path: PathBuf,
     pub vehicle_name: String,
     pub range_m: f64,
 }
 
-/// Start the publisher thread, or `None` (logged) when `map_path` is empty.
+/// A table path that names nothing: empty, or `none`.
+fn unset(path: &Path) -> bool {
+    path.as_os_str().is_empty() || path.as_os_str() == "none"
+}
+
+/// The table to read: the state directory's when it is set and exists, else the map dir's,
+/// else the state directory's (to wait for it); `None` when neither is set.
+pub fn pick_table<'a>(state_path: &'a Path, map_path: &'a Path) -> Option<&'a Path> {
+    match (unset(state_path), unset(map_path)) {
+        (true, true) => None,
+        (false, true) => Some(state_path),
+        (true, false) => Some(map_path),
+        (false, false) if state_path.exists() => Some(state_path),
+        (false, false) => Some(map_path),
+    }
+}
+
+/// Start the publisher thread, or `None` (logged) when both table paths are empty.
 pub fn spawn(
     node: &rclrs::Node,
     clock: SimClock,
     config: Config,
     running: Arc<AtomicBool>,
 ) -> crate::error::Result<Option<std::thread::JoinHandle<()>>> {
-    if config.map_path.as_os_str().is_empty() || config.map_path.as_os_str() == "none" {
+    if pick_table(&config.state_path, &config.map_path).is_none() {
         tracing::info!(
-            "Traffic signals from CARLA: off (traffic_light_map_path is empty or \"none\"). \
-             Nothing from this bridge on {TOPIC}"
+            "Traffic signals from CARLA: off (traffic_light_state_path and \
+             traffic_light_map_path are empty or \"none\"). Nothing from this bridge on {TOPIC}"
         );
         return Ok(None);
     }
@@ -266,7 +293,12 @@ pub fn spawn(
     tracing::info!(
         "Traffic signals from CARLA: publishing {TOPIC} from {} (range {range_m} m around \
          '{}'). SSv2's own V2X publisher must be off, or two sources interleave",
-        config.map_path.display(),
+        [&config.state_path, &config.map_path]
+            .into_iter()
+            .filter(|p| !unset(p))
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", else "),
         config.vehicle_name
     );
     let handle = std::thread::Builder::new()
@@ -313,6 +345,9 @@ pub fn spawn(
 /// The table file and when it was last read.
 #[derive(Default)]
 struct FileWatch {
+    /// The file `mtime` belongs to: a change of file (the state directory's appearing) is a
+    /// reload whatever the mtimes.
+    path: Option<PathBuf>,
     mtime: Option<SystemTime>,
     map: LightMap,
     /// Bumped on every successful (re)load, so the actor cache knows to refresh.
@@ -327,6 +362,14 @@ impl FileWatch {
             return;
         }
         self.checked = Some(Instant::now());
+        if self.path.as_deref() != Some(path) {
+            if self.path.is_some() {
+                tracing::info!("signals: now reading {}", path.display());
+            }
+            self.path = Some(path.to_path_buf());
+            self.mtime = None;
+            self.missing_reported = false;
+        }
         let mtime = match std::fs::metadata(path).and_then(|m| m.modified()) {
             Ok(t) => t,
             Err(e) => {
@@ -334,7 +377,7 @@ impl FileWatch {
                     self.missing_reported = true;
                     tracing::warn!(
                         "signals: cannot read {} ({e}); publishing nothing until \
-                         carla_world writes it at the next Initialize",
+                         swb_carla_world writes it at the next Initialize",
                         path.display()
                     );
                 }
@@ -526,7 +569,10 @@ impl Worker {
     }
 
     fn on_frame(&mut self, world: &World, snapshot: &WorldSnapshot) {
-        self.file.refresh(&self.config.map_path);
+        if let Some(path) = pick_table(&self.config.state_path, &self.config.map_path) {
+            let path = path.to_path_buf();
+            self.file.refresh(&path);
+        }
         if self.file.map.lights.is_empty() {
             return;
         }
@@ -841,6 +887,58 @@ unmapped:
         watch.refresh(&path);
         assert_eq!((watch.generation, watch.map.groups.len()), (1, 3));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_state_dirs_table_is_read_first_when_it_exists() {
+        let dir = std::env::temp_dir().join(format!("acb_pick_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = dir.join("state/Town01/carla/traffic_lights.yaml");
+        let map = dir.join("Town01/carla/traffic_lights.yaml");
+        let empty = Path::new("");
+        let none = Path::new("none");
+
+        assert_eq!(pick_table(empty, empty), None);
+        assert_eq!(pick_table(none, none), None);
+        assert_eq!(pick_table(empty, &map), Some(map.as_path()));
+        assert_eq!(pick_table(none, &map), Some(map.as_path()));
+        // Only a state path: wait for it there.
+        assert_eq!(pick_table(&state, empty), Some(state.as_path()));
+        // Both, the state one absent: the map dir's.
+        assert_eq!(pick_table(&state, &map), Some(map.as_path()));
+        // Once the world server has written it, the state one.
+        std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+        std::fs::write(&state, TABLE).unwrap();
+        assert_eq!(pick_table(&state, &map), Some(state.as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_change_of_file_reloads_even_with_the_same_mtime() {
+        let dir = std::env::temp_dir().join(format!("acb_switch_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.yaml");
+        let b = dir.join("b.yaml");
+        std::fs::write(&a, TABLE).unwrap();
+        std::fs::write(&b, TABLE).unwrap();
+        let t = SystemTime::now();
+        for p in [&a, &b] {
+            std::fs::File::options()
+                .write(true)
+                .open(p)
+                .unwrap()
+                .set_modified(t)
+                .unwrap();
+        }
+        let mut watch = FileWatch::default();
+        watch.refresh(&a);
+        assert_eq!(watch.generation, 1);
+        watch.checked = None;
+        watch.refresh(&b);
+        assert_eq!(watch.generation, 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
