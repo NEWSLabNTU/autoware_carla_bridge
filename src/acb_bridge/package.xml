@@ -27,6 +27,10 @@
   <depend>autoware_vehicle_msgs</depend>
   <depend>tier4_vehicle_msgs</depend>
   <depend>tier4_control_msgs</depend>
+  <!-- rclrs 0.7 builds its vendored example_interfaces and test_msgs from the installed ROS
+       packages: Autoware 1.5.0's install has them, the 2.0.0 image does not. -->
+  <build_depend>example_interfaces</build_depend>
+  <build_depend>test_msgs</build_depend>
 
   <export>
     <build_type>ament_cargo</build_type>
