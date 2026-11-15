@@ -1,4 +1,4 @@
-use std::{convert::Infallible, mem, str::FromStr, sync::Arc};
+use std::{convert::Infallible, str::FromStr, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
 use carla::{
@@ -15,7 +15,10 @@ use carla::{
 use nalgebra::{coordinates::XYZ, UnitQuaternion};
 use rclrs::IntoPrimitiveOptions;
 
-use super::actor_bridge::{ActorBridge, BridgeType};
+use super::{
+    actor_bridge::{ActorBridge, BridgeType},
+    lidar_model::{Beams, Reflectance},
+};
 use crate::{
     autoware::Autoware,
     error::{BridgeError, Result},
@@ -129,6 +132,7 @@ impl SensorBridge {
         bridge_type: BridgeType,
         autoware: &Autoware,
         clock: crate::clock::SimClock,
+        definition: Option<&crate::sensor_config::SensorDefinition>,
     ) -> Result<SensorBridge> {
         let (sensor_type, sensor_name) = match bridge_type {
             BridgeType::Sensor(t, s) => (t, s),
@@ -138,6 +142,7 @@ impl SensorBridge {
         let key_list = autoware.get_sensors_key(sensor_type, &sensor_name);
 
         let node = Arc::new(node);
+        let beams = definition.map(|d| Beams::from_parameters(&d.parameters));
 
         match sensor_type {
             SensorType::CameraRgb => {
@@ -150,15 +155,27 @@ impl SensorBridge {
                     key_list,
                     &sensor_name,
                     clock.clone(),
+                    beams.ok_or(BridgeError::CarlaIssue("a lidar without its definition"))?,
                 )?;
             }
             SensorType::LidarRayCastSemantic => {
+                let reflectance = definition
+                    .and_then(|d| d.intensity.as_ref())
+                    .ok_or(BridgeError::CarlaIssue(
+                        "a semantic lidar without intensity",
+                    ))
+                    .and_then(|i| {
+                        Reflectance::new(i.reflectance.clone())
+                            .map_err(|_| BridgeError::CarlaIssue("a bad intensity table"))
+                    })?;
                 register_lidar_raycast_semantic(
                     node.clone(),
                     &actor,
                     key_list,
                     &sensor_name,
                     clock.clone(),
+                    beams.ok_or(BridgeError::CarlaIssue("a lidar without its definition"))?,
+                    reflectance,
                 )?;
             }
             SensorType::Imu => {
@@ -297,6 +314,7 @@ fn register_lidar_raycast(
     key_list: Option<Vec<String>>,
     frame_id: &str,
     clock: crate::clock::SimClock,
+    beams: Beams,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
@@ -317,7 +335,7 @@ fn register_lidar_raycast(
         };
 
         if let Ok(measure) = data.try_into() {
-            if let Err(e) = publish_lidar(&publisher, header, measure) {
+            if let Err(e) = publish_lidar(&publisher, header, measure, beams) {
                 tracing::error!("Failed to publish lidar data: {e:?}");
             }
         } else {
@@ -334,6 +352,8 @@ fn register_lidar_raycast_semantic(
     key_list: Option<Vec<String>>,
     frame_id: &str,
     clock: crate::clock::SimClock,
+    beams: Beams,
+    reflectance: Reflectance,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
@@ -354,7 +374,8 @@ fn register_lidar_raycast_semantic(
         };
 
         if let Ok(measure) = data.try_into() {
-            if let Err(e) = publish_semantic_lidar(&publisher, header, measure) {
+            if let Err(e) = publish_semantic_lidar(&publisher, header, measure, beams, &reflectance)
+            {
                 tracing::error!("Failed to publish semantic lidar data: {e:?}");
             }
         } else {
@@ -508,67 +529,70 @@ fn publish_lidar(
     publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::PointCloud2>>,
     header: std_msgs::msg::Header,
     measure: LidarMeasurement,
+    beams: Beams,
 ) -> Result<()> {
     let lidar_data = measure.as_slice();
     if lidar_data.is_empty() {
         return Ok(());
     }
-
-    // Get channel information from CARLA's LidarMeasurement
-    let channel_count = measure.channel_count();
-
-    // Build channel boundaries: cumulative point counts per channel
-    // This allows us to determine which channel each point belongs to
-    let mut channel_boundaries: Vec<usize> = Vec::with_capacity(channel_count + 1);
-    channel_boundaries.push(0);
-    for ch in 0..channel_count {
-        let prev = *channel_boundaries.last().unwrap();
-        let count = measure.point_count(ch).unwrap_or(0);
-        channel_boundaries.push(prev + count);
-    }
-
-    // Convert CARLA points to Autoware PointXYZIRC format using declarative struct
-    //
-    // The boundary table is sorted and CARLA emits points in channel order, so the
-    // channel for each point is found by advancing a cursor -- one comparison for all
-    // but `channel_count` points per scan. The old code linear-scanned the whole table
-    // per point: ~8.4 M comparisons per scan at 128 channels. See issue 011.
-    let mut cursor = 0usize;
     let points: Vec<PointXYZIRC> = lidar_data
         .iter()
-        .enumerate()
-        .map(|(idx, det)| {
-            while cursor + 1 < channel_boundaries.len() && idx >= channel_boundaries[cursor + 1] {
-                cursor += 1;
-            }
-            // CARLA does not promise the ordering; fall back to a binary search if the
-            // cursor ran past this point's channel.
-            let channel = if idx >= channel_boundaries[cursor] {
-                cursor
-            } else {
-                channel_boundaries
-                    .partition_point(|&b| b <= idx)
-                    .saturating_sub(1)
-            } as u16;
-
+        .map(|det| {
+            let (x, y, z) = (det.point.x, det.point.y, det.point.z);
             PointXYZIRC {
                 // Apply Y-axis flip: CARLA uses left-handed (Y=right), ROS uses right-handed (Y=left)
                 // The pre-built PCD map is in ROS frame (Y-flipped), so live scan must match.
-                x: det.point.x,
-                y: -det.point.y,
-                z: det.point.z,
-                // Convert float intensity [0.0-1.0] to uint8 [0-255]
+                x,
+                y: -y,
+                z,
+                // CARLA's [0, 1] (the atmosphere's attenuation by range) as uint8
                 intensity: (det.intensity.clamp(0.0, 1.0) * 255.0) as u8,
                 return_type: 0, // Single return
-                channel,
+                channel: beams.ring(x, y, z),
             }
         })
         .collect();
+    publish_points(publisher, header, &points)
+}
 
+/// The semantic lidar as the ray-cast one's PointXYZIRC, its intensity from the spec's
+/// reflectance of what each ray hit ([`Reflectance::intensity`]).
+fn publish_semantic_lidar(
+    publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::PointCloud2>>,
+    header: std_msgs::msg::Header,
+    measure: SemanticLidarMeasurement,
+    beams: Beams,
+    reflectance: &Reflectance,
+) -> Result<()> {
+    let lidar_data = measure.as_slice();
+    if lidar_data.is_empty() {
+        return Ok(());
+    }
+    let points: Vec<PointXYZIRC> = lidar_data
+        .iter()
+        .map(|det| {
+            let (x, y, z) = (det.point.x, det.point.y, det.point.z);
+            PointXYZIRC {
+                x,
+                y: -y, // CARLA's left-handed frame to ROS's, as the ray-cast lidar
+                z,
+                intensity: reflectance.intensity(det.object_tag, det.cos_inc_angle),
+                return_type: 0,
+                channel: beams.ring(x, y, z),
+            }
+        })
+        .collect();
+    publish_points(publisher, header, &points)
+}
+
+fn publish_points(
+    publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::PointCloud2>>,
+    header: std_msgs::msg::Header,
+    points: &[PointXYZIRC],
+) -> Result<()> {
     // Use bytemuck for zero-copy serialization
-    let data: Vec<u8> = bytemuck::cast_slice(&points).to_vec();
+    let data: Vec<u8> = bytemuck::cast_slice(points).to_vec();
     let row_step = data.len() as u32;
-
     let lidar_msg = sensor_msgs::msg::PointCloud2 {
         header,
         height: 1,
@@ -580,95 +604,6 @@ fn publish_lidar(
         data,
         is_dense: true,
     };
-
-    publisher.publish(&lidar_msg)?;
-    Ok(())
-}
-
-fn publish_semantic_lidar(
-    publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::PointCloud2>>,
-    header: std_msgs::msg::Header,
-    measure: SemanticLidarMeasurement,
-) -> Result<()> {
-    let lidar_data = measure.as_slice();
-    if lidar_data.is_empty() {
-        return Ok(());
-    }
-
-    let point_step = mem::size_of_val(&lidar_data[0]) as u32;
-    let data: Vec<_> = lidar_data
-        .iter()
-        .flat_map(|det| {
-            // Use CARLA coordinates directly (no Y-axis flip)
-            // The pointcloud map was created with CARLA's native coordinate system
-            let (x, y, z) = (det.point.x, det.point.y, det.point.z);
-            let cos_inc_angle = det.cos_inc_angle;
-            let object_idx = det.object_idx;
-            let object_tag = det.object_tag;
-            [
-                x.to_ne_bytes(),
-                y.to_ne_bytes(),
-                z.to_ne_bytes(),
-                cos_inc_angle.to_ne_bytes(),
-                object_idx.to_ne_bytes(),
-                object_tag.to_ne_bytes(),
-            ]
-        })
-        .flatten()
-        .collect();
-    let row_step = data.len() as u32;
-
-    let fields = vec![
-        sensor_msgs::msg::PointField {
-            name: "x".to_string(),
-            offset: 0,
-            datatype: PointFieldType::FLOAT32 as u8,
-            count: 1,
-        },
-        sensor_msgs::msg::PointField {
-            name: "y".to_string(),
-            offset: 4,
-            datatype: PointFieldType::FLOAT32 as u8,
-            count: 1,
-        },
-        sensor_msgs::msg::PointField {
-            name: "z".to_string(),
-            offset: 8,
-            datatype: PointFieldType::FLOAT32 as u8,
-            count: 1,
-        },
-        sensor_msgs::msg::PointField {
-            name: "CosAngle".to_string(),
-            offset: 12,
-            datatype: PointFieldType::FLOAT32 as u8,
-            count: 1,
-        },
-        sensor_msgs::msg::PointField {
-            name: "ObjIdx".to_string(),
-            offset: 16,
-            datatype: PointFieldType::UINT32 as u8,
-            count: 1,
-        },
-        sensor_msgs::msg::PointField {
-            name: "ObjTag".to_string(),
-            offset: 20,
-            datatype: PointFieldType::UINT32 as u8,
-            count: 1,
-        },
-    ];
-
-    let lidar_msg = sensor_msgs::msg::PointCloud2 {
-        header,
-        height: 1,
-        width: lidar_data.len() as u32,
-        fields,
-        is_bigendian: utils::is_bigendian(),
-        point_step,
-        row_step,
-        data,
-        is_dense: true,
-    };
-
     publisher.publish(&lidar_msg)?;
     Ok(())
 }
@@ -801,31 +736,5 @@ mod tests {
         assert_eq!(accel_ros, (1.0, -2.0, 3.0));
         assert_ne!(gyro_ros.0.signum(), accel_ros.0.signum());
         assert_ne!(gyro_ros.1.signum(), accel_ros.1.signum());
-    }
-
-    /// The cursor walk in `publish_lidar` must land on the same channel a linear scan
-    /// would, including the fall back for out-of-order points. See issue 011.
-    #[test]
-    fn channel_lookup_matches_a_linear_scan() {
-        let boundaries = [0usize, 3, 3, 7, 10]; // note the empty channel 1
-        let linear = |idx: usize| -> usize {
-            boundaries
-                .windows(2)
-                .position(|w| idx >= w[0] && idx < w[1])
-                .unwrap_or(0)
-        };
-
-        let mut cursor = 0usize;
-        for idx in 0..10 {
-            while cursor + 1 < boundaries.len() && idx >= boundaries[cursor + 1] {
-                cursor += 1;
-            }
-            let walked = if idx >= boundaries[cursor] {
-                cursor
-            } else {
-                boundaries.partition_point(|&b| b <= idx).saturating_sub(1)
-            };
-            assert_eq!(walked, linear(idx), "point {idx}");
-        }
     }
 }

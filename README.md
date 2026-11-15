@@ -208,10 +208,19 @@ from anywhere while the stack runs ends it.
 
 | Sensor | CARLA Blueprint         | ROS 2 Topic                     | Format                                    |
 |--------|-------------------------|---------------------------------|-------------------------------------------|
-| LiDAR  | `sensor.lidar.ray_cast` | `/sensing/lidar/top/pointcloud` | PointCloud2 (PointXYZIRC, NDT-compatible) |
+| LiDAR  | `sensor.lidar.ray_cast_semantic` (the spec's; or `ray_cast`) | `/sensing/lidar/top/pointcloud_before_sync` | PointCloud2 (PointXYZIRC, NDT-compatible) |
 | Camera | `sensor.camera.rgb`     | `/sensing/camera/*/image_raw`   | Image + CameraInfo                        |
 | IMU    | `sensor.other.imu`      | `/sensing/imu/*/imu_raw`        | Imu                                       |
 | GNSS   | `sensor.other.gnss`     | `/sensing/gnss/*/nav_sat_fix`   | NavSatFix                                 |
+
+The lidar's points carry their beam as `channel` (0 the top beam: CARLA spaces the beams
+evenly over the vertical field of view, so it is the point's elevation) and an intensity.
+With the semantic lidar the intensity is the spec's reflectance of what the ray hit (its
+semantic tag; `intensity.reflectance` in `carla_sensors.yaml`) times the cosine of the
+incidence, 0-255: road ~2, a car 12 m ahead ~75 at the median. The ray-cast lidar's own
+intensity (kept for a `ray_cast` lidar) is only the atmosphere's attenuation by range, 255
+everywhere with none, which TransFusion cannot see in. A semantic lidar without
+`intensity`, or `intensity` on another sensor, is refused at start.
 
 The traffic light camera (`camera6`) is not spawned while traffic lights are fusion-only
 (`traffic_light_fusion_only:=true`, the default); signals then come from CARLA's lights over

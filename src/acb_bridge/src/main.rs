@@ -82,6 +82,7 @@ fn create_sensor_bridges(
     carla_vehicle: &CarlaVehicle,
     autoware: &autoware::Autoware,
     clock: SimClock,
+    vehicle_config: &sensor_config::VehicleConfig,
 ) -> Result<Vec<SensorBridge>> {
     let sensor_types = carla_vehicle.get_sensor_types();
     let sensors = carla_vehicle.get_sensors();
@@ -109,7 +110,14 @@ fn create_sensor_bridges(
         let bridge_type = BridgeType::Sensor(mapped_type, link_name.clone());
 
         // Create sensor bridge
-        match SensorBridge::new(node.clone(), sensor, bridge_type, autoware, clock.clone()) {
+        match SensorBridge::new(
+            node.clone(),
+            sensor,
+            bridge_type,
+            autoware,
+            clock.clone(),
+            vehicle_config.sensors.get(link_name),
+        ) {
             Ok(bridge) => {
                 tracing::info!(
                     "Created sensor bridge for '{}' (type: {:?})",
@@ -1340,6 +1348,7 @@ fn main() -> Result<()> {
             &carla_vehicle.lock().unwrap(),
             &autoware,
             sim_clock.clone(),
+            &vehicle_config,
         )?;
         tracing::info!("Created {} sensor bridges", _sensor_bridges.len());
 

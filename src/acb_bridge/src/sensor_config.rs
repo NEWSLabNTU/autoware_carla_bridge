@@ -86,6 +86,20 @@ pub struct SensorDefinition {
     /// CARLA sensor parameters as string key-value pairs
     #[serde(default)]
     pub parameters: HashMap<String, String>,
+
+    /// A semantic lidar's intensity model (sim_vehicle_spec's `carla.intensity`): the
+    /// reflectance by CARLA semantic tag id. Required for `sensor.lidar.ray_cast_semantic`,
+    /// refused on anything else.
+    #[serde(default)]
+    pub intensity: Option<LidarIntensity>,
+}
+
+/// `intensity:` of a semantic lidar in carla_sensors.yaml.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LidarIntensity {
+    /// 0-255 at normal incidence, by CARLA semantic tag id.
+    pub reflectance: Vec<f32>,
 }
 
 impl SensorDefinition {
@@ -158,6 +172,38 @@ impl VehicleConfig {
                  origin in <map dir>/carla/map_origin.yaml (x, y, z; no yaw) instead",
                 path.display()
             )));
+        }
+
+        for (link_name, sensor_def) in &config.sensors {
+            let semantic = sensor_def.sensor_type() == SensorType::SemanticLidar;
+            match (&sensor_def.intensity, semantic) {
+                (None, true) => {
+                    return Err(BridgeError::ConfigError(format!(
+                        "{}: sensor '{link_name}' is a semantic lidar without intensity: its \
+                         points carry none (regenerate carla_sensors.yaml from the spec)",
+                        path.display()
+                    )))
+                }
+                (Some(_), false) => {
+                    return Err(BridgeError::ConfigError(format!(
+                        "{}: sensor '{link_name}' ({}) has intensity, which only a \
+                         sensor.lidar.ray_cast_semantic takes",
+                        path.display(),
+                        sensor_def.blueprint
+                    )))
+                }
+                (Some(i), true) => {
+                    crate::bridge::lidar_model::Reflectance::new(i.reflectance.clone()).map_err(
+                        |e| {
+                            BridgeError::ConfigError(format!(
+                                "{}: sensor '{link_name}': {e}",
+                                path.display()
+                            ))
+                        },
+                    )?;
+                }
+                (None, false) => {}
+            }
         }
 
         tracing::info!(
@@ -250,5 +296,52 @@ mod tests {
                  package from 0123456789ab"
             )
         );
+    }
+
+    fn shipped() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../deps/sim_vehicle_spec/generated/tesla_model3/carla_sensors.yaml")
+    }
+
+    #[test]
+    fn the_spec_cars_lidar_is_semantic_with_its_reflectance() {
+        let c = VehicleConfig::from_file(shipped()).unwrap();
+        let top = &c.sensors["top"];
+        assert_eq!(top.sensor_type(), SensorType::SemanticLidar);
+        let r = &top.intensity.as_ref().unwrap().reflectance;
+        assert_eq!(r.len(), 29, "CARLA 0.9.16's tags");
+        assert!(r[1] < 10.0 && r[14] > 50.0, "road dark, car bright: {r:?}");
+    }
+
+    #[test]
+    fn intensity_goes_with_the_semantic_lidar_only() {
+        let dir = std::env::temp_dir().join(format!("acb-intensity-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let text = fs::read_to_string(shipped()).unwrap();
+        let without = dir.join("without.yaml");
+        let cut: String = text
+            .lines()
+            .filter(|l| {
+                !l.contains("intensity:")
+                    && !l.contains("reflectance:")
+                    && !l.trim_start().starts_with("90.0")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&without, cut).unwrap();
+        let e = VehicleConfig::from_file(&without).unwrap_err().to_string();
+        assert!(e.contains("semantic lidar without intensity"), "{e}");
+        let ray_cast = dir.join("ray_cast.yaml");
+        fs::write(
+            &ray_cast,
+            text.replace("sensor.lidar.ray_cast_semantic", "sensor.lidar.ray_cast"),
+        )
+        .unwrap();
+        let e = VehicleConfig::from_file(&ray_cast).unwrap_err().to_string();
+        assert!(
+            e.contains("only a sensor.lidar.ray_cast_semantic takes"),
+            "{e}"
+        );
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
