@@ -1472,6 +1472,12 @@ fn main() -> Result<()> {
 
         tracing::info!("=== Bridge running ===");
 
+        // The hero kept on the vehicle spec's physics from here on (CARLA 0.9.16 resets a
+        // blueprint's tires on every spawn of it; see vehicle_physics::Keeper).
+        let mut physics_keeper = carla_physics
+            .as_ref()
+            .map(|(_, mode)| vehicle_physics::Keeper::new(*mode));
+
         // Reset heartbeat: the spawn retry loop may have taken a long time (e.g., if a
         // previous session left a vehicle actor blocking the spawn point). Without this
         // reset, the health check would immediately fail on the first tick.
@@ -1711,6 +1717,44 @@ fn main() -> Result<()> {
             // episode ends this process first (roadmap 051).
             sim_clock.check_episode(snapshot.id());
             let stamp = sim_clock.stamp(snapshot.timestamp().elapsed_seconds);
+
+            if let (Some(keeper), Some((physics, mode))) = (physics_keeper.as_mut(), &carla_physics)
+            {
+                let highest = snapshot
+                    .actor_snapshots()
+                    .map(|a| a.id())
+                    .max()
+                    .unwrap_or(0);
+                match keeper.frame(
+                    highest,
+                    || vehicle_physics::check(&vehicle, physics, *mode),
+                    || vehicle_physics::apply(&vehicle, physics),
+                ) {
+                    vehicle_physics::Kept::Quiet
+                    | vehicle_physics::Kept::Runs
+                    | vehicle_physics::Kept::Waiting => {}
+                    vehicle_physics::Kept::Reapplied(off) => tracing::info!(
+                        "The hero lost the vehicle spec's physics when an actor up to id \
+                         {highest} spawned and has it back ({}): {off}",
+                        match mode {
+                            vehicle_physics::Mode::Apply => "re-applied",
+                            vehicle_physics::Mode::Verify => "the world server re-applied it",
+                        }
+                    ),
+                    vehicle_physics::Kept::Off(why) => tracing::error!(
+                        "{why} ({} frames after an actor up to id {highest} spawned){}",
+                        vehicle_physics::GRACE_FRAMES,
+                        match mode {
+                            vehicle_physics::Mode::Apply =>
+                                "; re-applying every frame did not take",
+                            vehicle_physics::Mode::Verify => {
+                                "; the world server did not put it back: this run is not on \
+                                 the spec's car"
+                            }
+                        }
+                    ),
+                }
+            }
 
             // Spin executor to process ROS callbacks (subscriptions).
             //

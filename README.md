@@ -42,7 +42,14 @@ Every launch selects the car with `vehicle_model:=tesla_model3` (the default).
   `verify` (under swb, whose CARLA world server applies it after the spawn) only reads it
   back. In both modes acb refuses a hero of another blueprint than the file's, and a physics
   read-back that differs from the file. `carla_physics:=none` keeps the blueprint's own
-  physics (the default of `acb_bridge.launch.xml` alone).
+  physics (the default of `acb_bridge.launch.xml` alone). The check goes on while the hero
+  drives: CARLA 0.9.16 puts a blueprint's own tire friction (3.5 for the Model 3) back on
+  live cars of that blueprint whenever another one spawns, so after each frame that shows a
+  new actor acb reads the hero back for up to 20 frames. `apply` re-applies the file on each
+  frame it is off (back on the next frame, measured); `verify` waits for the world server,
+  which re-applies it. Back on: an INFO line; still off after 20 frames: an ERROR that the
+  run is not on the spec's car (it is not ended: refusing mid-run would drop the sensors).
+  A tire friction above the file's is not taken for a road's factor (a road only lowers it).
 - **Pedal maps**: `accel_map.csv` and `brake_map.csv` in `<car>_description/config/`,
   measured on the spec's physics.
 - **spec_hash**: every generated file names the spec it came from. At start acb compares
