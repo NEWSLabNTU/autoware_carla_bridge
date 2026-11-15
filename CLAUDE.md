@@ -189,6 +189,10 @@ acb_bridge compares its CARLA version with the server's on connect and exits on 
   the world server applied it) reads it back. Both refuse a hero of another blueprint than
   the file's, and a read-back that differs from the file. CARLA applies physics at its next
   tick, so read back after a tick, never straight after the apply.
+  The check goes on after attach (`Keeper`): a spawn of the blueprint resets the hero's tires
+  (CARLA 0.9.16); off for 20 frames after one, acb exits **4** (`PHYSICS_DRIFT_EXIT`), and
+  after 2 such exits on one hero in one episode (`DriftLedger`, a file in the temp dir) a
+  respawned acb refuses that hero instead of attaching.
 - **Pedal lags** (`pedal_lag.rs`): first-order lag on each pedal plus the brake's dead time,
   from `command_lags`, on simulation time. The filter snaps to its target within 1e-3:
   without that, f32 decay left a ~1e-6 brake for 5 s after release, and CARLA held the car
@@ -401,6 +405,9 @@ with no use.
 - play_launch logs: `play_log/<time>/node/<node>/{out,err}` under the directory the recipe
   ran in (`just vehicle-check`: `<out>/acb_log`, `check_log`).
 - acb_bridge exited 3: an episode change (its log names both episode ids); see "Time".
+- acb_bridge exited 4: the hero lost the spec's physics mid-run and did not get it back
+  (`Physics drift:` names the field, the file's value and the actor's); "Refusing the hero
+  ... ended the run 2 times" after that is the bound, not a new fault.
 - acb_bridge refused the hero: wrong blueprint or physics read-back mismatch, both named in
   the error; check `carla_physics_mode` (`verify` with nobody applying) and the blueprint.
 - "vehicle_config was generated from spec X, Autoware's vehicle package from Y": one install

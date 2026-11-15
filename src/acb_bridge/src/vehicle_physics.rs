@@ -17,7 +17,12 @@
 //! each spawn the frames show, the hero is read back for up to [`GRACE_FRAMES`] frames:
 //! `apply` puts the file back on every frame it reads it off (measured: back on the next
 //! frame); `verify` waits for the world server, which puts it back a tick after it sees the
-//! spawn. Either says so loudly if it stays off.
+//! spawn. If it stays off, the run is not on the spec's car: acb ends it, exiting with
+//! [`PHYSICS_DRIFT_EXIT`], and its launch ends the Autoware stack with it. A supervisor that
+//! respawns the stack (swb's `just run` respawns the ego unconditionally) brings acb back; it
+//! attaches again only while [`DriftLedger`] counts fewer than [`MAX_DRIFT_EXITS`] such exits
+//! on the same hero in the same episode, and after that refuses the hero without exiting, so
+//! a drift nothing fixes cannot respawn the stack forever.
 
 use carla::{
     client::Vehicle,
@@ -196,6 +201,58 @@ pub fn check(vehicle: &Vehicle, p: &CarlaPhysics, mode: Mode) -> Result<(), Stri
         ));
     }
     Ok(())
+}
+
+/// The exit status when the hero lost the spec's physics mid-run and did not get it back
+/// within [`GRACE_FRAMES`] (3 is the episode change, `clock::EPISODE_CHANGED_EXIT`).
+pub const PHYSICS_DRIFT_EXIT: i32 = 4;
+
+/// Drift exits on one hero of one episode after which a respawned acb refuses that hero
+/// (stays up, attaches nothing) instead of running and exiting again.
+pub const MAX_DRIFT_EXITS: u32 = 2;
+
+/// The drift exits so far, kept across acb processes in a file per CARLA server: one line,
+/// `<episode id> <hero actor id> <count>`. Another episode or another hero starts again at 0.
+#[derive(Debug, Clone)]
+pub struct DriftLedger {
+    path: std::path::PathBuf,
+}
+
+impl DriftLedger {
+    /// The ledger of the CARLA server at `host:port` (in the system's temp directory).
+    pub fn for_server(host: &str, port: u16) -> Self {
+        let name = format!("acb-physics-drift-{}-{port}", host.replace(['/', ':'], "_"));
+        Self::at(std::env::temp_dir().join(name))
+    }
+
+    pub fn at(path: std::path::PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// Drift exits recorded on this hero in this episode.
+    pub fn count(&self, episode: u64, hero: u32) -> u32 {
+        let Ok(text) = std::fs::read_to_string(&self.path) else {
+            return 0;
+        };
+        let f: Vec<&str> = text.split_whitespace().collect();
+        match f.as_slice() {
+            [e, h, n] if e.parse() == Ok(episode) && h.parse() == Ok(hero) => {
+                n.parse().unwrap_or(0)
+            }
+            _ => 0,
+        }
+    }
+
+    /// One more drift exit on this hero in this episode: the count now.
+    pub fn record(&self, episode: u64, hero: u32) -> std::io::Result<u32> {
+        let n = self.count(episode, hero) + 1;
+        std::fs::write(&self.path, format!("{episode} {hero} {n}\n"))?;
+        Ok(n)
+    }
 }
 
 /// Frames the hero has, after a spawn, to be on the file again before it is called off:
@@ -397,5 +454,63 @@ mod tests {
             Kept::Off("f".into())
         );
         assert_eq!(k.frame(42, || panic!("done"), || panic!()), Kept::Quiet);
+    }
+
+    #[test]
+    fn the_ledger_counts_per_hero_and_episode() {
+        let path = std::env::temp_dir().join(format!("acb-ledger-test-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let l = DriftLedger::at(path.clone());
+        assert_eq!(l.count(7, 40), 0, "no file");
+        assert_eq!(l.record(7, 40).unwrap(), 1);
+        assert_eq!(l.record(7, 40).unwrap(), 2);
+        assert_eq!(
+            l.count(7, 40),
+            MAX_DRIFT_EXITS,
+            "a respawned acb refuses this hero now"
+        );
+        assert_eq!(
+            l.count(7, 41),
+            0,
+            "another hero (the next scenario's) starts again"
+        );
+        assert_eq!(l.count(8, 40), 0, "and so does another episode");
+        assert_eq!(l.record(8, 40).unwrap(), 1, "and replaces the old line");
+        assert_eq!(l.count(7, 40), 0);
+        std::fs::write(&path, "garbage").unwrap();
+        assert_eq!(l.count(8, 40), 0, "an unreadable ledger counts nothing");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_drift_the_world_server_never_fixes_ends_the_run_naming_the_field() {
+        // verify mode, a spawn resets the tires and nobody puts them back: past the grace,
+        // Off carries the read-back's words (field, the file's value, the actor's).
+        let p = shipped();
+        let mut back = p.as_read_back();
+        for w in &mut back.wheels {
+            w[0] = 3.5;
+        }
+        let check = || {
+            let off = p.differences(&back, road_factor(&p, &back));
+            if off.is_empty() {
+                Ok(())
+            } else {
+                Err(off.join("; "))
+            }
+        };
+        let mut k = Keeper::new(Mode::Verify);
+        k.frame(40, || panic!("the attach looked"), || panic!());
+        let mut last = Kept::Quiet;
+        for _ in 0..GRACE_FRAMES {
+            last = k.frame(41, check, || panic!("verify never applies"));
+        }
+        let Kept::Off(why) = last else {
+            panic!("{last:?}")
+        };
+        assert!(
+            why.contains("wheels[0].tire_friction: file 1.2, actor 3.5"),
+            "{why}"
+        );
     }
 }

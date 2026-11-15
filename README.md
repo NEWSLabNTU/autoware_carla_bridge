@@ -47,9 +47,15 @@ Every launch selects the car with `vehicle_model:=tesla_model3` (the default).
   live cars of that blueprint whenever another one spawns, so after each frame that shows a
   new actor acb reads the hero back for up to 20 frames. `apply` re-applies the file on each
   frame it is off (back on the next frame, measured); `verify` waits for the world server,
-  which re-applies it. Back on: an INFO line; still off after 20 frames: an ERROR that the
-  run is not on the spec's car (it is not ended: refusing mid-run would drop the sensors).
-  A tire friction above the file's is not taken for a road's factor (a road only lowers it).
+  which re-applies it. Back on: an INFO line. Still off after 20 frames: acb **ends the
+  run**, logging `Physics drift: <field>: file <expected>, actor <read>` and exiting with
+  status **4** (3 is the episode change); its launch ends the Autoware stack with it. The
+  exits are counted per CARLA server in `$TMPDIR/acb-physics-drift-<host>-<port>` (episode,
+  hero, count): after 2 on the same hero in the same episode, a respawned acb refuses that
+  hero (`Refusing the hero ...`, every 30 s) instead of attaching, so a supervisor that
+  respawns the stack unconditionally (swb's `just run`) does not loop. The next hero or
+  episode is attached again. A tire friction above the file's is not taken for a road's
+  factor (a road only lowers it).
 - **Pedal maps**: `accel_map.csv` and `brake_map.csv` in `<car>_description/config/`,
   measured on the spec's physics.
 - **spec_hash**: every generated file names the spec it came from. At start acb compares

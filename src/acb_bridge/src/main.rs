@@ -1112,6 +1112,10 @@ fn main() -> Result<()> {
         }
     }
 
+    // Drift exits so far on this CARLA server (vehicle_physics::DriftLedger).
+    let drift_ledger =
+        vehicle_physics::DriftLedger::for_server(&params.carla_address, params.carla_port);
+
     // === Step 5: Load vehicle configuration (sensor definitions) ===
     tracing::info!(
         "Loading vehicle configuration from: {}",
@@ -1223,6 +1227,24 @@ fn main() -> Result<()> {
             };
 
         if let Some((physics, mode)) = &carla_physics {
+            // A hero this acb already ended the run on MAX_DRIFT_EXITS times in this episode:
+            // refused, without exiting, so a respawning supervisor does not loop (each loop
+            // a whole Autoware start) on a drift nothing fixes.
+            let episode = world.id().unwrap_or(0);
+            let drifts = drift_ledger.count(episode, hero_vehicle.id());
+            if drifts >= vehicle_physics::MAX_DRIFT_EXITS {
+                tracing::error!(
+                    "Refusing the hero (actor {}): this bridge ended the run {drifts} times on \
+                     it in episode {episode} because it lost the vehicle spec's physics \
+                     mid-run (status {}, ledger {}); not attaching. A new hero (the next \
+                     scenario's) or a new episode is attached again; looking again in 30 s",
+                    hero_vehicle.id(),
+                    vehicle_physics::PHYSICS_DRIFT_EXIT,
+                    drift_ledger.path().display()
+                );
+                pump_ros_for(&mut executor, Duration::from_secs(30));
+                continue;
+            }
             let blueprint = hero_vehicle.type_id();
             // CARLA applies physics at the next tick, and under a scenario the world server
             // applies it a tick after the hero appears: the check reads again for a while
@@ -1750,18 +1772,41 @@ fn main() -> Result<()> {
                             vehicle_physics::Mode::Verify => "the world server re-applied it",
                         }
                     ),
-                    vehicle_physics::Kept::Off(why) => tracing::error!(
-                        "{why} ({} frames after an actor up to id {highest} spawned){}",
-                        vehicle_physics::GRACE_FRAMES,
-                        match mode {
-                            vehicle_physics::Mode::Apply =>
-                                "; re-applying every frame did not take",
-                            vehicle_physics::Mode::Verify => {
-                                "; the world server did not put it back: this run is not on \
-                                 the spec's car"
-                            }
+                    vehicle_physics::Kept::Off(why) => {
+                        // The run is not on the spec's car: end it (the stack ends with acb).
+                        let episode = snapshot.id();
+                        let n = drift_ledger
+                            .record(episode, vehicle_id)
+                            .unwrap_or_else(|e| {
+                                tracing::warn!(
+                                    "Cannot record the drift exit in {}: {e}",
+                                    drift_ledger.path().display()
+                                );
+                                0
+                            });
+                        tracing::error!(
+                            "Physics drift: {why} ({} frames after an actor up to id {highest} \
+                             spawned{}). This run is not on the spec's car: ending it, exit \
+                             status {} (drift exit {n} of {} on hero {vehicle_id} in episode \
+                             {episode}; after that a respawned bridge refuses this hero)",
+                            vehicle_physics::GRACE_FRAMES,
+                            match mode {
+                                vehicle_physics::Mode::Apply =>
+                                    "; re-applying every frame did not take",
+                                vehicle_physics::Mode::Verify =>
+                                    "; the world server did not put it back",
+                            },
+                            vehicle_physics::PHYSICS_DRIFT_EXIT,
+                            vehicle_physics::MAX_DRIFT_EXITS
+                        );
+                        // Our sensors first: the hero outlives us, and a respawned bridge
+                        // attaches its own.
+                        if let Err(e) = carla_vehicle.lock().unwrap().cleanup() {
+                            tracing::warn!("Sensor cleanup before the drift exit failed: {e}");
                         }
-                    ),
+                        log_writer::flush();
+                        std::process::exit(vehicle_physics::PHYSICS_DRIFT_EXIT);
+                    }
                 }
             }
 
