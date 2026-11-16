@@ -1252,7 +1252,7 @@ fn main() -> Result<()> {
             let mut result = match vehicle_physics::wrong_blueprint(physics, &blueprint) {
                 Some(why) => Err(why),
                 None if *mode == vehicle_physics::Mode::Apply => {
-                    vehicle_physics::apply(&hero_vehicle, physics)
+                    vehicle_physics::apply(&mut world, &hero_vehicle, physics)
                 }
                 None => Ok(()),
             };
@@ -1759,7 +1759,7 @@ fn main() -> Result<()> {
                 match keeper.frame(
                     highest,
                     || vehicle_physics::check(&vehicle, physics, *mode),
-                    || vehicle_physics::apply(&vehicle, physics),
+                    || vehicle_physics::apply(&mut world, &vehicle, physics),
                 ) {
                     vehicle_physics::Kept::Quiet
                     | vehicle_physics::Kept::Runs

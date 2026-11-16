@@ -23,10 +23,16 @@
 //! attaches again only while [`DriftLedger`] counts fewer than [`MAX_DRIFT_EXITS`] such exits
 //! on the same hero in the same episode, and after that refuses the hero without exiting, so
 //! a drift nothing fixes cannot respawn the stack forever.
+//!
+//! An apply rebuilds the hero's PhysX vehicle at rest and leaves the hero sharing the
+//! blueprint's tire config, the object the next spawn of the blueprint resets (measured
+//! 2026-11-16: a hero at 11 m/s stood still the tick after a re-apply). So [`apply`] keeps
+//! the hero's motion and hands the tire config to a decoy (as swb_carla_world's
+//! `vehicle_physics::apply_kept` does): with that, a spawn no longer reaches the hero.
 
 use carla::{
-    client::Vehicle,
-    geom::{Location, Vector2D},
+    client::{ActorBase, Vehicle, World},
+    geom::{Location, Rotation, Transform, Vector2D, Vector3D},
     rpc::{GearPhysicsControl, VehiclePhysicsControl},
 };
 use carla_physics_spec::{CarlaPhysics, ReadBack};
@@ -166,15 +172,122 @@ pub fn wrong_blueprint(p: &CarlaPhysics, blueprint: &str) -> Option<String> {
 }
 
 /// Put the spec's physics on the hero (`apply` mode). CARLA applies it at the next tick:
-/// [`check`] after one.
-pub fn apply(vehicle: &Vehicle, p: &CarlaPhysics) -> Result<(), String> {
+/// [`check`] after one. The hero keeps its motion, and a decoy of its blueprint takes the
+/// blueprint's tire config after it ([`apply_kept`]).
+pub fn apply(world: &mut World, vehicle: &Vehicle, p: &CarlaPhysics) -> Result<(), String> {
     let mut control = vehicle
         .physics_control()
         .map_err(|e| format!("read the hero's physics: {e}"))?;
     set(&mut control, p);
-    vehicle
-        .apply_physics_control(&control)
+    apply_kept(world, vehicle, &control)
         .map_err(|e| format!("apply the vehicle spec's physics: {e}"))
+}
+
+/// Where a decoy spawns: under every town, in no sensor's view; it never sees a tick.
+const DECOY_AT: Location = Location {
+    x: 0.0,
+    y: 0.0,
+    z: -500.0,
+};
+
+/// A decoy's role: swb_carla_world's entity mark, so an orphan is reaped.
+pub const DECOY_ROLE: &str = "swb_entity:~tire_decoy";
+
+/// The tires of the decoy's own control are marked this much lower, so its apply can be
+/// seen to have happened (a spawn sets the tire config it takes to the blueprint's).
+const DECOY_MARK: f32 = 0.01;
+
+/// Read `vehicle` back until it reports these tires: LibCarla sends an apply without
+/// waiting for it, and a destroy sent next overtook it. Whether it did, within 0.2 s.
+fn wait_for_tires(vehicle: &Vehicle, want: &[f32]) -> bool {
+    for _ in 0..100 {
+        if let Ok(c) = vehicle.physics_control() {
+            if c.wheels.len() == want.len()
+                && c.wheels
+                    .iter()
+                    .zip(want)
+                    .all(|(w, f)| (w.tire_friction - f).abs() < 1e-3)
+            {
+                return true;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    false
+}
+
+/// `control` on `vehicle`, which keeps its motion and keeps it alone: a decoy of its
+/// blueprint spawns first (a spawn of the blueprint resets the tire config the blueprint
+/// shares), `control` goes on the car, the decoy's own control (marked) on the decoy -- the
+/// blueprint's tire config is the decoy's from then on -- and once the decoy reads its mark
+/// back it is destroyed, before any tick; then the car's velocity is set back (the apply
+/// rebuilt its PhysX vehicle at rest).
+pub fn apply_kept(
+    world: &mut World,
+    vehicle: &Vehicle,
+    control: &VehiclePhysicsControl,
+) -> Result<(), String> {
+    let motion = vehicle
+        .velocity()
+        .and_then(|v| vehicle.angular_velocity().map(|w| (v, w)))
+        .ok();
+    let blueprint = vehicle.type_id();
+    let decoy = match world
+        .actor_builder(&blueprint)
+        .and_then(|b| b.set_attribute("role_name", DECOY_ROLE))
+        .and_then(|b| {
+            b.spawn_vehicle(Transform {
+                location: DECOY_AT,
+                rotation: Rotation::identity(),
+            })
+        }) {
+        Ok(d) => Some(d),
+        Err(e) => {
+            tracing::warn!(
+                "no tire decoy of {blueprint} ({e}): the hero keeps the blueprint's tire \
+                 config, and the next {blueprint} to spawn resets its tires"
+            );
+            None
+        }
+    };
+    vehicle
+        .apply_physics_control(control)
+        .map_err(|e| e.to_string())?;
+    let want: Vec<f32> = control.wheels.iter().map(|w| w.tire_friction).collect();
+    if !wait_for_tires(vehicle, &want) {
+        tracing::warn!("the hero's physics did not read back within 0.2 s of the apply");
+    }
+    if let Some(d) = decoy {
+        let id = d.id();
+        match d.physics_control() {
+            Ok(mut own) => {
+                for w in own.wheels.iter_mut() {
+                    w.tire_friction -= DECOY_MARK;
+                }
+                let mark: Vec<f32> = own.wheels.iter().map(|w| w.tire_friction).collect();
+                match d.apply_physics_control(&own) {
+                    Ok(()) if wait_for_tires(&d, &mark) => {}
+                    Ok(()) => tracing::warn!(
+                        "tire decoy {id}: its apply did not read back within 0.2 s; the hero \
+                         may keep the blueprint's tire config"
+                    ),
+                    Err(e) => tracing::warn!("tire decoy {id}: apply its own physics: {e}"),
+                }
+            }
+            Err(e) => tracing::warn!("tire decoy {id}: read its physics: {e}"),
+        }
+        if let Err(e) = d.destroy() {
+            tracing::warn!("tire decoy {id}: destroy: {e}");
+        }
+    }
+    let n = |v: &Vector3D| (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
+    if let Some((v, w)) = motion.filter(|(v, w)| n(v) > 1e-3 || n(w) > 1e-3) {
+        vehicle
+            .set_target_velocity(&v)
+            .and_then(|()| vehicle.set_target_angular_velocity(&w))
+            .map_err(|e| format!("set the hero's velocity back: {e}"))?;
+    }
+    Ok(())
 }
 
 /// The hero runs the spec's physics; an error says what it runs instead.
