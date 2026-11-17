@@ -42,7 +42,7 @@ use std::{
 use crate::error::Result;
 
 /// 1000 s, in ns: added to every simulation time. Must stay identical to
-/// swb_world_protocol's `sim_time::BASE_NS` (scenario-world-bridge's
+/// swb_world_protocol's `sim_time::BASE_NS` (scensim's
 /// `scripts/test_sim_time.py` checks).
 pub const BASE_NS: i64 = 1_000_000_000_000;
 

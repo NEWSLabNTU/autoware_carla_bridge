@@ -6,8 +6,8 @@ acb is CARLA's vehicle interface for Autoware: `acb_bridge` attaches to the CARL
 whose `role_name` is `hero`, spawns its sensors, publishes them and the vehicle status to
 Autoware, and applies Autoware's control. With the two vehicle repositories it builds against
 (below) it is a complete Autoware-on-CARLA system: start CARLA, launch, and the car drives
-itself to a goal. [scenario-world-bridge](https://github.com/NEWSLabNTU/scenario-world-bridge)
-(swb) runs the same bridge as the ego of scenario_simulator_v2 scenarios.
+itself to a goal. [scensim](https://github.com/NEWSLabNTU/scenario-world-bridge)
+runs the same bridge as the ego of scenario_simulator_v2 scenarios.
 
 ## Key Features
 
@@ -39,7 +39,7 @@ Every launch selects the car with `vehicle_model:=tesla_model3` (the default).
   (`<map dir>/carla/map_origin.yaml`).
 - **Physics** (`carla_physics`, `carla_physics_mode`): `apply` (acb's own launches) puts the
   file on the hero when acb attaches, so a hero spawned by any client becomes the spec's car;
-  `verify` (under swb, whose CARLA world server applies it after the spawn) only reads it
+  `verify` (under scensim, whose CARLA world server applies it after the spawn) only reads it
   back. In both modes acb refuses a hero of another blueprint than the file's, and a physics
   read-back that differs from the file. `carla_physics:=none` keeps the blueprint's own
   physics (the default of `acb_bridge.launch.xml` alone). The check goes on while the hero
@@ -53,7 +53,7 @@ Every launch selects the car with `vehicle_model:=tesla_model3` (the default).
   exits are counted per CARLA server in `$TMPDIR/acb-physics-drift-<host>-<port>` (episode,
   hero, count): after 2 on the same hero in the same episode, a respawned acb refuses that
   hero (`Refusing the hero ...`, every 30 s) instead of attaching, so a supervisor that
-  respawns the stack unconditionally (swb's `just run`) does not loop. The next hero or
+  respawns the stack unconditionally (scensim's `just run`) does not loop. The next hero or
   episode is attached again. A tire friction above the file's is not taken for a road's
   factor (a road only lowers it).
 - **Pedal maps**: `accel_map.csv` and `brake_map.csv` in `<car>_description/config/`,
@@ -158,7 +158,7 @@ for every TUM town).
 
 The pack's lanelets are linked to the wrong traffic lights: on Town01, 28 of 36 approaches had
 no link to their light in their own direction, and Autoware drove through CARLA's red (issue
-030). scenario-world-bridge's `scripts/repair_lanelet_signal_links.py <Town> --port <CARLA
+030). scensim's `scripts/repair_lanelet_signal_links.py <Town> --port <CARLA
 port>` relinks them from CARLA's own stop waypoints (CARLA holding the town, something
 ticking it); its user guide lists the other repairs the pack needs.
 
@@ -195,7 +195,7 @@ sequenceDiagram
 
 Every stamp and `/clock` value is `nanos(elapsed_seconds) + BASE_NS`: CARLA's simulation
 time of the frame, plus `BASE_NS` = 1000 s, which keeps ROS time away from 0 ("no clock
-yet"). There is no epoch and no wall-clock component; swb's processes compute the same value
+yet"). There is no epoch and no wall-clock component; scensim's processes compute the same value
 from the same frame.
 
 CARLA's time starts again at every *episode* (a world load, a restarted CARLA), and Autoware
@@ -203,7 +203,7 @@ cannot follow time backwards. So acb attaches to the episode it first sees, and 
 or a hero of another episode it logs the change (both episode ids) and exits with status
 3, before publishing anything of the new episode. Its launch node is `on_exit="shutdown"`
 and never respawned, so the whole Autoware stack ends with it; whoever started the stack
-starts it again (swb runs it under a supervisor). The profile's `clock_guard` ends the stack
+starts it again (scensim runs it under a supervisor). The profile's `clock_guard` ends the stack
 too if `/clock` ever goes back.
 
 Consequence: load the town before starting the stack. `just sim` does this
@@ -359,7 +359,7 @@ local workspace. Edit `.env` for machine-specific vars (GPU, display, ports, pat
 
 - [Docs index](docs/README.md) (design, guides, issues, roadmap)
 - [Map Generation Guide](docs/guides/automated-map-generation.md)
-- The target shape of acb and its neighbours: scenario-world-bridge's `docs/roadmap/051-target-shape.md`
+- The target shape of acb and its neighbours: scensim's `docs/roadmap/051-target-shape.md`
 
 ## License
 

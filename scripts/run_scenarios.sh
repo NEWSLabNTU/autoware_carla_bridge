@@ -28,11 +28,13 @@ RUNS=5
 STACKS=1
 OUT="scenario_results.tsv"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -n "${ACB_CSB_REPO+x}" ]; then
-    echo "ACB_CSB_REPO was renamed with the project; set ACB_SWB_REPO instead" >&2; exit 2
-fi
-REPO="${ACB_SWB_REPO:-$HOME/repos/carla-scenario-bridge}"
-SCENARIO="$REPO/src/swb_examples/scenarios/basic/town01_ego_drive.xosc"
+for old in ACB_CSB_REPO ACB_SWB_REPO; do
+    if [ -n "${!old+x}" ]; then
+        echo "$old was renamed with the project; set ACB_SCENSIM_REPO instead" >&2; exit 2
+    fi
+done
+REPO="${ACB_SCENSIM_REPO:-$HOME/repos/scensim}"
+SCENARIO="$REPO/src/scensim_examples/scenarios/basic/town01_ego_drive.xosc"
 
 while getopts "n:s:o:h" opt; do
     case "$opt" in

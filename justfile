@@ -246,7 +246,7 @@ sim *args:
         ros2 run autoware_sim_pilot auto_drive --ros-args -p poses_file:="$POSES_FILE" &
     fi
     # Each composable a process of its own (play_launch's isolated mode), reloaded alone when
-    # it crashes, as swb's `just ego-av` runs Autoware: in one process per container, a
+    # it crashes, as scensim's `just ego-av` runs Autoware: in one process per container, a
     # composable whose constructor blocks holds up the rest of its container, and the stack
     # never finished loading its perception (2026-10-24: 9 pointcloud_container composables
     # pending for good, a map-less obstacle stopping the car at the first corner).

@@ -2,7 +2,7 @@
 """Load a town into CARLA unless it is already loaded, before anything attaches to it.
 
 A load starts a new CARLA episode, and acb_bridge ends its stack on an episode change
-(scenario-world-bridge roadmap 051): time starts again, and Autoware cannot follow it back.
+(scensim roadmap 051): time starts again, and Autoware cannot follow it back.
 So a launch that starts acb_bridge and also loads a town (the demo scenario does when its
 map differs) must load first. `just sim` runs this before its launch; the demo scenario then
 finds the town loaded and keeps the episode.

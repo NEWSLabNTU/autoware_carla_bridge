@@ -19,7 +19,7 @@
 //! frame); `verify` waits for the world server, which puts it back a tick after it sees the
 //! spawn. If it stays off, the run is not on the spec's car: acb ends it, exiting with
 //! [`PHYSICS_DRIFT_EXIT`], and its launch ends the Autoware stack with it. A supervisor that
-//! respawns the stack (swb's `just run` respawns the ego unconditionally) brings acb back; it
+//! respawns the stack (scensim's `just run` respawns the ego unconditionally) brings acb back; it
 //! attaches again only while [`DriftLedger`] counts fewer than [`MAX_DRIFT_EXITS`] such exits
 //! on the same hero in the same episode, and after that refuses the hero without exiting, so
 //! a drift nothing fixes cannot respawn the stack forever.
