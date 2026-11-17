@@ -6,7 +6,7 @@ acb is CARLA's vehicle interface for Autoware: `acb_bridge` attaches to the CARL
 whose `role_name` is `hero`, spawns its sensors, publishes them and the vehicle status to
 Autoware, and applies Autoware's control. With the two vehicle repositories it builds against
 (below) it is a complete Autoware-on-CARLA system: start CARLA, launch, and the car drives
-itself to a goal. [scensim](https://github.com/NEWSLabNTU/scenario-world-bridge)
+itself to a goal. [scensim](https://github.com/NEWSLabNTU/scensim)
 runs the same bridge as the ego of scenario_simulator_v2 scenarios.
 
 ## Key Features
