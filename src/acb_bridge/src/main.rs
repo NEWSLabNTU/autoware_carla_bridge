@@ -200,7 +200,7 @@ struct BridgeParams {
     /// signal publisher off. See `traffic_light_publisher`.
     pub traffic_light_map_path: String,
     /// The table in the stack's state directory (`<state_dir>/<map>/carla/traffic_lights.yaml`,
-    /// written by swb_carla_world at the first Initialize on a map), read before
+    /// written by scensim_carla_world at the first Initialize on a map), read before
     /// `traffic_light_map_path` when it exists; empty: none. Roadmap 076 A9.
     pub traffic_light_state_path: String,
     /// Map-frame position of CARLA's world origin, from `map_origin_path` (the map dir's

@@ -27,7 +27,7 @@
 //! An apply rebuilds the hero's PhysX vehicle at rest and leaves the hero sharing the
 //! blueprint's tire config, the object the next spawn of the blueprint resets (measured
 //! 2026-11-16: a hero at 11 m/s stood still the tick after a re-apply). So [`apply`] keeps
-//! the hero's motion and hands the tire config to a decoy (as swb_carla_world's
+//! the hero's motion and hands the tire config to a decoy (as scensim_carla_world's
 //! `vehicle_physics::apply_kept` does): with that, a spawn no longer reaches the hero.
 
 use carla::{
@@ -190,8 +190,8 @@ const DECOY_AT: Location = Location {
     z: -500.0,
 };
 
-/// A decoy's role: swb_carla_world's entity mark, so an orphan is reaped.
-pub const DECOY_ROLE: &str = "swb_entity:~tire_decoy";
+/// A decoy's role: scensim_carla_world's entity mark, so an orphan is reaped.
+pub const DECOY_ROLE: &str = "scensim_entity:~tire_decoy";
 
 /// The tires of the decoy's own control are marked this much lower, so its apply can be
 /// seen to have happened (a spawn sets the tire config it takes to the blueprint's).

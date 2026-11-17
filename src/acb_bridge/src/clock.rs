@@ -42,7 +42,7 @@ use std::{
 use crate::error::Result;
 
 /// 1000 s, in ns: added to every simulation time. Must stay identical to
-/// swb_world_protocol's `sim_time::BASE_NS` (scensim's
+/// scensim_world_protocol's `sim_time::BASE_NS` (scensim's
 /// `scripts/test_sim_time.py` checks).
 pub const BASE_NS: i64 = 1_000_000_000_000;
 
@@ -52,7 +52,7 @@ pub const EPISODE_CHANGED_EXIT: i32 = 3;
 
 /// Seconds to integer nanoseconds: `round(secs * 1e9)`, half away from zero (`f64::round`).
 /// The one conversion every stamp and `/clock` value goes through, which is what makes them
-/// bit-exact with one another. swb_world_protocol's `sim_time::nanos` must stay identical
+/// bit-exact with one another. scensim_world_protocol's `sim_time::nanos` must stay identical
 /// (it reports the same integer to SSv2); both carry the same table of cases.
 pub fn nanos(secs: f64) -> i64 {
     (secs * 1e9).round() as i64
@@ -418,7 +418,7 @@ mod tests {
         t0 + Duration::from_millis(50 * u64::from(k))
     }
 
-    /// `(seconds, ns)`: must match swb_world_protocol's `sim_time` table, case for case.
+    /// `(seconds, ns)`: must match scensim_world_protocol's `sim_time` table, case for case.
     const NANOS_CASES: &[(f64, i64)] = &[
         (0.0, 0),
         (0.05000000074505806, 50_000_001),

@@ -377,7 +377,7 @@ impl FileWatch {
                     self.missing_reported = true;
                     tracing::warn!(
                         "signals: cannot read {} ({e}); publishing nothing until \
-                         swb_carla_world writes it at the next Initialize",
+                         scensim_carla_world writes it at the next Initialize",
                         path.display()
                     );
                 }
