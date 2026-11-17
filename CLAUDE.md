@@ -9,13 +9,13 @@ Autoware's control.
 
 **Repository**: https://github.com/NEWSLabNTU/autoware_carla_bridge (branch `main`)
 
-**Its place**: one of the eight repositories of scenario-world-bridge's roadmap 051 ("the
-target shape", `docs/roadmap/051-target-shape.md` in scenario-world-bridge). acb holds the
+**Its place**: one of the eight repositories of scensim's roadmap 051 ("the
+target shape", `docs/roadmap/051-target-shape.md` in scensim). acb holds the
 CARLA vehicle bridge, CARLA's stand-alone bring-up and demo (`demo_scenario.py`, the pilot
 from `autoware_sim_pilot`) and the map tools. It depends on `sim_vehicle_spec` and
-`autoware_sim_vehicle` (submodules under `deps/`), and on nothing of scenario-world-bridge
-(swb): acb plus those two is a complete Autoware-on-CARLA system without SSv2. swb runs the
-same `acb_bridge` as a scenario's ego, next to its CARLA world server `swb_carla_world`.
+`autoware_sim_vehicle` (submodules under `deps/`), and on nothing of scensim:
+acb plus those two is a complete Autoware-on-CARLA system without SSv2. scensim runs the
+same `acb_bridge` as a scenario's ego, next to its CARLA world server `scensim_carla_world`.
 
 ---
 
@@ -77,7 +77,7 @@ sim_vehicle_spec, and autoware_sim_vehicle's generator).
   `sim_*` switches).
 - The profile's switches are `sim_localization`, `sim_perception`, `sim_system`,
   `sim_control`, `sim_planning`, `sim_clock_guard` (formerly `carla_*`).
-  `autoware_sim_profile`'s `check_launch_args` names the replacement for an old argument; swb's
+  `autoware_sim_profile`'s `check_launch_args` names the replacement for an old argument; scensim's
   wrappers run it. acb's own `just autoware` and `just sim` accept only `map:=` (and
   `auto_drive:=`) and refuse anything else. A raw `ros2 launch`/`play_launch launch` with
   `carla_control:=false` is silently ignored by ROS launch.
@@ -141,11 +141,11 @@ in real time; `acb_bridge` with `carla_physics_mode:=apply`; `autoware_sim_check
 steering sweep against the bicycle model). It prints PASS/FAIL per step and exits 0 only if
 everything passed; logs and `report.json` in `play_log/vehicle_check/<time>/` (or `out:=`).
 
-### Under scenario-world-bridge
+### Under scensim
 
 The workspace builds acb twice: acb's own `just build` (`src/autoware_carla_bridge/install`)
-and swb's (`--base-paths src`, which includes acb's packages). Which `acb_bridge` an ego
-stack runs depends on how acb's workspace was built; swb's CLAUDE.md ("Use just build")
+and scensim's (`--base-paths src`, which includes acb's packages). Which `acb_bridge` an ego
+stack runs depends on how acb's workspace was built; scensim's CLAUDE.md ("Use just build")
 explains it. After an acb change, rebuild both from a clean environment, acb's first, and
 check what the live process loaded (`/proc/<pid>/cmdline`) before trusting a measurement. A
 stale `acb_bridge` measures plausibly and wrongly.
@@ -180,12 +180,12 @@ acb_bridge compares its CARLA version with the server's on connect and exits on 
 
 ### Architecture
 - **Hero pattern**: acb attaches to an existing vehicle with `role_name="hero"`; it never
-  spawns or destroys it. Whoever spawned it (demo_scenario, swb's world server, a hand-made
+  spawns or destroys it. Whoever spawned it (demo_scenario, scensim's world server, a hand-made
   scene) owns it. acb owns the sensors it spawned and destroys them when the hero goes.
 - **Synchronous mode**: CARLA at 20 Hz (`fixed_delta_seconds=0.05`); the scene's owner is the
-  sole ticker (demo_scenario, `vehicle_check_host.py`, or swb's world server). acb follows.
+  sole ticker (demo_scenario, `vehicle_check_host.py`, or scensim's world server). acb follows.
 - **Physics, one writer per mode** (`vehicle_physics.rs`): `carla_physics_mode:=apply` (acb's
-  launches) puts `carla_physics.yaml` on the hero at attach; `verify` (swb's ego launches;
+  launches) puts `carla_physics.yaml` on the hero at attach; `verify` (scensim's ego launches;
   the world server applied it) reads it back. Both refuse a hero of another blueprint than
   the file's, and a read-back that differs from the file. CARLA applies physics at its next
   tick, so read back after a tick, never straight after the apply.
@@ -202,7 +202,7 @@ acb_bridge compares its CARLA version with the server's on connect and exits on 
   physics changes; a single-constant conversion is wrong by 2x at full throttle (issue 019).
 - **spec_hash** (`main.rs::check_spec_hash`): the sensor file's `spec_hash` against
   `autoware_spec_hash_file` (`<car>_description/config/spec_hash.yaml`). A warning, not a
-  refusal: stand-alone acb has no third party to say which side is stale (under SSv2, swb's
+  refusal: stand-alone acb has no third party to say which side is stale (under SSv2, scensim's
   bridge refuses a mismatch). `none` skips the check.
 - **GNSS auto-localization**: NavSatFix → gnss_poser → `autoware_automatic_pose_initializer_node`
   → NDT align → initialized; no manual pose estimate.
@@ -211,13 +211,13 @@ acb_bridge compares its CARLA version with the server's on connect and exits on 
 
 - Every stamp and `/clock` value is `nanos(elapsed_seconds) + BASE_NS` (`clock.rs`;
   `BASE_NS` = 1000 s, rounding half away from zero). No epoch, no wall clock. It must stay
-  bit-identical to swb_world_protocol's `sim_time` (swb's `scripts/test_sim_time.py` checks
+  bit-identical to scensim_world_protocol's `sim_time` (scensim's `scripts/test_sim_time.py` checks
   both against one table).
 - acb attaches to the CARLA episode (world id) it first sees. On a frame or a hero of another
   episode -- a world load, a restarted CARLA -- it logs the change naming both ids, flushes its
   log writer and exits with status 3 (`EPISODE_CHANGED_EXIT`) before publishing anything of
   the new episode. Its launch node is `on_exit="shutdown"`, so the whole Autoware stack ends;
-  whoever started the stack restarts it (swb: `swb-agent supervise`). The profile's
+  whoever started the stack restarts it (scensim: `scensim-agent supervise`). The profile's
   `clock_guard` (`sim_clock_guard`) ends the stack if `/clock` ever goes back.
 - So load the town **before** the stack starts. `just sim` runs `scripts/carla_load_town.py`
   first; `just autoware` + `just scenario` on a CARLA showing another town ends the stack at
@@ -422,6 +422,6 @@ with no use.
 - `README.md` -- setup, the car, time and episodes, recipes
 - `scripts/README.md` -- the scripts
 - `docs/README.md` -- docs index (design, guides, issues, roadmap, archive)
-- scenario-world-bridge `docs/roadmap/051-target-shape.md` -- the target shape and its progress (K1-K5)
+- scensim `docs/roadmap/051-target-shape.md` -- the target shape and its progress (K1-K5)
 - [carla-rust](https://github.com/jerry73204/carla-rust), [rclrs](https://github.com/ros2-rust/ros2_rust),
   [Autoware AD API](https://autowarefoundation.github.io/autoware-documentation/main/design/autoware-interfaces/ad-api/)
