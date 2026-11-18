@@ -601,7 +601,6 @@ impl Autoware {
         );
 
         // Convert to nalgebra for coordinate conversion
-        let na_transform = transform.to_na();
         let na_velocity = body_velocity.to_na();
         let na_angular_velocity = body_angular_velocity.to_na();
 
@@ -635,17 +634,16 @@ impl Autoware {
         // CARLA coordinates to the map frame
         let position = self.map_origin.carla_to_map(&base_link);
 
-        // Convert CARLA rotation (quaternion) to ROS quaternion
-        let carla_quat = nalgebra::Quaternion::new(
-            na_transform.rotation.w as f64,
-            na_transform.rotation.i as f64,
-            na_transform.rotation.j as f64,
-            na_transform.rotation.k as f64,
-        );
-        let (roll, pitch, yaw) = coordinate_conversion::quaternion_to_euler(&carla_quat);
-        let orientation = coordinate_conversion::euler_to_quaternion(
-            -roll, // Roll sign flip for ROS right-handed system
-            pitch, -yaw, // Yaw sign flip for ROS right-handed system
+        // CARLA's rotation to ROS: LibCarla rotates by Rz(yaw) Ry(-pitch) Rx(-roll), so
+        // mirrored into ROS's frame pitch and yaw change sign and roll does not
+        // (`carla_to_ros_rotation`, checked against LibCarla's RotateVector). Not through
+        // carla-rust's `Rotation::to_na()`, whose Euler order is not LibCarla's: that path
+        // published (-roll, +pitch) and so a car on a slope pitched and rolled the wrong way
+        // (roadmap 083 rotation audit; unchanged from 0.9.16 to 1.0).
+        let orientation = coordinate_conversion::carla_euler_to_ros_quaternion(
+            transform.rotation.roll as f64,
+            transform.rotation.pitch as f64,
+            transform.rotation.yaw as f64,
         );
 
         let base_link_velocity = coordinate_conversion::velocity_at_offset(

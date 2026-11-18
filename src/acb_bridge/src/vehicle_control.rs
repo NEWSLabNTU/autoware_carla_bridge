@@ -1347,20 +1347,18 @@ impl VehicleControlBridge {
             return SteerGeometry::default();
         }
 
-        // Track and wheelbase from the wheel offsets, which carla-rust exposes as
-        // `offset` from the vehicle origin. Only their ratio is used, so whatever unit
-        // CARLA reports cancels and no conversion is needed.
+        // Track and wheelbase from the wheels' world positions: `position` (cm) on 0.9.16,
+        // `location` (m) on 1.0 (Chaos), whose `offset` reads zero. Only their ratio is
+        // used, so the unit cancels and no conversion is needed.
+        #[cfg(not(feature = "carla-10"))]
+        let pos = |w: &carla::rpc::WheelPhysicsControl| w.position.clone();
+        #[cfg(feature = "carla-10")]
+        let pos = |w: &carla::rpc::WheelPhysicsControl| w.location;
         let track_over_wheelbase = match (steered.as_slice(), fixed.as_slice()) {
             ([a, b], [c, d]) => {
-                let track: f32 = (a.position.x - b.position.x).hypot(a.position.y - b.position.y);
-                let front = (
-                    0.5 * (a.position.x + b.position.x),
-                    0.5 * (a.position.y + b.position.y),
-                );
-                let rear = (
-                    0.5 * (c.position.x + d.position.x),
-                    0.5 * (c.position.y + d.position.y),
-                );
+                let track: f32 = (pos(a).x - pos(b).x).hypot(pos(a).y - pos(b).y);
+                let front = (0.5 * (pos(a).x + pos(b).x), 0.5 * (pos(a).y + pos(b).y));
+                let rear = (0.5 * (pos(c).x + pos(d).x), 0.5 * (pos(c).y + pos(d).y));
                 let wheelbase: f32 = (front.0 - rear.0).hypot(front.1 - rear.1);
                 if wheelbase > 0.0 && track > 0.0 {
                     track / wheelbase

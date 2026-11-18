@@ -8,27 +8,31 @@
 /// The CARLA version this binary was built for, e.g. `"0.9.16"`.
 pub const BUILT_FOR: &str = carla::CARLA_VERSION;
 
-/// `"0.9.16"`, `"0.9.16-dirty"`, `"0.10.0"` → `(major, minor, patch)`.
+/// `"0.9.16"`, `"0.9.16-dirty"`, `"0.10.0"`, `"1.0"`, `"1.0-82c52a7c2"` → `(major, minor, patch)`.
 ///
 /// Only the leading numeric components count: CARLA reports suffixes such as `-dirty` or
-/// `-12-gabc1234` for builds from a git tree.
+/// `-12-gabc1234` for builds from a git tree, and from 1.0 a source or nightly build reports
+/// `<release>-<commit>`. 1.0 names its release with two components (`"1.0"`); a missing
+/// patch is 0. The same rules as scensim_carla_world's `version.rs` (roadmap 083).
 pub fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
     let text = text.trim().trim_start_matches('v');
-    let mut parts = text.splitn(3, '.');
+    let release = text.split('-').next()?;
+    let mut parts = release.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next()?.parse().ok()?;
-    let patch_text = parts.next()?;
-    let digits: String = patch_text
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    let patch = digits.parse().ok()?;
+    let patch = match parts.next() {
+        Some(p) => p.parse().ok()?,
+        None => 0,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
     Some((major, minor, patch))
 }
 
 /// Whether a server reporting `server` can serve a client built for `built_for`.
 ///
-/// CARLA's RPC changes between releases (0.9.15 → 0.9.16 → 0.10.0), so the release --
+/// CARLA's RPC changes between releases (0.9.15 → 0.9.16 → 0.10.0 → 1.0), so the release --
 /// major.minor.patch -- must match; build suffixes are ignored.
 /// `Err` carries a message naming both versions.
 pub fn check(built_for: &str, server: &str) -> Result<(), String> {
@@ -58,6 +62,9 @@ mod tests {
         assert_eq!(parse_version("0.9.16-dirty"), Some((0, 9, 16)));
         assert_eq!(parse_version("0.9.16-12-gabc1234"), Some((0, 9, 16)));
         assert_eq!(parse_version("0.10.0"), Some((0, 10, 0)));
+        assert_eq!(parse_version("1.0"), Some((1, 0, 0)));
+        assert_eq!(parse_version("1.0-82c52a7c2"), Some((1, 0, 0)));
+        assert_eq!(parse_version("1.0.0.1"), None);
         assert_eq!(parse_version("abc1234"), None);
         assert_eq!(parse_version(""), None);
     }
@@ -67,6 +74,8 @@ mod tests {
         assert!(check("0.9.16", "0.9.16").is_ok());
         assert!(check("0.9.16", "0.9.16-dirty").is_ok());
         assert!(check("0.10.0", "0.10.0").is_ok());
+        assert!(check("1.0", "1.0").is_ok());
+        assert!(check("1.0", "1.0-82c52a7c2").is_ok());
     }
 
     #[test]
@@ -75,6 +84,10 @@ mod tests {
         assert!(err.contains("0.9.16") && err.contains("0.9.15"), "{err}");
         let err = check("0.9.16", "0.10.0").unwrap_err();
         assert!(err.contains("0.9.16") && err.contains("0.10.0"), "{err}");
+        let err = check("0.9.16", "1.0").unwrap_err();
+        assert!(err.contains("0.9.16") && err.contains("1.0"), "{err}");
+        let err = check("1.0", "0.9.16").unwrap_err();
+        assert!(err.contains("1.0") && err.contains("0.9.16"), "{err}");
     }
 
     #[test]

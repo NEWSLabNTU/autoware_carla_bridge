@@ -738,8 +738,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 [[package]]
 name = "carla"
 version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ad3c2d704b86160faaede398264481dbb2235a65163c64d93d879cb29b735a8"
+source = "git+https://github.com/jerry73204/carla-rust?rev=1212b60#1212b60d8843c7f27808d89c6640d17dfaff358c"
 dependencies = [
  "anyhow",
  "autocxx",
@@ -763,8 +762,7 @@ dependencies = [
 [[package]]
 name = "carla-src"
 version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e1809b23bb40c48a03a412a14e99f4a2e4e008ca37839b6af8cb0cdfb9b9858"
+source = "git+https://github.com/jerry73204/carla-rust?rev=1212b60#1212b60d8843c7f27808d89c6640d17dfaff358c"
 dependencies = [
  "anyhow",
  "autotools",
@@ -788,8 +786,7 @@ dependencies = [
 [[package]]
 name = "carla-sys"
 version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e86061775c8a059a932eaf552238eadecd1f10eabe779460ed9f2ded97a5216"
+source = "git+https://github.com/jerry73204/carla-rust?rev=1212b60#1212b60d8843c7f27808d89c6640d17dfaff358c"
 dependencies = [
  "anyhow",
  "autocxx",
@@ -4647,6 +4644,10 @@ name = "autoware_planning_msgs"
 version = "0.0.0"
 
 [[patch.unused]]
+name = "example_interfaces"
+version = "0.0.0"
+
+[[patch.unused]]
 name = "rcl_interfaces"
 version = "0.0.0"
 
@@ -4655,5 +4656,5 @@ name = "rmw_dds_common"
 version = "0.0.0"
 
 [[patch.unused]]
-name = "swb_interfaces"
+name = "test_msgs"
 version = "0.0.0"
