@@ -1128,8 +1128,8 @@ fn main() -> Result<()> {
         tracing::info!("carla_physics none: the hero runs its blueprint's own physics");
         None
     } else {
-        let p = vehicle_physics::Physics::load(&params.carla_physics)
-            .map_err(error::BridgeError::ConfigError)?;
+        let file = vehicle_physics::file_for_build(std::path::Path::new(&params.carla_physics));
+        let p = vehicle_physics::Physics::load(&file).map_err(error::BridgeError::ConfigError)?;
         let mode = vehicle_physics::Mode::parse(&params.carla_physics_mode)
             .map_err(error::BridgeError::ConfigError)?;
         if !vehicle_config.spec_hash.is_empty() && vehicle_config.spec_hash != p.spec_hash {
@@ -1141,8 +1141,14 @@ fn main() -> Result<()> {
             );
         }
         tracing::info!(
-            "carla_physics {} ({mode:?}): {} for {}, {} kg",
-            params.carla_physics,
+            "carla_physics {} ({mode:?}, the {} body{}): {} for {}, {} kg",
+            file.display(),
+            vehicle_physics::BODY,
+            if file.as_path() == std::path::Path::new(&params.carla_physics) {
+                String::new()
+            } else {
+                format!("; the launch named {}", params.carla_physics)
+            },
             &p.spec_hash[..p.spec_hash.len().min(12)],
             p.blueprint,
             p.vehicle.mass

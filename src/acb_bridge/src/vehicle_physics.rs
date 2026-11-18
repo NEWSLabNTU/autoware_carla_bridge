@@ -61,6 +61,24 @@ pub use carla_physics_spec::CarlaPhysics as Physics;
 #[cfg(not(feature = "carla-10"))]
 use carla_physics_spec::CarlaPhysics;
 
+/// The CARLA body this build's physics file is for (sim_vehicle_spec's `bodies`).
+#[cfg(not(feature = "carla-10"))]
+pub const BODY: &str = "carla-0.9.16";
+#[cfg(feature = "carla-10")]
+pub const BODY: &str = "carla-1.0";
+
+/// The physics file this build reads for `path`: as given, except that a CARLA 1.0 build
+/// given `carla_physics.yaml` takes its sibling `carla_physics_1.0.yaml` (the same car on 1.0's
+/// body, sim_vehicle_spec 083), so a launch names one file for either release, as the CARLA
+/// world server does.
+pub fn file_for_build(path: &std::path::Path) -> std::path::PathBuf {
+    #[cfg(feature = "carla-10")]
+    if path.file_name().is_some_and(|n| n == "carla_physics.yaml") {
+        return path.with_file_name("carla_physics_1.0.yaml");
+    }
+    path.to_path_buf()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Apply,
@@ -697,6 +715,18 @@ mod tests {
         }
         assert_eq!(road_factor(&p, &back), 1.0);
         assert!(!p.differences(&back, 1.0).is_empty());
+    }
+
+    #[test]
+    fn a_launch_names_one_file_for_either_release() {
+        let p = std::path::Path::new("/s/generated/tesla_model3/carla_physics.yaml");
+        let got = file_for_build(p);
+        #[cfg(feature = "carla-10")]
+        assert_eq!(got, p.with_file_name("carla_physics_1.0.yaml"));
+        #[cfg(not(feature = "carla-10"))]
+        assert_eq!(got, p);
+        let own = std::path::Path::new("/x/my_physics.yaml");
+        assert_eq!(file_for_build(own), own);
     }
 
     #[test]
