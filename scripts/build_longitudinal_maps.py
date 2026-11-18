@@ -60,6 +60,8 @@ if ramps.get("timing") != lowspeed.get("timing"):
              % (ramps.get("timing"), lowspeed.get("timing")))
 # The vehicle spec's physics both probes ran (roadmap 051: --physics), or the blueprint's own.
 PHYSICS_HASH = ramps.get("physics_hash")
+# The CARLA the ramps ran on (probe_longitudinal.py records it; older samples are 0.9.16's)
+CARLA = ramps.get("carla_version") or "0.9.16"
 if PHYSICS_HASH != lowspeed.get("physics_hash"):
     sys.exit("the two probes ran on different physics: physics_hash %s vs %s"
              % (PHYSICS_HASH, lowspeed.get("physics_hash")))
@@ -171,8 +173,8 @@ for p in pedals:
     if ZERO_FROM in table[p]:
         table[p][0.0] = table[p][ZERO_FROM]
 write("throttle", out_dir + "/accel_map.csv",
-      ["Throttle response of %s on CARLA 0.9.16, measured by scripts/probe_longitudinal.py"
-       % ramps["blueprint"], timing], pedals, table)
+      ["Throttle response of %s on CARLA %s, measured by scripts/probe_longitudinal.py"
+       % (ramps["blueprint"], CARLA), timing], pedals, table)
 
 pedals, table = ramp_grid("brake", [s for s in SPEEDS if s > LOWSPEED_MAX])
 low = lowspeed_cells()
@@ -182,9 +184,10 @@ for p in pedals:
         if s <= LOWSPEED_MAX and src_speed in low.get(p, {}):
             table[p][s] = low[p][src_speed]
 write("brake", out_dir + "/brake_map.csv",
-      ["Brake response of %s on CARLA 0.9.16. Columns up to %.0f m/s measured by "
+      ["Brake response of %s on CARLA %s. Columns up to %.0f m/s measured by "
        "scripts/probe_brake_lowspeed.py (0 m/s holds the %.0f m/s value), the rest by "
-       "scripts/probe_longitudinal.py" % (ramps["blueprint"], LOWSPEED_MAX, ZERO_FROM), timing],
+       "scripts/probe_longitudinal.py" % (ramps["blueprint"], CARLA, LOWSPEED_MAX, ZERO_FROM),
+       timing],
       pedals, table)
 
 # What the maps were measured on, for autoware_sim_vehicle's check (roadmap 051): it refuses
@@ -199,6 +202,6 @@ with open(out_dir + "/pedal_maps.yaml", "w") as f:
         f.write("measured_on: spec\nphysics_hash: %s\n" % PHYSICS_HASH)
     else:
         f.write("measured_on: blueprint\nphysics_hash: null\n")
-    f.write('basis: "%s, %s, %s"\n' % (ramps["blueprint"], timing,
-                                      time.strftime("%Y-%m-%d")))
+    f.write('basis: "%s, CARLA %s, %s, %s"\n' % (ramps["blueprint"], CARLA, timing,
+                                                time.strftime("%Y-%m-%d")))
 print("wrote", out_dir + "/pedal_maps.yaml")

@@ -56,8 +56,14 @@ Every launch selects the car with `vehicle_model:=tesla_model3` (the default).
   respawns the stack unconditionally (scensim's `just run`) does not loop. The next hero or
   episode is attached again. A tire friction above the file's is not taken for a road's
   factor (a road only lowers it).
-- **Pedal maps**: `accel_map.csv` and `brake_map.csv` in `<car>_description/config/`,
-  measured on the spec's physics.
+  Built for CARLA 1.0 (`--no-default-features --features carla-10`), acb takes
+  `carla_physics_1.0.yaml`, the spec's car on CARLA 1.0's Chaos vehicle, and refuses
+  0.9.16's file; there a spawn resets no other car, and an apply, which stops a moving car,
+  sets its motion back. Its car is `vehicle_model:=tesla_model3_carla_1_0` (CARLA 1.0's
+  body, with `sensor_model:=tesla_model3_sensor_kit`); `just vehicle-check
+  vehicle_model:=tesla_model3_carla_1_0` picks the 1.0 file from it.
+- **Pedal maps**: `accel_map.csv` and `brake_map.csv` in `<vehicle_model>_description/config/`,
+  measured on the spec's physics for that body.
 - **spec_hash**: every generated file names the spec it came from. At start acb compares
   the hash in its sensor file with the Autoware package's (`autoware_spec_hash_file`,
   `<car>_description/config/spec_hash.yaml`) and warns when they differ: one of the two

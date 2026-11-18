@@ -282,6 +282,10 @@ autoware *args:
 # against 0.35 m/s^2, a steering sweep against the bicycle model). CARLA must be running and
 # not ticked by anyone else. Writes <out>/report.json; exits 0 only if every check passed.
 #
+# The vehicle_model names the spec and the body (its description's spec_hash.yaml): a body
+# for CARLA 1.0 (tesla_model3_carla_1_0) takes carla_physics_1.0.yaml and needs acb_bridge
+# built for 1.0 (carla-10), which refuses the other release's file.
+#
 # Usage: just vehicle-check [vehicle_model:=tesla_model3] [out:=<dir>]
 [positional-arguments]
 vehicle-check *args:
@@ -297,7 +301,11 @@ vehicle-check *args:
     done
     mkdir -p "$out"
     source "{{project}}/install/setup.bash"
-    physics="$(ros2 pkg prefix sim_vehicle_spec)/share/sim_vehicle_spec/generated/$model/carla_physics.yaml"
+    desc="$(ros2 pkg prefix ${model}_description)/share/${model}_description/config"
+    name=$(sed -n 's/^name: *//p' "$desc/spec_hash.yaml"); name=${name:-$model}
+    body=$(sed -n 's/^body: *//p' "$desc/spec_hash.yaml")
+    case "$body" in carla-1.0) file=carla_physics_1.0.yaml ;; *) file=carla_physics.yaml ;; esac
+    physics="$(ros2 pkg prefix sim_vehicle_spec)/share/sim_vehicle_spec/generated/$name/$file"
     blueprint=$(sed -n 's/^blueprint: *//p' "$physics" | tr -d "'\"")
     groups=()
     stop() { for g in "${groups[@]}"; do kill -TERM -"$g" 2>/dev/null || true; done
@@ -310,11 +318,13 @@ vehicle-check *args:
     setsid play_launch launch --disable-web-ui --log-dir "$out/acb_log" \
         acb_bridge acb_bridge.launch.xml carla_port:={{carla_port}} \
         carla_physics:="$physics" carla_physics_mode:=apply \
-        autoware_spec_hash_file:="$(ros2 pkg prefix ${model}_description)/share/${model}_description/config/spec_hash.yaml" \
+        autoware_spec_hash_file:="$desc/spec_hash.yaml" \
+        accel_map_path:="$desc/accel_map.csv" brake_map_path:="$desc/brake_map.csv" \
         seed_localization_on_attach:=false > "$out/acb.log" 2>&1 < /dev/null &
     groups+=($!)
     play_launch launch --disable-web-ui --log-dir "$out/check_log" \
         autoware_sim_check vehicle_check.launch.xml simulator:=carla vehicle_model:="$model" \
+        sensor_model:="${name}_sensor_kit" \
         out:="$out/report.json" > "$out/check.log" 2>&1 < /dev/null || true
     [ -f "$out/report.json" ] || { echo "[vehicle-check] no report; see $out/check.log" >&2; exit 1; }
     python3 - "$out/report.json" <<'PY'

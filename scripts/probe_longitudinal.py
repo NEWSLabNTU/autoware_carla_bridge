@@ -217,6 +217,6 @@ finally:
     world.apply_settings(orig)
 
 with open(OUT, "w") as f:
-    json.dump({"blueprint": BLUEPRINT, "dt": DT, "timing": timing, "rows": rows,
+    json.dump({"blueprint": BLUEPRINT, "carla_version": client.get_server_version(), "dt": DT, "timing": timing, "rows": rows,
                "physics_hash": physics["physics_hash"] if physics else None}, f)
 print("\n%d samples in %.0f s -> %s" % (len(rows), time.time() - t0, OUT))
