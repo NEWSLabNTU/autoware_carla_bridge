@@ -244,6 +244,9 @@ fn sane_steering_multiplier(value: f32) -> f32 {
 /// wheel would reach and therefore under-delivers by 7-13% across Autoware's 0.70 rad
 /// planning range. `effective_tire_angle` is monotonic in the command, so invert it by
 /// bisection; 30 iterations resolve it far below the resolution of the physics.
+/// Whether this start from rest was logged as raised to the breakaway pedal.
+static BREAKAWAY_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn steer_command_for(tire_angle: f32, geometry: &SteerGeometry) -> f32 {
     let target = tire_angle.abs();
     if target <= f32::EPSILON {
@@ -1570,8 +1573,21 @@ impl VehicleControlBridge {
                 None => crate::longitudinal_map::PedalCommand {
                     throttle: (accel / MAX_ACCEL).clamp(0.0, 1.0),
                     brake: (-accel / MAX_ACCEL).clamp(0.0, 1.0),
+                    breakaway: false,
                 },
             };
+            // once per start from rest: the map raised the throttle to its breakaway pedal
+            if pedals.breakaway {
+                if !BREAKAWAY_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::info!(
+                        "Starting from rest: throttle {:.3}, the pedal map's breakaway pedal \
+                         (a lower one leaves the car standing), for {accel:.2} m/s^2",
+                        pedals.throttle
+                    );
+                }
+            } else if speed >= crate::longitudinal_map::STANDSTILL_MPS {
+                BREAKAWAY_LOGGED.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
 
             // Apply what the maps chose, rather than picking the pedal from the sign of the
             // request. Those are not the same decision: CARLA's drag decelerates the car
@@ -1843,6 +1859,7 @@ impl VehicleControlBridge {
             None => crate::longitudinal_map::PedalCommand {
                 throttle: (accel as f32 / MAX_ACCEL).clamp(0.0, 1.0),
                 brake: (-accel as f32 / MAX_ACCEL).clamp(0.0, 1.0),
+                breakaway: false,
             },
         };
         let stopped = target < HANDBRAKE_ENGAGE_SPEED_MPS && speed < HANDBRAKE_ENGAGE_SPEED_MPS;

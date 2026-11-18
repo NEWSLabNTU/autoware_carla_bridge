@@ -199,9 +199,44 @@ def ramp(kind, pedal, rows, from_speed=None):
     return n
 
 
+def breakaway(ticks=60, moving=0.05, steps=8, margin=0.01):
+    """The lowest throttle that starts the car from rest within `ticks`, plus `margin`
+    (bisected to 1/2^steps): CARLA 1.0's Chaos vehicle stays in neutral below it (measured
+    2026-11-18: 0.359 for the Model 3 on its spec physics), which a ramp sampled from 0.3 m/s
+    up never sees. build_longitudinal_maps.py writes it into the accel map
+    (`# breakaway_pedal:`), and acb_bridge raises a start to it.
+
+    Each trial is a car spawned for it, at rest in neutral, as a car is when Autoware first
+    starts it: a car that has moved keeps its gear engaged through a stop, and then any
+    throttle moves it (the same car, reused, measured 0.069)."""
+    global actor
+    lo, hi = 0.0, 1.0
+    for _ in range(steps):
+        mid = 0.5 * (lo + hi)
+        actor.destroy()
+        world.tick()
+        actor = world.spawn_actor(bp, start)
+        if PHYSICS:
+            put_physics(actor, PHYSICS)
+        for _ in range(40):
+            apply(0.0, 0.0)
+            world.tick()
+        moved = False
+        for _ in range(ticks):
+            apply(mid, 0.0)
+            world.tick()
+            if speed_of() > moving:
+                moved = True
+                break
+        lo, hi = (lo, mid) if moved else (mid, hi)
+    return round(min(1.0, hi + margin), 3)
+
 rows = []
 t0 = time.time()
+breakaway_pedal = None
 try:
+    breakaway_pedal = breakaway()
+    print("breakaway pedal from rest: %.3f" % breakaway_pedal, flush=True)
     passes = [("throttle", None), ("throttle", V_TOP), ("brake", None)]
     for kind, from_speed in passes:
         for pedal in PEDALS:
@@ -218,5 +253,6 @@ finally:
 
 with open(OUT, "w") as f:
     json.dump({"blueprint": BLUEPRINT, "carla_version": client.get_server_version(), "dt": DT, "timing": timing, "rows": rows,
-               "physics_hash": physics["physics_hash"] if physics else None}, f)
+               "physics_hash": physics["physics_hash"] if physics else None,
+               "breakaway_pedal": breakaway_pedal}, f)
 print("\n%d samples in %.0f s -> %s" % (len(rows), time.time() - t0, OUT))

@@ -42,6 +42,33 @@ pub struct PedalMap {
     pedals: Vec<f64>,
     /// `accel[pedal_index][speed_index]`.
     accel: Vec<Vec<f64>>,
+    /// The lowest pedal that starts the car from rest, where the map measured one
+    /// (`# breakaway_pedal: <pedal>`): CARLA 1.0's Chaos vehicle stays in neutral below it
+    /// (measured 2026-11-18: 0.359 for the Model 3 on its spec physics). None: no such gap,
+    /// as on CARLA 0.9.16.
+    breakaway_pedal: Option<f64>,
+}
+
+/// Below this speed the car is at rest, for the breakaway pedal.
+pub const STANDSTILL_MPS: f64 = 0.1;
+
+/// The `# breakaway_pedal: <pedal>` line of a map's text, if it has one.
+fn breakaway_field(text: &str) -> std::result::Result<Option<f64>, String> {
+    for line in text.lines().map(str::trim) {
+        if let Some(rest) = line.strip_prefix('#').map(str::trim) {
+            if let Some(v) = rest.strip_prefix("breakaway_pedal:") {
+                let p: f64 = v
+                    .trim()
+                    .parse()
+                    .map_err(|e| format!("bad breakaway_pedal '{}': {e}", v.trim()))?;
+                if !(p > 0.0 && p <= 1.0) {
+                    return Err(format!("breakaway_pedal {p}: a pedal in (0, 1]"));
+                }
+                return Ok(Some(p));
+            }
+        }
+    }
+    Ok(None)
 }
 
 impl PedalMap {
@@ -114,6 +141,7 @@ impl PedalMap {
             speeds,
             pedals,
             accel,
+            breakaway_pedal: breakaway_field(text)?,
         })
     }
 
@@ -212,6 +240,8 @@ pub struct LongitudinalCalibration {
 pub struct PedalCommand {
     pub throttle: f32,
     pub brake: f32,
+    /// The throttle was raised to the map's breakaway pedal to start the car from rest.
+    pub breakaway: bool,
 }
 
 impl LongitudinalCalibration {
@@ -252,10 +282,21 @@ impl LongitudinalCalibration {
         let coasting = self.accel_map.passive_accel(speed).max(brake_coast);
 
         if requested_accel >= coasting {
-            let throttle = self.accel_map.pedal_for(requested_accel, speed, true);
+            let mut throttle = self.accel_map.pedal_for(requested_accel, speed, true);
+            // From rest, a pedal below the measured breakaway leaves the car standing (CARLA
+            // 1.0 holds it in neutral): the map's 0 m/s cells are reached only once moving.
+            let mut breakaway = false;
+            if let Some(b) = self.accel_map.breakaway_pedal {
+                if speed < STANDSTILL_MPS && requested_accel > 0.0 && throttle > 0.0 && throttle < b
+                {
+                    throttle = b;
+                    breakaway = true;
+                }
+            }
             PedalCommand {
                 throttle: throttle.clamp(0.0, 1.0) as f32,
                 brake: 0.0,
+                breakaway,
             }
         } else {
             let target = brake_coast + (requested_accel - coasting);
@@ -263,6 +304,7 @@ impl LongitudinalCalibration {
             PedalCommand {
                 throttle: 0.0,
                 brake: brake.clamp(0.0, 1.0) as f32,
+                breakaway: false,
             }
         }
     }
@@ -292,6 +334,28 @@ default,0.0,10.0,20.0
             accel_map: PedalMap::parse(ACCEL).unwrap(),
             brake_map: PedalMap::parse(BRAKE).unwrap(),
         }
+    }
+
+    #[test]
+    fn a_measured_breakaway_starts_the_car_from_rest_only() {
+        let accel = format!("# breakaway_pedal: 0.6\n{ACCEL}");
+        let cal = LongitudinalCalibration {
+            accel_map: PedalMap::parse(&accel).unwrap(),
+            brake_map: PedalMap::parse(BRAKE).unwrap(),
+        };
+        // a gentle start from rest: raised to the breakaway pedal, and said so
+        let c = cal.command_for(0.5, 0.0);
+        assert_eq!((c.throttle, c.breakaway), (0.6, true));
+        // moving: the map's own pedal
+        let m = cal.command_for(0.5, 1.0);
+        assert!(!m.breakaway && m.throttle < 0.6);
+        // a firm request already above it, or no request: unchanged
+        assert!(!cal.command_for(5.0, 0.0).breakaway);
+        assert!(!cal.command_for(-1.0, 0.0).breakaway);
+        // a map without the field (0.9.16's) is unchanged by construction
+        let plain = calibration();
+        assert!(!plain.command_for(0.5, 0.0).breakaway);
+        assert!(PedalMap::parse(&format!("# breakaway_pedal: 1.5\n{ACCEL}")).is_err());
     }
 
     #[test]

@@ -62,6 +62,10 @@ if ramps.get("timing") != lowspeed.get("timing"):
 PHYSICS_HASH = ramps.get("physics_hash")
 # The CARLA the ramps ran on (probe_longitudinal.py records it; older samples are 0.9.16's)
 CARLA = ramps.get("carla_version") or "0.9.16"
+# The lowest throttle that starts the car from rest (probe_longitudinal.py), written into the
+# accel map as `# breakaway_pedal:` when it is above the map's first throttle row: below it
+# CARLA 1.0 leaves the car standing, which the 0 m/s cells (read once moving) do not show.
+BREAKAWAY = ramps.get("breakaway_pedal")
 if PHYSICS_HASH != lowspeed.get("physics_hash"):
     sys.exit("the two probes ran on different physics: physics_hash %s vs %s"
              % (PHYSICS_HASH, lowspeed.get("physics_hash")))
@@ -172,9 +176,14 @@ pedals, table = ramp_grid("throttle", [s for s in SPEEDS if s > 0.0])
 for p in pedals:
     if ZERO_FROM in table[p]:
         table[p][0.0] = table[p][ZERO_FROM]
+first_row = min(p for p in pedals if p > 0.0)
+breakaway_note = (["breakaway_pedal: %.3f" % BREAKAWAY,
+                   "(the lowest throttle that starts the car from rest; acb_bridge raises a "
+                   "start to it)"]
+                  if BREAKAWAY and BREAKAWAY > first_row else [])
 write("throttle", out_dir + "/accel_map.csv",
       ["Throttle response of %s on CARLA %s, measured by scripts/probe_longitudinal.py"
-       % (ramps["blueprint"], CARLA), timing], pedals, table)
+       % (ramps["blueprint"], CARLA), timing] + breakaway_note, pedals, table)
 
 pedals, table = ramp_grid("brake", [s for s in SPEEDS if s > LOWSPEED_MAX])
 low = lowspeed_cells()
