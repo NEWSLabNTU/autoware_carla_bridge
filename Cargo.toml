@@ -16,7 +16,13 @@ exclude = ["deps"]
 # different FFI is what produced std::bad_array_new_length before. 0.15.1: the
 # carla-rust/0.9.16-4 prebuilt, with upstream CARLA e7e076f backported (the synchronous
 # Traffic Manager runs Step() inline; no lost-wakeup World::tick hang).
-carla = { version = "0.15.1", features = ["carla-0916"] }
+#
+# Roadmap 083: the CARLA version is each package's feature (`carla-0916`, the default, or
+# `carla-10`), as in scensim_carla_world, so one workspace builds a 0.9.16 binary or a 1.0
+# one (`--no-default-features --features carla-10`). carla-10 is not on crates.io yet:
+# carla-rust master 1212b60 (0.15.1 + CARLA 1.0, its prebuilt carla-rust/1.0-1) until a
+# release, then the version here.
+carla = { git = "https://github.com/jerry73204/carla-rust", rev = "1212b60" }
 
 # Custom profile: release with debug info and assertions
 # Useful for debugging performance issues while maintaining release optimizations

@@ -152,17 +152,24 @@ impl CarlaVehicle {
             Err(e) => return fallback(format!("physics_control failed: {e}")),
         };
 
-        // `position` is world centimetres at the actor's current pose.
+        // The rear wheels' world positions in centimetres at the actor's current pose.
+        // 0.9.16: `position`, world centimetres. 1.0 (Chaos): `position` is gone, `offset`
+        // reads zero, and `location` is the wheel's world position in metres (measured
+        // 2026-11-18 on a model3: rear pair 1.44 m behind the actor origin).
         let rear: Vec<nalgebra::Vector3<f64>> = physics
             .wheels
             .iter()
             .filter(|w| w.max_steer_angle <= 0.0)
             .map(|w| {
-                nalgebra::Vector3::new(
-                    w.position.x as f64,
-                    w.position.y as f64,
-                    w.position.z as f64,
-                )
+                #[cfg(not(feature = "carla-10"))]
+                let cm = (w.position.x, w.position.y, w.position.z);
+                #[cfg(feature = "carla-10")]
+                let cm = (
+                    w.location.x * 100.0,
+                    w.location.y * 100.0,
+                    w.location.z * 100.0,
+                );
+                nalgebra::Vector3::new(cm.0 as f64, cm.1 as f64, cm.2 as f64)
             })
             .collect();
         if rear.len() != 2 {

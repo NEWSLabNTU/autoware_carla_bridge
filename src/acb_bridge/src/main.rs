@@ -1128,6 +1128,7 @@ fn main() -> Result<()> {
         tracing::info!("carla_physics none: the hero runs its blueprint's own physics");
         None
     } else {
+        vehicle_physics::refuse_on_chaos().map_err(error::BridgeError::ConfigError)?;
         let p = carla_physics_spec::CarlaPhysics::load(&params.carla_physics)
             .map_err(error::BridgeError::ConfigError)?;
         let mode = vehicle_physics::Mode::parse(&params.carla_physics_mode)

@@ -18,6 +18,13 @@ path = "src/main.rs"
 [package.metadata.ros]
 install_to_share = ["launch", "config"]
 
+[features]
+# The CARLA this binary talks to: exactly one (carla-rust refuses none or two). 0.9.16 is the
+# default; `--no-default-features --features carla-10` builds for CARLA 1.0 (roadmap 083).
+default = ["carla-0916"]
+carla-0916 = ["carla/carla-0916"]
+carla-10 = ["carla/carla-10"]
+
 [dependencies]
 # Side-channel to carla_world, so it can tell us to release our sensors before
 # it despawns the vehicle they are attached to. ZMQ rather than ROS because acb instances

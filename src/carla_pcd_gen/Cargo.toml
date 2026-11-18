@@ -5,6 +5,13 @@ edition = "2021"
 description = "Generate Autoware-compatible point cloud maps from CARLA"
 license = "Apache-2.0"
 
+[features]
+# The CARLA this binary talks to: exactly one (carla-rust refuses none or two). 0.9.16 is the
+# default; `--no-default-features --features carla-10` builds for CARLA 1.0 (roadmap 083).
+default = ["carla-0916"]
+carla-0916 = ["carla/carla-0916"]
+carla-10 = ["carla/carla-10"]
+
 [dependencies]
 carla.workspace = true
 nalgebra = "0.34.1"

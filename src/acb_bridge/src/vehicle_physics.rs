@@ -30,12 +30,16 @@
 //! the hero's motion and hands the tire config to a decoy (as scensim_carla_world's
 //! `vehicle_physics::apply_kept` does): with that, a spawn no longer reaches the hero.
 
+use carla::client::Vehicle;
+#[cfg(not(feature = "carla-10"))]
 use carla::{
-    client::{ActorBase, Vehicle, World},
+    client::{ActorBase, World},
     geom::{Location, Rotation, Transform, Vector2D, Vector3D},
     rpc::{GearPhysicsControl, VehiclePhysicsControl},
 };
-use carla_physics_spec::{CarlaPhysics, ReadBack};
+use carla_physics_spec::CarlaPhysics;
+#[cfg(not(feature = "carla-10"))]
+use carla_physics_spec::ReadBack;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -53,6 +57,7 @@ impl Mode {
     }
 }
 
+#[cfg(not(feature = "carla-10"))]
 /// `control` with the file's physics: what it says, the rest of the blueprint's kept.
 pub fn set(control: &mut VehiclePhysicsControl, p: &CarlaPhysics) {
     let v = &p.vehicle;
@@ -102,6 +107,7 @@ pub fn set(control: &mut VehiclePhysicsControl, p: &CarlaPhysics) {
     }
 }
 
+#[cfg(not(feature = "carla-10"))]
 /// What an actor's physics control says, in the file's units.
 pub fn read_back(control: &VehiclePhysicsControl) -> ReadBack {
     ReadBack {
@@ -139,6 +145,7 @@ pub fn read_back(control: &VehiclePhysicsControl) -> ReadBack {
     }
 }
 
+#[cfg(not(feature = "carla-10"))]
 /// The road's factor on the tires a world server set (a wet road scales them all alike):
 /// the actor's friction over the file's, 1 when they cannot be compared. A road only takes
 /// grip away (the world server's factor is the scenario's scale, at most 1 in every
@@ -171,6 +178,7 @@ pub fn wrong_blueprint(p: &CarlaPhysics, blueprint: &str) -> Option<String> {
     })
 }
 
+#[cfg(not(feature = "carla-10"))]
 /// Put the spec's physics on the hero (`apply` mode). CARLA applies it at the next tick:
 /// [`check`] after one. The hero keeps its motion, and a decoy of its blueprint takes the
 /// blueprint's tire config after it ([`apply_kept`]).
@@ -183,6 +191,7 @@ pub fn apply(world: &mut World, vehicle: &Vehicle, p: &CarlaPhysics) -> Result<(
         .map_err(|e| format!("apply the vehicle spec's physics: {e}"))
 }
 
+#[cfg(not(feature = "carla-10"))]
 /// Where a decoy spawns: under every town, in no sensor's view; it never sees a tick.
 const DECOY_AT: Location = Location {
     x: 0.0,
@@ -190,13 +199,16 @@ const DECOY_AT: Location = Location {
     z: -500.0,
 };
 
+#[cfg(not(feature = "carla-10"))]
 /// A decoy's role: scensim_carla_world's entity mark, so an orphan is reaped.
 pub const DECOY_ROLE: &str = "scensim_entity:~tire_decoy";
 
+#[cfg(not(feature = "carla-10"))]
 /// The tires of the decoy's own control are marked this much lower, so its apply can be
 /// seen to have happened (a spawn sets the tire config it takes to the blueprint's).
 const DECOY_MARK: f32 = 0.01;
 
+#[cfg(not(feature = "carla-10"))]
 /// Read `vehicle` back until it reports these tires: LibCarla sends an apply without
 /// waiting for it, and a destroy sent next overtook it. Whether it did, within 0.2 s.
 fn wait_for_tires(vehicle: &Vehicle, want: &[f32]) -> bool {
@@ -216,6 +228,7 @@ fn wait_for_tires(vehicle: &Vehicle, want: &[f32]) -> bool {
     false
 }
 
+#[cfg(not(feature = "carla-10"))]
 /// `control` on `vehicle`, which keeps its motion and keeps it alone: a decoy of its
 /// blueprint spawns first (a spawn of the blueprint resets the tire config the blueprint
 /// shares), `control` goes on the car, the decoy's own control (marked) on the decoy -- the
@@ -290,6 +303,7 @@ pub fn apply_kept(
     Ok(())
 }
 
+#[cfg(not(feature = "carla-10"))]
 /// The hero runs the spec's physics; an error says what it runs instead.
 pub fn check(vehicle: &Vehicle, p: &CarlaPhysics, mode: Mode) -> Result<(), String> {
     let back = read_back(
@@ -314,6 +328,33 @@ pub fn check(vehicle: &Vehicle, p: &CarlaPhysics, mode: Mode) -> Result<(), Stri
         ));
     }
     Ok(())
+}
+
+/// Why the spec's physics cannot run on CARLA 1.0 yet: the mapping above is PhysX's
+/// (0.9.16's `VehiclePhysicsControl`: `moi`, the damping rates, `forward_gears`, per wheel
+/// `tire_friction`, `damping_rate`, `radius`, the stiffness pair, `position`), and 1.0's
+/// vehicles run Chaos, whose control has other fields (roadmap 083 step 5). acb_bridge
+/// refuses such a run at start ([`refuse_on_chaos`]), naming this.
+#[cfg(feature = "carla-10")]
+pub const CHAOS_UNMAPPED: &str = "the vehicle spec's physics (carla_physics) is not mapped \
+    to CARLA 1.0's Chaos vehicle yet (roadmap 083 step 5): run with carla_physics:=none";
+
+/// `Err` on a CARLA 1.0 build whenever a spec physics file is given; `Ok` otherwise.
+pub fn refuse_on_chaos() -> Result<(), String> {
+    #[cfg(feature = "carla-10")]
+    return Err(CHAOS_UNMAPPED.to_string());
+    #[cfg(not(feature = "carla-10"))]
+    Ok(())
+}
+
+#[cfg(feature = "carla-10")]
+pub fn apply(_: &mut carla::client::World, _: &Vehicle, _: &CarlaPhysics) -> Result<(), String> {
+    Err(CHAOS_UNMAPPED.to_string())
+}
+
+#[cfg(feature = "carla-10")]
+pub fn check(_: &Vehicle, _: &CarlaPhysics, _: Mode) -> Result<(), String> {
+    Err(CHAOS_UNMAPPED.to_string())
 }
 
 /// The exit status when the hero lost the spec's physics mid-run and did not get it back
@@ -484,6 +525,7 @@ mod tests {
         assert!(why.contains("vehicle.audi.etron") && why.contains("vehicle.tesla.model3"));
     }
 
+    #[cfg(not(feature = "carla-10"))]
     #[test]
     fn a_wet_road_is_still_the_spec_car() {
         let p = shipped();
@@ -495,6 +537,7 @@ mod tests {
         assert!(p.differences(&back, road_factor(&p, &back)).is_empty());
     }
 
+    #[cfg(not(feature = "carla-10"))]
     #[test]
     fn the_blueprints_own_tires_are_not_a_road() {
         let p = shipped();
@@ -595,6 +638,7 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
     }
 
+    #[cfg(not(feature = "carla-10"))]
     #[test]
     fn a_drift_the_world_server_never_fixes_ends_the_run_naming_the_field() {
         // verify mode, a spawn resets the tires and nobody puts them back: past the grace,

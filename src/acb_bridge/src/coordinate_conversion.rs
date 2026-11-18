@@ -239,8 +239,7 @@ pub fn ros_quaternion_to_carla_euler(quaternion: &Quaternion<f64>) -> (f64, f64,
 /// # Returns
 /// Rotation as quaternion (x, y, z, w)
 ///
-/// NOTE: Kept for API completeness and potential future use in sensor data conversion.
-#[allow(dead_code)]
+/// The ego odometry's orientation (`autoware.rs`).
 pub fn carla_euler_to_ros_quaternion(roll: f64, pitch: f64, yaw: f64) -> Quaternion<f64> {
     let (ros_roll, ros_pitch, ros_yaw) = carla_to_ros_rotation(roll, pitch, yaw);
     euler_to_quaternion(ros_roll, ros_pitch, ros_yaw)
@@ -804,6 +803,54 @@ mod tests {
             cp * cr,
         );
         assert!((carla_rotation_matrix(r, p, y) - libcarla).norm() < 1e-12);
+    }
+
+    /// The linked LibCarla's own `Rotation::RotateVector` (0.9.16 or 1.0, as built), not a
+    /// copy of its formula: 1.0's changelog announced a pitch and roll order fix, so this
+    /// pins what the library this binary links actually does (roadmap 083 rotation audit).
+    fn libcarla_matrix(r: f64, p: f64, y: f64) -> Matrix3<f64> {
+        let rot = carla::geom::Rotation {
+            pitch: p as f32,
+            yaw: y as f32,
+            roll: r as f32,
+        };
+        let col = |v: carla::geom::Vector3D| {
+            let o = rot.rotate_vector(&v);
+            Vector3::new(o.x as f64, o.y as f64, o.z as f64)
+        };
+        Matrix3::from_columns(&[
+            col(carla::geom::Vector3D::new(1.0, 0.0, 0.0)),
+            col(carla::geom::Vector3D::new(0.0, 1.0, 0.0)),
+            col(carla::geom::Vector3D::new(0.0, 0.0, 1.0)),
+        ])
+    }
+
+    const POSES: [(f64, f64, f64); 4] = [
+        (7.0, -12.0, 143.0),
+        (-25.0, 20.0, -30.0),
+        (3.0, 8.0, 90.0),
+        (0.0, 0.0, -179.0),
+    ];
+
+    #[test]
+    fn test_carla_rotation_matches_linked_libcarla() {
+        for (r, p, y) in POSES {
+            let d = (carla_rotation_matrix(r, p, y) - libcarla_matrix(r, p, y)).norm();
+            assert!(d < 1e-5, "({r}, {p}, {y}): {d}");
+        }
+    }
+
+    #[test]
+    fn test_ros_orientation_is_the_mirrored_libcarla_rotation() {
+        // What the odometry publishes must be M R_carla M with M = diag(1, -1, 1).
+        let m = Matrix3::from_diagonal(&Vector3::new(1.0, -1.0, 1.0));
+        for (r, p, y) in POSES {
+            let q = carla_euler_to_ros_quaternion(r, p, y);
+            let ros = nalgebra::UnitQuaternion::from_quaternion(q).to_rotation_matrix();
+            let want = m * libcarla_matrix(r, p, y) * m;
+            let d = (ros.matrix() - want).norm();
+            assert!(d < 1e-5, "({r}, {p}, {y}): {d}");
+        }
     }
 
     #[test]
