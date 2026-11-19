@@ -3,9 +3,13 @@
 <package format="3">
   <name>carla_map_gen</name>
   <version>0.1.0</version>
-  <description>Generate Autoware-compatible Lanelet2 maps from a running CARLA server</description>
+  <description>Autoware Lanelet2 maps from CARLA or an OpenDRIVE file: conversion, georeference, repairs</description>
   <maintainer email="user@example.com">User</maintainer>
   <license>Apache-2.0</license>
+
+  <!-- the georeference (roadmap 087); crdesigner (commonroad-scenario-designer 0.8.5) is a pip package -->
+  <exec_depend>python3-pyproj</exec_depend>
+  <test_depend>python3-pytest</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

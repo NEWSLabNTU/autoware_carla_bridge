@@ -14,7 +14,9 @@ from crdesigner.common.config.lanelet2_config import Lanelet2Config
 from crdesigner.common.config.opendrive_config import OpenDriveConfig
 from crdesigner.map_conversion.map_conversion_interface import opendrive_to_lanelet
 
+from carla_map_gen import georef as G
 from carla_map_gen.postprocess import postprocess_osm
+from carla_map_gen.repair import repair_map
 
 MAP_CONFIG_YAML = """\
 /**:
@@ -28,14 +30,6 @@ MAP_CONFIG_YAML = """\
       yaw: 0.0
 """
 
-MAP_PROJECTOR_INFO_YAML = """\
-projector_type: TransverseMercator
-vertical_datum: WGS84
-map_origin:
-  latitude: 0.0
-  longitude: 0.0
-scale_factor: 1.0
-"""
 
 
 def main():
@@ -49,6 +43,8 @@ def main():
                         help="Path to .xodr file (offline mode, no CARLA needed)")
     parser.add_argument("--output-dir", required=True,
                         help="Output directory for generated map files")
+    parser.add_argument("--no-repairs", action="store_true",
+                        help="skip the lanelet2 repairs (carla_map_gen.repair), which run by default")
     args = parser.parse_args()
 
     if args.xodr:
@@ -99,18 +95,33 @@ def main():
         odr_config = OpenDriveConfig()
 
         print("Converting OpenDRIVE to Lanelet2...")
-        opendrive_to_lanelet(odr_path, osm_path, odr_config=odr_config,
-                             lanelet2_config=lanelet2_config)
+        # crdesigner converts the file with the towns' georeference (its own geo handling of a real CRS
+        # is not trusted); relocate() then puts every node where the file's CRS says (roadmap 087)
+        georef = G.GeoRef(odr_path)
+        with tempfile.TemporaryDirectory() as tmp:
+            town_odr = os.path.join(tmp, f"{map_name}.xodr")
+            G.rewrite_town_proj(odr_path, town_odr)
+            opendrive_to_lanelet(town_odr, osm_path, odr_config=odr_config,
+                                 lanelet2_config=lanelet2_config)
 
-        # Post-process
-        postprocess_osm(osm_path)
+            # Post-process
+            postprocess_osm(osm_path)
+            info, shift = G.relocate(osm_path, georef, output_dir)
+            print(f"Projector: {info.splitlines()[0].split(': ')[1]}"
+                  + (f", map frame = OpenDRIVE frame + ({shift[0]:.3f}, {shift[1]:.3f}) (map_frame.yaml)"
+                     if shift != (0.0, 0.0) else ", map frame = OpenDRIVE frame"))
+            (output_dir / "map_config.yaml").write_text(MAP_CONFIG_YAML)
+
+            if not args.no_repairs:
+                rep_odr = odr_path
+                if shift != (0.0, 0.0):
+                    rep_odr = os.path.join(tmp, f"{map_name}_map_frame.xodr")
+                    G.shift_xodr(odr_path, rep_odr, shift)
+                print("Repairing (carla_map_gen.repair)...")
+                repair_map(output_dir, xodr=rep_odr)
     finally:
         if cleanup_odr:
             os.unlink(odr_path)
-
-    # Write config files
-    (output_dir / "map_config.yaml").write_text(MAP_CONFIG_YAML)
-    (output_dir / "map_projector_info.yaml").write_text(MAP_PROJECTOR_INFO_YAML)
 
     # Summary
     print(f"\nGenerated files in {output_dir}/:")
