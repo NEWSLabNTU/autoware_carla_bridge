@@ -5,7 +5,8 @@
 Each repair is idempotent and keeps the first `.orig` backup, so this also runs on maps already repaired.
 The OpenDRIVE repairs (speed limits, walkways under roads, non-driving lanes) need the town's `.xodr`:
 `--xodr` names the file for a single map directory, `--xodr-dir` holds `<Town>.xodr` (or `<Town>/main.xodr`)
-for a root of towns. Without either they are skipped. `--signal-links` relinks the lights to the ones a live
+for a root of towns. Without either they use their own default (CARLA_SRC's OpenDrive directory) and skip a
+town whose file is not there, as download_maps.sh always ran them. `--signal-links` relinks the lights to the ones a live
 CARLA controls (repairs/signal_links.py); it needs the server and is off by default.
 """
 
@@ -50,10 +51,7 @@ def repair_map(root, xodr=None, xodr_dir=None, signal_links=None, host="localhos
             xodr_dir = Path(tmp)
             (xodr_dir / f"{root.name}.xodr").symlink_to(Path(xodr).resolve())
         for module, needs_xodr in STEPS:
-            if needs_xodr:
-                if xodr_dir is None:
-                    print(f"== {module}: skipped (no --xodr / --xodr-dir)", flush=True)
-                    continue
+            if needs_xodr and xodr_dir is not None:
                 run(module, [str(root), "--xodr-dir", str(xodr_dir)])
             else:
                 run(module, [str(root)])
