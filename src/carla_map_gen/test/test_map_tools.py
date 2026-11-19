@@ -119,3 +119,40 @@ def test_a_rotated_grid_is_refused(tmp_path):
                  '+x_0=215743.6 +y_0=2546179 +datum=WGS84 +units=m +no_defs]]></geoReference></header></OpenDRIVE>')
     with pytest.raises(SystemExit, match="not UTM's"):
         GeoRef(x).projector((0.0, 0.0))
+
+
+def test_the_full_repair_chain_leaves_one_local_pair_per_node(tmp_path, monkeypatch):
+    """Issue 067, end to end: carla_map_gen.repair's whole chain, in download_maps.sh's order, on a small map in the
+    pack's layout (`"/>`) whose nodes carry stale local tags. stop_lines rewrites the map through ElementTree
+    (`" />`) before local_coords runs. Every node then holds exactly one local_x and one local_y, at the projector's
+    values; no element repeats a tag key; and a second run changes nothing."""
+    from carla_map_gen import repair as chain
+    from collections import Counter
+    town = tmp_path / "maps" / "TownT"
+    p = write_map(town)
+    root = ET.parse(p).getroot()
+    for n in root.iter("node"):  # the pack's local tags, stale (as at another scale)
+        for i, k in enumerate(("local_x", "local_y")):
+            t = ET.Element("tag", k=k, v="0.0000")
+            n.insert(i, t)
+    ET.ElementTree(root).write(p, encoding="UTF-8", xml_declaration=True)
+    p.write_text(p.read_text().replace(" />", "/>"))  # the pack's layout
+    assert '" />' not in p.read_text()
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[1]))
+    no_xodr = tmp_path / "no_xodr"
+    no_xodr.mkdir()  # the OpenDRIVE steps find no <Town>.xodr and skip, as for town05_ring_110kmh
+    chain.repair_map(tmp_path / "maps", xodr_dir=no_xodr)
+    root = ET.parse(p).getroot()
+    pr = Projector.for_map(p)
+    for n in root.iter("node"):
+        keys = Counter(t.get("k") for t in n.findall("tag"))
+        assert keys["local_x"] == 1 and keys["local_y"] == 1, (n.get("id"), keys)
+        tags = {t.get("k"): t.get("v") for t in n.findall("tag")}
+        x, y = pr.project(float(n.get("lat")), float(n.get("lon")))
+        assert (tags["local_x"], tags["local_y"]) == ("%.4f" % x, "%.4f" % y), n.get("id")
+    for el in root:
+        keys = Counter(t.get("k") for t in el.findall("tag"))
+        assert not [k for k, c in keys.items() if c > 1], (el.tag, el.get("id"), keys)
+    once = p.read_bytes()
+    chain.repair_map(tmp_path / "maps", xodr_dir=no_xodr)
+    assert p.read_bytes() == once  # idempotent

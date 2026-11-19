@@ -15,75 +15,68 @@ none. Measured on Town01 (docs/design/ssv2-feature-completeness.md, "Lane positi
 projected lat/lon is the frame of OpenDRIVE's lanes, the point cloud map and the driven ego;
 the tags are not.
 
-The repair rewrites both tags on every node from `Projector.project(lat, lon)` (adding them
-where absent, as the node's first tags). lat/lon is taken as the truth: a map that
-`regenerate_light_geometry.py` or `repairs/signal_links.py` edited before they wrote
-lat/lon with `Projector.unproject` has its new nodes' lat/lon wrong; rerun that script
-first. Edits are text edits inside the `<node>` blocks; the rest of the file stays
-byte-identical. Idempotent; the first edit keeps a `.orig` copy (shared with the other
-repair_lanelet_*.py scripts, whichever runs first).
+The repair sets both tags on every node from `Projector.project(lat, lon)`: one `local_x` and one
+`local_y`, the first of each kept and rewritten, any further ones removed, added as the node's first
+tags where absent. lat/lon is taken as the truth: a map that `regenerate_light_geometry.py` or
+`repairs/signal_links.py` edited before they wrote lat/lon with `Projector.unproject` has its new
+nodes' lat/lon wrong; rerun that script first. It reads and writes the map through ElementTree, as
+the other repairs do (issue 067: the text edits it made before matched `"/>` only, so on a map an
+earlier repair had written back (`" />`) it added a second pair to every node and left the stale one).
+Idempotent; the first edit keeps a `.orig` copy (shared with the other repairs, whichever runs first).
 
     python3 -m carla_map_gen.repairs.local_coords data/carla-autoware-bridge
 """
-import re
 import shutil
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from carla_map_gen.projection import Projector
 
-NODE = re.compile(r'<node\b([^>]*?)(/>|>(.*?)</node>)', re.S)
-LAT = re.compile(r'\blat="([^"]*)"')
-LON = re.compile(r'\blon="([^"]*)"')
+KEYS = ("local_x", "local_y")
 
 
-def set_local(match, projector):
-    """one <node> block with local_x/local_y from its lat/lon"""
-    attrs = match.group(1)
-    lat, lon = LAT.search(attrs), LON.search(attrs)
-    if not (lat and lon):
-        return match.group(0)
-    x, y = projector.project(float(lat.group(1)), float(lon.group(1)))
+def set_local(node, projector):
+    """one <node> element with exactly one local_x/local_y, from its lat/lon; whether it changed"""
+    lat, lon = node.get("lat"), node.get("lon")
+    if lat is None or lon is None:
+        return False
+    x, y = projector.project(float(lat), float(lon))
     values = {"local_x": "%.4f" % x, "local_y": "%.4f" % y}
-    if match.group(3) is None:  # self-closing: <node .../> -> <node ...> tags </node>
-        text = match.string
-        line_start = text.rfind("\n", 0, match.start()) + 1
-        indent = text[line_start:match.start()]
-        tags = "".join(f'{indent}  <tag k="{k}" v="{v}"/>\n' for k, v in values.items())
-        return f"<node{attrs}>\n{tags}{indent}</node>"
-    inner = match.group(3)
-    missing = []
-    for k, v in values.items():
-        tag = re.compile(r'<tag k="%s" v="[^"]*"/>' % k)
-        if tag.search(inner):
-            inner = tag.sub(f'<tag k="{k}" v="{v}"/>', inner, count=1)
+    changed = False
+    for i, k in enumerate(KEYS):
+        tags = [t for t in node.findall("tag") if t.get("k") == k]
+        if tags:
+            if tags[0].get("v") != values[k]:
+                tags[0].set("v", values[k])
+                changed = True
+            for extra in tags[1:]:
+                node.remove(extra)
+                changed = True
         else:
-            missing.append(f'<tag k="{k}" v="{v}"/>')
-    if missing:
-        nxt = re.match(r'\n([ \t]*)', inner)
-        indent = nxt.group(1) if nxt else "    "
-        inner = "\n" + "".join(f"{indent}{t}\n" for t in missing)[:-1] + inner
-    return f"<node{attrs}>{inner}</node>"
+            tag = ET.Element("tag", k=k, v=values[k])
+            # the pack's layout: one tag per line, at the node's children's indent
+            if not len(node):  # a node without tags (<node .../>): open it
+                node.text, tag.tail = "\n    ", "\n  "
+            elif i == 0:
+                tag.tail = node.text
+            else:
+                tag.tail, node[i - 1].tail = node[i - 1].tail, node.text
+            node.insert(i, tag)
+            changed = True
+    return changed
 
 
 def repair(path):
     """the number of nodes whose local tags changed"""
     projector = Projector.for_map(path)
-    text = path.read_text(encoding="utf-8", errors="surrogateescape")
-    changed = 0
-
-    def one(m):
-        nonlocal changed
-        out = set_local(m, projector)
-        changed += out != m.group(0)
-        return out
-
-    fixed = NODE.sub(one, text)
+    tree = ET.parse(path)
+    changed = sum(set_local(n, projector) for n in tree.getroot().iter("node"))
     if changed:
         backup = path.with_suffix(path.suffix + ".orig")
         if not backup.exists():
             shutil.copy2(path, backup)
-        path.write_text(fixed, encoding="utf-8", errors="surrogateescape")
+        tree.write(path, encoding="UTF-8", xml_declaration=True)
     return changed
 
 

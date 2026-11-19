@@ -83,12 +83,14 @@ def repair(path, dry=False):
         n = nodes[nid]
         n.set("lat", repr(lat))
         n.set("lon", repr(lon))
-        t = {k.get("k"): k for k in n.findall("tag")}
-        for k, v in (("local_x", x), ("local_y", y)):
+        t = {}
+        for k in n.findall("tag"):
+            t.setdefault(k.get("k"), k)
+        for k, v in (("local_x", x), ("local_y", y)):  # local_coords' form (issue 067)
             if k in t:
-                t[k].set("v", repr(v))
+                t[k].set("v", "%.4f" % v)
             else:
-                ET.SubElement(n, "tag", k=k, v=repr(v))
+                ET.SubElement(n, "tag", k=k, v="%.4f" % v)
 
     next_id = [max(int(i) for i in list(nodes) + list(ways) + [r.get("id") for r in rels]) + 1]
 

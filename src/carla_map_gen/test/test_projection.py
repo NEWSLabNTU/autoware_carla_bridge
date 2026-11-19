@@ -119,14 +119,32 @@ class Repair(unittest.TestCase):
             self.assertEqual((t["local_x"], t["local_y"]), ("%.4f" % x, "%.4f" % y), nid)
         self.assertEqual(tags(text, "1")["local_x"], "384.4361")
         self.assertEqual(tags(text, "2")["ele"], "5")
-        # the rest of the file is untouched, and the first edit kept the original
-        self.assertIn('  <way id="10">\n    <nd ref="1"/>', text)
-        self.assertIn('    <tag k="local_x" v="384.4361"/>\n    <tag k="local_y" v="-0.0200"/>\n'
-                      '    <tag k="ele" v="0"/>', text)
-        self.assertIn('    <tag k="local_x" v="333.8249"/>\n    <tag k="local_y" v="-331.5901"/>\n'
-                      '    <tag k="ele" v="5"/>', text)
-        self.assertIn('  <node id="3" lat="0.001" lon="-0.002">\n    <tag k="local_x"', text)
+        # one tag per line in the pack's layout, the new tags first, the way untouched, and the first edit kept
+        # the original (issue 067: through ElementTree, as the other repairs)
+        self.assertIn('  <way id="10">\n    <nd ref="1" />', text)
+        self.assertIn('    <tag k="local_x" v="384.4361" />\n    <tag k="local_y" v="-0.0200" />\n'
+                      '    <tag k="ele" v="0" />', text)
+        self.assertIn('    <tag k="local_x" v="333.8249" />\n    <tag k="local_y" v="-331.5901" />\n'
+                      '    <tag k="ele" v="5" />', text)
+        self.assertIn('  <node id="3" lat="0.001" lon="-0.002">\n    <tag k="local_x" v="-222.5499" />\n'
+                      '    <tag k="local_y" v="110.5300" />\n  </node>', text)
         self.assertEqual((self.osm.parent / "lanelet2_map.osm.orig").read_text(), MAP)
+
+    def test_a_map_written_by_elementtree_keeps_one_pair(self):
+        """issue 067: on a map an earlier repair wrote back (`" />`), and with a stale duplicate pair, one
+        local_x/local_y per node remains, at the projector's values"""
+        self.osm.write_text(MAP.replace('"/>', '" />').replace(
+            '<tag k="ele" v="5"/>', '<tag k="local_x" v="1.0" />\n    <tag k="local_y" v="2.0" />\n    <tag k="ele" v="5" />'))
+        repair.repair(self.osm)
+        text = self.osm.read_text()
+        p = ap.Projector()
+        for nid, lat, lon in (("1", -1.805613721080238e-07, 0.003454829852879983),
+                              ("2", -0.003, 0.003), ("3", 0.001, -0.002)):
+            block = text.split(f'<node id="{nid}"')[1].split("</node>")[0]
+            self.assertEqual(block.count('k="local_x"'), 1, nid)
+            self.assertEqual(block.count('k="local_y"'), 1, nid)
+            x, y = p.project(lat, lon)
+            self.assertEqual(tags(text, nid)["local_x"], "%.4f" % x)
 
     def test_idempotent(self):
         repair.repair(self.osm)
