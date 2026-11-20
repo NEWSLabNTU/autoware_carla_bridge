@@ -25,6 +25,7 @@ STEPS = [
     ("bound_directions", False),
     ("local_coords", False),
     ("light_facing", False),
+    ("far_traffic_lights", False),  # after light_facing: its split bars are the lights measured
     ("duplicate_points", False),
     ("turn_direction", False),
     ("joins", False),
