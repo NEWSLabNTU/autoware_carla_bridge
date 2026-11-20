@@ -16,15 +16,18 @@ range can turn a near green red.
 A light is far when its centre is more than FAR metres (default 60) from the centre of its
 element's `ref_line`:
 
-- an element whose every light is far is unlinked: the lanelets stop referencing it. The
-  element stays, so its id remains valid for the signal table;
+- an element whose every light is far is removed: the lanelets stop referencing it, and the
+  element goes. Autoware's map validator requires every traffic-light element to have a
+  referrer (`traffic_light.missing_referrers`; an unlinked element left in place counted 37 on
+  Town03, scensim issue 073);
 - an element with near and far lights keeps the near ones and drops the far ones from its
   `refers`.
 
-A light way that no element refers to any more (it was only in a far grouping) is removed,
-with its nodes no other way uses: the map validator would count it as
-`traffic_light.missing_referrers`. Distances use the nodes' `local_x` / `local_y` tags (run
-`repairs/local_coords.py` first if the map has none). Idempotent: a second run finds nothing.
+A light way or stop line that nothing uses any more (it belonged only to a removed element or a
+far grouping) is removed, with its nodes no other way uses: the validator would count a light
+as `traffic_light.missing_referrers` too. Distances use the nodes' `local_x` / `local_y` tags
+(run `repairs/local_coords.py` first if the map has none). Idempotent: a second run finds
+nothing.
 
   python3 -m carla_map_gen.repairs.far_traffic_lights <map dir, root of towns, or .osm>
       [--far 60] [--dry-run]
@@ -45,8 +48,8 @@ def tags(el):
 
 
 def repair(path, far=FAR_M, dry=False):
-    """One map. Returns (unlinked element ids, lanelet references dropped, trimmed element
-    ids, far lights dropped from trimmed elements, light ways left with no referrer)."""
+    """One map. Returns (removed element ids, lanelet references dropped, trimmed element
+    ids, far lights dropped from trimmed elements, ways left unused and removed)."""
     tree = ET.parse(path)
     root = tree.getroot()
     nodes = {}
@@ -85,35 +88,39 @@ def repair(path, far=FAR_M, dry=False):
             lights_dropped += len(far_ones)
 
     dropped = 0
-    still_linked = set()
     for r in root.iter("relation"):
         for m in list(r.findall("member")):
             if m.get("role") == "regulatory_element" and m.get("ref") in unlinked:
                 r.remove(m)
                 dropped += 1
-                still_linked.add(m.get("ref"))
-    unlinked = still_linked  # the far elements this run unlinked (a second run: none)
+    # the far elements go: a traffic-light element no lanelet refers to fails the validator
+    held = set()
+    for r in list(root.findall("relation")):
+        if r.get("id") in unlinked:
+            held |= {m.get("ref") for m in r.findall("member") if m.get("type") == "way"}
+            root.remove(r)
+    removed = sorted(unlinked)
 
-    referred_after = {m.get("ref") for r in elements for m in r.findall("member")
-                      if m.get("role") == "refers"}
-    orphaned = sorted(referred_before - referred_after)
-    # a light way only a far grouping referred to belongs to no element now: removed, with
-    # the nodes no other way uses (the validator counts it as missing_referrers otherwise)
-    if orphaned:
-        gone = set(orphaned)
+    used_ways = {m.get("ref") for r in root.iter("relation") for m in r.findall("member")
+                 if m.get("type") == "way"}
+    # a light way only a far grouping referred to, or a way only a removed element held, belongs
+    # to nothing now: removed, with the nodes no other way uses
+    gone = sorted(((referred_before - used_ways) | held) - used_ways)
+    if gone:
+        gone_set = set(gone)
         for w in list(root.findall("way")):
-            if w.get("id") in gone:
+            if w.get("id") in gone_set:
                 root.remove(w)
         used = {nd.get("ref") for w in root.iter("way") for nd in w.iter("nd")}
         used |= {m.get("ref") for r in root.iter("relation") for m in r.findall("member")
                  if m.get("type") == "node"}
-        candidates = {n for wid in gone for n in ways.get(wid, [])}
+        candidates = {n for wid in gone_set for n in ways.get(wid, [])}
         for n in list(root.findall("node")):
             if n.get("id") in candidates and n.get("id") not in used:
                 root.remove(n)
-    if (dropped or lights_dropped) and not dry:
+    if (removed or lights_dropped or gone) and not dry:
         tree.write(path, encoding="UTF-8", xml_declaration=True)
-    return sorted(unlinked), dropped, trimmed, lights_dropped, orphaned
+    return removed, dropped, trimmed, lights_dropped, gone
 
 
 def main(argv=None):
@@ -125,13 +132,12 @@ def main(argv=None):
     root = Path(a.root)
     maps = [root] if root.is_file() else sorted(root.rglob("lanelet2_map.osm"))
     for p in maps:
-        unlinked, dropped, trimmed, lights, orphaned = repair(p, a.far, a.dry_run)
+        removed, dropped, trimmed, lights, gone = repair(p, a.far, a.dry_run)
         name = p.parent.name if p.name == "lanelet2_map.osm" else p.name
-        print(f"  {name}: {len(unlinked)} traffic-light element(s) with every light beyond "
-              f"{a.far:g} m of their stop line unlinked ({dropped} lanelet reference(s)); "
+        print(f"  {name}: {len(removed)} traffic-light element(s) with every light beyond "
+              f"{a.far:g} m of their stop line removed ({dropped} lanelet reference(s)); "
               f"{len(trimmed)} element(s) kept their near lights and dropped {lights} far "
-              f"one(s)" + (f"; {len(orphaned)} light way(s) no element refers to any more "
-                           f"removed" if orphaned else "")
+              f"one(s)" + (f"; {len(gone)} way(s) nothing uses any more removed" if gone else "")
               + (" (dry run)" if a.dry_run else ""))
 
 

@@ -92,14 +92,36 @@ class FarTrafficLightsTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_a_far_only_element_is_unlinked_and_kept(self):
-        unlinked, dropped, _, _, _ = ftl.repair(self.path)
-        self.assertEqual(unlinked, [self.el_c])
+    def test_a_far_only_element_is_removed_with_its_light_and_stop_line(self):
+        removed, dropped, _, _, gone = ftl.repair(self.path)
+        self.assertEqual(removed, [self.el_c])
         self.assertEqual(dropped, 1)
         root = ET.parse(self.path).getroot()
         self.assertEqual(_refs(root, self.ll_c, "regulatory_element"), [])
-        # the element stays, with its light, so its id is still valid for the signal table
-        self.assertEqual(_refs(root, self.el_c, "refers"), [self.light_c])
+        # the validator requires a referrer for every traffic-light element: the element goes,
+        # and its light and stop line with it, since nothing else uses them
+        self.assertNotIn(self.el_c, {r.get("id") for r in root.iter("relation")})
+        ways = {w.get("id") for w in root.iter("way")}
+        self.assertNotIn(self.light_c, ways)
+        self.assertNotIn(self.stop_c, ways)
+        self.assertIn(self.light_c, gone)
+        self.assertIn(self.stop_c, gone)
+
+    def test_a_removed_elements_light_another_element_uses_stays(self):
+        m = _Map()
+        stop_n = m.way([(0, 0), (0, 3)], "stop_line")
+        stop_f = m.way([(0, 100), (0, 103)], "stop_line")
+        shared = m.light(10, 0)  # near the first stop line, 100+ m from the second
+        el_n, el_f = m.element(stop_n, [shared]), m.element(stop_f, [shared])
+        m.lanelet(el_n), m.lanelet(el_f)
+        p = Path(self.tmp.name) / "shared.osm"
+        m.write(p)
+        removed, _, _, _, gone = ftl.repair(p)
+        self.assertEqual(removed, [el_f])
+        root = ET.parse(p).getroot()
+        self.assertIn(shared, {w.get("id") for w in root.iter("way")})
+        self.assertNotIn(shared, gone)
+        self.assertEqual(_refs(root, el_n, "refers"), [shared])
 
     def test_a_mixed_element_keeps_only_its_near_lights(self):
         _, _, trimmed, lights, _ = ftl.repair(self.path)
@@ -119,8 +141,8 @@ class FarTrafficLightsTest(unittest.TestCase):
         before = ET.parse(self.path).getroot()
         lonely_nodes = {nd.get("ref") for w in before.iter("way") if w.get("id") == self.light_lonely
                         for nd in w.iter("nd")}
-        _, _, _, _, orphaned = ftl.repair(self.path)
-        self.assertEqual(orphaned, [self.light_lonely])
+        _, _, _, _, gone = ftl.repair(self.path)
+        self.assertIn(self.light_lonely, gone)
         root = ET.parse(self.path).getroot()
         ways = {w.get("id") for w in root.iter("way")}
         self.assertNotIn(self.light_lonely, ways)
@@ -135,9 +157,22 @@ class FarTrafficLightsTest(unittest.TestCase):
 
     def test_a_dry_run_writes_nothing(self):
         text = self.path.read_text()
-        unlinked, _, trimmed, _, orphaned = ftl.repair(self.path, dry=True)
-        self.assertEqual((unlinked, trimmed, orphaned), ([self.el_c], [self.el_a], [self.light_lonely]))
+        removed, _, trimmed, _, gone = ftl.repair(self.path, dry=True)
+        self.assertEqual((removed, trimmed), ([self.el_c], [self.el_a]))
+        self.assertEqual(sorted(gone), sorted([self.light_lonely, self.light_c, self.stop_c]))
         self.assertEqual(self.path.read_text(), text)
+
+    def test_an_element_unlinked_by_an_earlier_run_is_removed(self):
+        # a13efb4 unlinked far elements and kept them; this run removes what that left
+        root = ET.parse(self.path).getroot()
+        for r in root.iter("relation"):
+            for mm in list(r.findall("member")):
+                if mm.get("role") == "regulatory_element" and mm.get("ref") == self.el_c:
+                    r.remove(mm)
+        ET.ElementTree(root).write(self.path, encoding="UTF-8", xml_declaration=True)
+        removed, dropped, _, _, _ = ftl.repair(self.path)
+        self.assertEqual((removed, dropped), ([self.el_c], 0))
+        self.assertNotIn(self.el_c, {r.get("id") for r in ET.parse(self.path).getroot().iter("relation")})
 
     def test_main_takes_a_map_directory(self):
         ftl.main([str(self.path.parent)])
