@@ -74,9 +74,14 @@ build: _check-setuptools
     # CARLA source tree to build from, and the build fails.
     unset CARLA_DIR
     source "{{autoware_setup}}"
+    # compile jobs by the memory free now, or SCENSIM_BUILD_JOBS (a host setting; scensim issue
+    # 121): colcon's defaults run a compiler per core
+    jobs=$(python3 scripts/build_jobs.py)
+    eval "$jobs"
     # deps/autoware_sim_vehicle (a submodule): the Autoware profile acb_launch includes
     colcon build \
         --base-paths src deps/autoware_sim_vehicle deps/sim_vehicle_spec \
+        ${COLCON_WORKERS:+--parallel-workers "$COLCON_WORKERS"} \
         --symlink-install \
         --cargo-args --profile dev-release
 
@@ -173,6 +178,9 @@ test:
     # CARLA source tree to build from, and the build fails.
     unset CARLA_DIR
     cargo nextest run --no-tests pass --no-fail-fast
+    # just build's job count (scensim issue 121)
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q -p no:cacheprovider \
+        scripts/test_build_jobs.py
 
 # Run CI checks: build, check (format + clippy), and tests
 ci: build check test
