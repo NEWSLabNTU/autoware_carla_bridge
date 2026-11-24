@@ -104,6 +104,16 @@ impl NonBlockingLog {
         self.dropped.load(Ordering::Relaxed)
     }
 
+    /// Queue one line (a newline is added) for the writer thread; never blocks. A full queue
+    /// drops it and counts it, and the count is written before the next line that is written.
+    /// For trace files that must stay off a hot path's disk (control_trace, apply_trace).
+    pub fn line(&self, text: &str) {
+        let mut bytes = Vec::with_capacity(text.len() + 1);
+        bytes.extend_from_slice(text.as_bytes());
+        bytes.push(b'\n');
+        self.send(bytes);
+    }
+
     fn send(&self, line: Vec<u8>) {
         self.pending.fetch_add(1, Ordering::SeqCst);
         match self.tx.try_send(line) {

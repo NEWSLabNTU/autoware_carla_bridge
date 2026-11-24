@@ -13,24 +13,28 @@
 //! only unmeasured segment left is inside the simulator.
 //!
 //! Off unless `control_trace_path` is set. The cost is one line of CSV per control message at
-//! 20 Hz, and a lock that is otherwise never contended.
+//! 20 Hz, formatted on the caller and written by a thread of its own ([`NonBlockingLog`]): the
+//! rows used to be written and flushed from the control callback and the main loop, which is
+//! the log-disk stall `log_writer` exists to keep off those paths (scensim issue 135). A row
+//! the writer had to drop (a stalled disk) is counted in the file, never waited for.
 
 use std::{
     fs::File,
-    io::{BufWriter, Write},
     path::Path,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Mutex,
-    },
+    sync::atomic::{AtomicU64, Ordering},
     time::Instant,
 };
 
-use crate::error::Result;
+use crate::{
+    error::Result,
+    log_writer::{LogGuard, NonBlockingLog, QUEUE_LINES},
+};
 
 /// Timestamps for one command's passage through the bridge.
 pub struct ControlTrace {
-    out: Mutex<BufWriter<File>>,
+    out: NonBlockingLog,
+    /// Waits, bounded, for queued rows at drop.
+    _guard: LogGuard,
     /// Commands applied since the last `loop` row. The `pumped` column used to be the
     /// literal 1, which reads in the CSV exactly like a measurement of "one callback per
     /// iteration" and is not one -- it cannot disagree with the assumption it was meant to
@@ -51,9 +55,8 @@ impl ControlTrace {
                 path.display()
             ))
         })?;
-        let mut out = BufWriter::new(file);
-        let header = writeln!(
-            out,
+        let (out, guard) = NonBlockingLog::new(file, QUEUE_LINES);
+        out.line(
             "# per-stage control latency, written by acb_bridge\n\
              # stamp_s: the command's own header stamp (simulation time)\n\
              # recv_s: monotonic time the subscription callback began\n\
@@ -69,17 +72,11 @@ impl ControlTrace {
              # period_us is since the previous iteration, spin_us is the executor pump, and\n\
              # pumped is how many control commands were APPLIED during it -- counted, not\n\
              #   assumed. It was previously the literal 1.\n\
-             kind,stamp_s,recv_s,convert_us,apply_us,age_ms"
-        )
-        .and_then(|()| out.flush());
-        header.map_err(|e| {
-            crate::error::BridgeError::ConfigError(format!(
-                "cannot write the control trace header at {}: {e}",
-                path.display()
-            ))
-        })?;
+             kind,stamp_s,recv_s,convert_us,apply_us,age_ms",
+        );
         Ok(Self {
-            out: Mutex::new(out),
+            out,
+            _guard: guard,
             applied_since_loop: AtomicU64::new(0),
             origin: Instant::now(),
         })
@@ -100,13 +97,9 @@ impl ControlTrace {
             spin.as_micros() as f64,
             applied
         );
-        if let Ok(mut out) = self.out.lock() {
-            // Flushed like the command rows: a buffered trace that only reaches disk when
-            // something else happens reads as an empty file, which is exactly how the first
-            // loop-only capture looked.
-            let _ = writeln!(out, "{row}");
-            let _ = out.flush();
-        }
+        // The writer flushes each line: a buffered trace that only reaches disk when something
+        // else happens reads as an empty file, which is how the first loop-only capture looked.
+        self.out.line(&row);
     }
 
     pub fn record(
@@ -126,10 +119,41 @@ impl ControlTrace {
             age_ms,
         );
         self.applied_since_loop.fetch_add(1, Ordering::Relaxed);
-        if let Ok(mut out) = self.out.lock() {
-            // A failed trace write must never take the run down with it.
-            let _ = writeln!(out, "{row}");
-            let _ = out.flush();
+        // A failed or stalled trace write never takes the run down with it, nor waits.
+        self.out.line(&row);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rows reach the file through the writer thread (scensim issue 135), header first,
+    /// each one line, all of them by the time the trace is dropped.
+    #[test]
+    fn rows_reach_the_file_through_the_writer() {
+        let path = std::env::temp_dir().join(format!(
+            "acb-control-trace-{}-{:?}.csv",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        {
+            let t = ControlTrace::create(&path).unwrap();
+            let t0 = Instant::now();
+            t.record(1000.5, t0, t0, t0, 12.5);
+            t.record_loop(
+                std::time::Duration::from_micros(50_000),
+                std::time::Duration::from_micros(800),
+            );
         }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(text.starts_with("# per-stage control latency"), "{text}");
+        let rows: Vec<&str> = text.lines().filter(|l| !l.starts_with('#')).collect();
+        assert_eq!(rows[0], "kind,stamp_s,recv_s,convert_us,apply_us,age_ms");
+        assert!(rows[1].starts_with("cmd,1000.500000,"), "{text}");
+        assert!(rows[1].ends_with(",12.50"), "{text}");
+        assert_eq!(rows[2], "loop,0,0,50000.0,800.0,1");
+        assert_eq!(rows.len(), 3, "{text}");
     }
 }
