@@ -17,6 +17,10 @@
 //! - `velocity`: the same for a `set_target_velocity` (the physics keeper's), no control;
 //! - `tick`: a frame the main loop took, and when.
 //!
+//! A `# boot_id <id>` line before the header names this host's boot
+//! (`/proc/sys/kernel/random/boot_id`): `mono_ns` compares with the world server's tick stamps
+//! only under the same one (scensim issue 135 step 3).
+//!
 //! Off unless `apply_trace_path` is set. Rows are formatted on the caller and written by a
 //! thread of their own ([`NonBlockingLog`]), never on the control path's disk; a row dropped
 //! while the disk stalls is counted in the file as `[acb_bridge log] N line(s) dropped ...`.
@@ -63,6 +67,7 @@ pub fn install(path: &Path) -> Result<()> {
         "# when each actuation of the hero left acb_bridge, against CARLA's frames \
          (scensim issue 135; apply_trace.rs)",
     );
+    out.line(&boot_id_line(&boot_id()));
     out.line(HEADER);
     let _ = TRACE.set(ApplyTrace {
         out,
@@ -121,6 +126,17 @@ pub fn applied(before_ns: i64, control: Option<&VehicleControl>) {
         control,
         (after_ns - before_ns) as f64 / 1e3,
     ));
+}
+
+/// This host's boot id, empty where it cannot be read.
+fn boot_id() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn boot_id_line(id: &str) -> String {
+    format!("# boot_id {id}")
 }
 
 fn tick_row(mono_ns: i64, frame: u64) -> String {
@@ -190,6 +206,13 @@ mod tests {
             "velocity,9,42,,,,,,,,3.0"
         );
         assert_eq!(tick_row(5, 42), "tick,5,42,,,,,,,,");
+    }
+
+    #[test]
+    fn the_boot_id_line_names_this_hosts_boot() {
+        let id = boot_id();
+        assert_eq!(id.len(), 36, "{id}");
+        assert_eq!(boot_id_line(&id), format!("# boot_id {id}"));
     }
 
     #[test]
