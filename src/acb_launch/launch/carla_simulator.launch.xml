@@ -60,6 +60,7 @@
   <arg name="steer_time_constant_s" default="0.0" description="steering first-order lag, s; 0 = off"/>
   <arg name="ground_truth_range_m" default="100.0"/>
   <arg name="control_trace_path" default=""/>
+  <arg name="apply_trace_path" default=""/>
   <arg name="allow_manual" default="false" description="accept a driver's MANUAL takeover (acb_bridge.launch.xml)"/>
   <arg name="honor_emergency_cmd" default="false" description="full brake on emergency_cmd instead of the control command (acb_bridge.launch.xml)"/>
   <arg name="control_cmd_timeout_s" default="1.0" description="brake to a stop when control_cmd is older than this, s of sim time; 0 disables (acb_bridge.launch.xml)"/>
@@ -97,6 +98,7 @@
       <arg name="traffic_light_state_path" value="$(var traffic_light_state_path)"/>
       <arg name="map_origin_path" value="$(var map_origin_path)"/>
       <arg name="control_trace_path" value="$(var control_trace_path)"/>
+      <arg name="apply_trace_path" value="$(var apply_trace_path)"/>
       <arg name="accel_map_path" value="$(var accel_map_path)"/>
       <arg name="brake_map_path" value="$(var brake_map_path)"/>
       <arg name="allow_manual" value="$(var allow_manual)"/>

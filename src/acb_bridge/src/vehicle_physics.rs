@@ -333,10 +333,12 @@ pub fn apply_kept(
     }
     let n = |v: &Vector3D| (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
     if let Some((v, w)) = motion.filter(|(v, w)| n(v) > 1e-3 || n(w) > 1e-3) {
+        let sent_at = crate::apply_trace::mono_ns();
         vehicle
             .set_target_velocity(&v)
             .and_then(|()| vehicle.set_target_angular_velocity(&w))
             .map_err(|e| format!("set the hero's velocity back: {e}"))?;
+        crate::apply_trace::applied(sent_at, None);
     }
     Ok(())
 }
@@ -497,10 +499,12 @@ pub fn apply(_world: &mut World, vehicle: &Vehicle, p: &Physics) -> Result<(), S
         .map_err(|e| format!("apply the vehicle spec's physics: {e}"))?;
     let n = |v: &Vector3D| (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
     if let Some((v, w)) = motion.filter(|(v, w)| n(v) > 1e-3 || n(w) > 1e-3) {
+        let sent_at = crate::apply_trace::mono_ns();
         vehicle
             .set_target_velocity(&v)
             .and_then(|()| vehicle.set_target_angular_velocity(&w))
             .map_err(|e| format!("set the hero's velocity back: {e}"))?;
+        crate::apply_trace::applied(sent_at, None);
     }
     Ok(())
 }

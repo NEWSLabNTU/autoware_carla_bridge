@@ -1564,7 +1564,9 @@ impl VehicleControlBridge {
                 // Once stopped, hold with the handbrake -- CARLA's automatic transmission
                 // idle-creeps at zero throttle, and an emergency stop that creeps is not one.
                 control.hand_brake = speed < 0.1;
+                let sent_at = crate::apply_trace::mono_ns();
                 v.apply_control(&control)?;
+                crate::apply_trace::applied(sent_at, Some(&control));
                 return Ok(());
             }
 
@@ -1641,7 +1643,9 @@ impl VehicleControlBridge {
             // The two stages the bridge owns: turning the command into a CARLA control, and
             // the RPC that delivers it. Recorded rather than inferred -- see control_trace.
             let converted = std::time::Instant::now();
+            let sent_at = crate::apply_trace::mono_ns();
             v.apply_control(&control)?;
+            crate::apply_trace::applied(sent_at, Some(&control));
 
             // Did that command actually do anything? Everything needed to answer is in
             // scope here and nowhere else: what Autoware asked for, what pedal it became,
@@ -1863,7 +1867,7 @@ impl VehicleControlBridge {
             },
         };
         let stopped = target < HANDBRAKE_ENGAGE_SPEED_MPS && speed < HANDBRAKE_ENGAGE_SPEED_MPS;
-        v.apply_control(&VehicleControl {
+        let control = VehicleControl {
             throttle: if stopped { 0.0 } else { pedals.throttle },
             steer,
             brake: pedals.brake,
@@ -1871,7 +1875,10 @@ impl VehicleControlBridge {
             reverse: false,
             manual_gear_shift: false,
             gear: 0,
-        })?;
+        };
+        let sent_at = crate::apply_trace::mono_ns();
+        v.apply_control(&control)?;
+        crate::apply_trace::applied(sent_at, Some(&control));
         tracing::debug!(
             "MANUAL: steer={steer:.3} (tire {tire_angle:.3} rad), throttle={:.3}, brake={:.3}, \
              v={speed:.2} -> {target:.2} m/s",
@@ -1968,7 +1975,9 @@ impl VehicleControlBridge {
                     .unwrap_or(0.0);
                 let control =
                     watchdog_stop_control(self.longitudinal.as_ref(), speed, steer, reverse);
+                let sent_at = crate::apply_trace::mono_ns();
                 v.apply_control(&control)?;
+                crate::apply_trace::applied(sent_at, Some(&control));
                 tracing::debug!(
                     "Watchdog stop: command {age_s:.2} s old, {speed:.2} m/s, brake {:.3}, \
                      handbrake {}",

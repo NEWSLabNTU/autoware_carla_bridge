@@ -1,3 +1,4 @@
+mod apply_trace;
 mod autoware;
 mod autoware_detection;
 mod bridge;
@@ -215,6 +216,8 @@ struct BridgeParams {
     /// simulation time; 0 disables (`vehicle_control::watch_commands`, docs/issues/024).
     pub control_cmd_timeout_s: f64,
     pub control_trace_path: String,
+    /// Where `apply_trace` writes, empty for off (scensim issue 135).
+    pub apply_trace_path: String,
     pub accel_map_path: String,
     pub brake_map_path: String,
     /// The Autoware vehicle package's `spec_hash.yaml` (autoware_sim_vehicle, roadmap 051);
@@ -340,6 +343,13 @@ impl BridgeParams {
         // Off by default: measured on this stack, the flag is true in 29% of samples while
         // driving while Autoware commands acceleration, so acting on it brakes against a
         // normal control command. See docs/issues/021.
+        // Where to write when each actuation left, against CARLA's frames, empty for off. See
+        // apply_trace (scensim issue 135).
+        let apply_trace_path = node
+            .declare_parameter("apply_trace_path")
+            .default(Arc::from(""))
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
         // Where to write per-stage control latency, empty for off. See control_trace.
         let control_trace_path = node
             .declare_parameter("control_trace_path")
@@ -468,6 +478,7 @@ impl BridgeParams {
         }
         let honor_emergency_cmd_val: bool = honor_emergency_cmd.get();
         let control_trace_path_val: Arc<str> = control_trace_path.get();
+        let apply_trace_path_val: Arc<str> = apply_trace_path.get();
         let accel_map_path_val: Arc<str> = accel_map_path.get();
         let brake_map_path_val: Arc<str> = brake_map_path.get();
 
@@ -506,6 +517,7 @@ impl BridgeParams {
             allow_manual: allow_manual.get(),
             control_cmd_timeout_s: control_cmd_timeout_s.get(),
             control_trace_path: control_trace_path_val.to_string(),
+            apply_trace_path: apply_trace_path_val.to_string(),
             accel_map_path: accel_map_path_val.to_string(),
             brake_map_path: brake_map_path_val.to_string(),
             autoware_spec_hash_file: {
@@ -963,6 +975,16 @@ fn main() -> Result<()> {
     // === Step 2: Read parameters from ROS node ===
     let params = BridgeParams::from_node(&node)?;
     tracing::info!("=== Autoware-CARLA Bridge (Autoware-centric) ===");
+    // When each actuation left, against CARLA's frames, off unless a path is given (issue 135).
+    if !params.apply_trace_path.is_empty() {
+        match apply_trace::install(std::path::Path::new(&params.apply_trace_path)) {
+            Ok(()) => tracing::info!("Apply trace -> {}", params.apply_trace_path),
+            Err(e) => tracing::error!(
+                "Cannot open the apply trace at {}: {e}; continuing without it",
+                params.apply_trace_path
+            ),
+        }
+    }
     if params.publish_direct_localization {
         // Publishing ground truth to /localization/kinematic_state and /tf puts this bridge
         // in direct competition with Autoware's EKF, which owns both. Useful for bringing a
@@ -1223,6 +1245,7 @@ fn main() -> Result<()> {
                     if let Ok(id) = w.id() {
                         sim_clock.check_episode(id);
                     }
+                    apply_trace::set_world(&w);
                     (w, v)
                 }
                 WaitOutcome::Shutdown => return Ok(()),
@@ -1754,6 +1777,8 @@ fn main() -> Result<()> {
             // episode ends this process first (roadmap 051).
             sim_clock.check_episode(snapshot.id());
             let stamp = sim_clock.stamp(snapshot.timestamp().elapsed_seconds);
+            // The frame the commands this iteration drains are sent after (issue 135).
+            apply_trace::observe(snapshot.frame() as u64);
 
             if let (Some(keeper), Some((physics, mode))) = (physics_keeper.as_mut(), &carla_physics)
             {

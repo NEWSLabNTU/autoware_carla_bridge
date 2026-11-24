@@ -21,6 +21,7 @@ dependencies = [
  "eyre",
  "geometry_msgs",
  "interp",
+ "libc",
  "nalgebra",
  "nav_msgs",
  "ndarray 0.16.1",
