@@ -216,6 +216,8 @@ struct BridgeParams {
     /// The map's projector (`map_projector_path`, the map dir's `map_projector_info.yaml`) and
     /// the map origin: the GNSS fix is the sensor's map point through its inverse (issue 195).
     pub gnss_geo: map_projector::GnssGeo,
+    /// `map_projector_path` as given (its directory names the map in a refusal).
+    pub map_projector_path: String,
     pub honor_emergency_cmd: bool,
     /// Accept MANUAL on `/control/control_mode_request` and drive the car with a scripted
     /// lane-keeping driver while it is MANUAL (`vehicle_control::ControlMode`). Off by
@@ -618,6 +620,7 @@ impl BridgeParams {
             traffic_light_state_path: traffic_light_state_path_val.to_string(),
             map_origin,
             gnss_geo,
+            map_projector_path: map_projector_path_val.to_string(),
             honor_emergency_cmd: honor_emergency_cmd_val,
             allow_manual: allow_manual.get(),
             control_cmd_timeout_s: control_cmd_timeout_s.get(),
@@ -1295,6 +1298,20 @@ fn main() -> Result<()> {
             tracing::info!("Sensor {name} disabled by disabled_sensors; not spawning it");
         } else {
             tracing::warn!("disabled_sensors names {name}, which vehicle_config does not define");
+        }
+    }
+    // A GNSS on a map whose projector has no inverse (an indoor or Local map) is refused before
+    // anything spawns, in aib's words (scensim issue 195)
+    let map_dir = std::path::Path::new(&params.map_projector_path)
+        .parent()
+        .map(|d| d.display().to_string())
+        .unwrap_or_default();
+    for (name, def) in &vehicle_config.sensors {
+        if def.sensor_type() == sensor_config::SensorType::Gnss {
+            params
+                .gnss_geo
+                .check(&map_dir, &format!("{name}; disabled_sensors:={name}"))
+                .map_err(error::BridgeError::ConfigError)?;
         }
     }
 

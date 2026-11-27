@@ -14,7 +14,10 @@
 //! - `MGRS`: `mgrs_grid` (a 100 km square, e.g. `51RUH`); map coordinates are UTM's, less the
 //!   square's south-west corner.
 //!
-//! `LocalCartesianUTM` and `Local` are refused by name: no fix can be made for them here.
+//! `Local`, `local`, `LocalCartesian` and `LocalCartesianUTM` read as [`MapProjector::NoInverse`]:
+//! the map loads, and a GNSS on it is refused when the bridge starts ([`GnssGeo::check`]), as
+//! aib does. Any other `projector_type` is refused when the file is read; a file without one
+//! reads as no file ([`CARLA_DEFAULT`]).
 
 /// The map's declared projector.
 #[derive(Debug, Clone, PartialEq)]
@@ -31,6 +34,8 @@ pub enum MapProjector {
         e0: f64,
         n0: f64,
     },
+    /// A projector no GNSS fix can be made through (`Local` and its kin): its type, as written.
+    NoInverse(String),
 }
 
 /// Autoware 1.5.0's map_projection_loader: a TransverseMercator without `scale_factor`.
@@ -66,6 +71,9 @@ impl MapProjector {
                 let grid =
                     mgrs_grid.ok_or("map_projector_info: an MGRS projector without mgrs_grid")?;
                 mgrs_square(grid)
+            }
+            "Local" | "local" | "LocalCartesian" | "LocalCartesianUTM" => {
+                Ok(Self::NoInverse(projector_type.to_string()))
             }
             other => Err(format!(
                 "map_projector_info: projector_type {other}: the bridge makes a GNSS fix only for \
@@ -108,10 +116,10 @@ impl MapProjector {
                 })
                 .transpose()
         };
-        let projector_type = top
-            .get("projector_type")
-            .ok_or("map_projector_info: no projector_type")?
-            .clone();
+        // a file without projector_type reads as no file (aib's rule)
+        let Some(projector_type) = top.get("projector_type").cloned() else {
+            return Ok(CARLA_DEFAULT);
+        };
         let origin = match (num(&origin, "latitude")?, num(&origin, "longitude")?) {
             (Some(lat), Some(lon)) => Some((lat, lon, num(&origin, "altitude")?.unwrap_or(0.0))),
             _ => None,
@@ -141,6 +149,8 @@ impl MapProjector {
                 let northing = n0 + y - if north { 0.0 } else { 10_000_000.0 };
                 tm_inverse(e0 + x - 500_000.0, northing, lon0, 0.9996)
             }
+            // GnssGeo::check refuses a GNSS on such a map at start; nothing reaches here
+            Self::NoInverse(_) => (f64::NAN, f64::NAN),
         }
     }
 
@@ -148,7 +158,7 @@ impl MapProjector {
     pub fn altitude(&self, z: f64) -> f64 {
         match *self {
             Self::TransverseMercator { alt0, .. } => alt0 + z,
-            Self::Mgrs { .. } => z,
+            Self::Mgrs { .. } | Self::NoInverse(_) => z,
         }
     }
 }
@@ -191,6 +201,19 @@ impl GnssGeo {
             projector,
             map_origin,
         })
+    }
+
+    /// A GNSS sensor (`sensor`, its frame) can run on the map at `map_dir`: refused, in aib's
+    /// words, when the map's projector has no inverse (an indoor or Local map).
+    pub fn check(&self, map_dir: &str, sensor: &str) -> Result<(), String> {
+        match &self.projector {
+            MapProjector::NoInverse(kind) => Err(format!(
+                "{map_dir}: the map's projector_type is {kind}, which a GNSS fix has no inverse \
+                 through; disable the GNSS ({sensor}) for this map (indoor or Local maps: no \
+                 pose-free start yet)"
+            )),
+            _ => Ok(()),
+        }
     }
 
     /// The fix (latitude, longitude in degrees, altitude in metres) for a GNSS sensor at
@@ -448,7 +471,10 @@ mod tests {
         for t in ["Local", "local", "LocalCartesian", "LocalCartesianUTM"] {
             let p = MapProjector::from_yaml(&format!("projector_type: {t}\n")).unwrap();
             assert_eq!(p, MapProjector::NoInverse(t.to_string()));
-            let g = GnssGeo { projector: p, map_origin: Default::default() };
+            let g = GnssGeo {
+                projector: p,
+                map_origin: Default::default(),
+            };
             let e = g.check("/maps/basement", "gnss_link").unwrap_err();
             assert_eq!(
                 e,
@@ -461,8 +487,14 @@ mod tests {
         }
         let e = MapProjector::from_yaml("projector_type: Mercator\n").unwrap_err();
         assert!(e.contains("Mercator"), "{e}");
-        assert_eq!(MapProjector::from_yaml("vertical_datum: WGS84\n").unwrap(), CARLA_DEFAULT);
-        let g = GnssGeo { projector: CARLA_DEFAULT, map_origin: Default::default() };
+        assert_eq!(
+            MapProjector::from_yaml("vertical_datum: WGS84\n").unwrap(),
+            CARLA_DEFAULT
+        );
+        let g = GnssGeo {
+            projector: CARLA_DEFAULT,
+            map_origin: Default::default(),
+        };
         assert!(g.check("/maps/Town01", "gnss_link").is_ok());
     }
 
