@@ -11,10 +11,6 @@
 //! The defaults (0.02, 0.04, 0 m) live here, not in the vehicle spec: a receiver default is
 //! not worth moving every spec_hash. The parameters `gnss_noise_*` override them.
 
-/// The radius the offset is turned into degrees with (WGS84's equatorial, CARLA's own). The
-/// offsets are centimetres; the sphere's error on them is far below a millimetre.
-pub const EARTH_RADIUS_M: f64 = 6_378_137.0;
-
 /// sensor_msgs/NavSatFix position_covariance_type values.
 pub const COVARIANCE_TYPE_UNKNOWN: u8 = 0;
 pub const COVARIANCE_TYPE_DIAGONAL_KNOWN: u8 = 2;
@@ -297,23 +293,6 @@ pub fn ins_quaternion(roll_deg: f64, pitch_deg: f64, yaw_deg: f64, error: [f64; 
     [q.w, q.i, q.j, q.k]
 }
 
-/// A fix (degrees, m) moved by `offset` (east, north, up in m), on a sphere of
-/// EARTH_RADIUS_M. `lat` is the published latitude, north positive.
-pub fn apply(lat: f64, lon: f64, alt: f64, offset: [f64; 3]) -> (f64, f64, f64) {
-    let [e, n, u] = offset;
-    let lat_out = if n == 0.0 {
-        lat
-    } else {
-        lat + (n / EARTH_RADIUS_M).to_degrees()
-    };
-    let lon_out = if e == 0.0 {
-        lon
-    } else {
-        lon + (e / (EARTH_RADIUS_M * lat.to_radians().cos())).to_degrees()
-    };
-    (lat_out, lon_out, alt + u)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,24 +466,6 @@ mod tests {
         for i in [1, 2, 3, 5, 6, 7] {
             assert_eq!(c[i], 0.0);
         }
-    }
-
-    #[test]
-    fn the_offset_moves_the_fix_east_north_up() {
-        let (lat, lon, alt) = (48.0, 11.0, 500.0);
-        let (la, lo, al) = apply(lat, lon, alt, [0.0; 3]);
-        assert_eq!((la, lo, al), (lat, lon, alt));
-        // one metre north: 1/R rad of latitude
-        let (la, lo, _) = apply(lat, lon, alt, [0.0, 1.0, 0.0]);
-        assert!((la - lat - (1.0 / EARTH_RADIUS_M).to_degrees()).abs() < 1e-12);
-        assert_eq!(lo, lon);
-        // one metre east: 1/(R cos lat) rad of longitude
-        let (la, lo, _) = apply(lat, lon, alt, [1.0, 0.0, 0.0]);
-        let want = (1.0 / (EARTH_RADIUS_M * lat.to_radians().cos())).to_degrees();
-        assert!((lo - lon - want).abs() < 1e-12);
-        assert_eq!(la, lat);
-        let (_, _, al) = apply(lat, lon, alt, [0.0, 0.0, 0.5]);
-        assert_eq!(al, 500.5);
     }
 
     // --- L1b (scensim issue 195): the receiver's heading and attitude ---

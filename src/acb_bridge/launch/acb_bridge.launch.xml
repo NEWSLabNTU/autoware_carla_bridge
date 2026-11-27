@@ -108,6 +108,12 @@
   <!-- Where CARLA's world origin sits in the map frame (x, y, z in metres): the offset the
        map's OpenDRIVE was converted with. scensim_carla_world reads the same file. Empty,
        or no file, means zero: the map is in CARLA's frame, as every TUM town is. -->
+  <!-- The map's projector (scensim issue 195): the GNSS fix is the sensor's map point through
+       its exact inverse, so gnss_poser, projecting with the same file, gets the sensor back.
+       Empty: CARLA's convention (TransverseMercator at 0, 0, scale 1.0, as every CARLA town
+       declares); a path that does not exist or does not parse is refused at start. -->
+  <arg name="map_projector_path" default=""
+       description="the map dir's map_projector_info.yaml; empty = TransverseMercator at (0, 0), scale 1.0"/>
   <arg name="map_origin_path" default=""
        description="the map dir's carla/map_origin.yaml; empty or absent = origin zero"/>
 
@@ -161,6 +167,7 @@
     <param name="traffic_light_map_path" value="$(var traffic_light_map_path)"/>
     <param name="traffic_light_state_path" value="$(var traffic_light_state_path)"/>
     <param name="map_origin_path" value="$(var map_origin_path)"/>
+    <param name="map_projector_path" value="$(var map_projector_path)"/>
     <param name="control_trace_path" value="$(var control_trace_path)"/>
     <param name="apply_trace_path" value="$(var apply_trace_path)"/>
     <param name="accel_map_path" value="$(var accel_map_path)"/>

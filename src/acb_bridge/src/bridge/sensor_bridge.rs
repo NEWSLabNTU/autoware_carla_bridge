@@ -133,7 +133,11 @@ impl SensorBridge {
         autoware: &Autoware,
         clock: crate::clock::SimClock,
         definition: Option<&crate::sensor_config::SensorDefinition>,
-        gnss_noise: &crate::gnss_noise::GnssNoiseSettings,
+        // the receiver's error and the map's projector (a GNSS sensor's)
+        (gnss_noise, gnss_geo): (
+            &crate::gnss_noise::GnssNoiseSettings,
+            &crate::map_projector::GnssGeo,
+        ),
     ) -> Result<SensorBridge> {
         let (sensor_type, sensor_name) = match bridge_type {
             BridgeType::Sensor(t, s) => (t, s),
@@ -190,6 +194,7 @@ impl SensorBridge {
                     &sensor_name,
                     clock.clone(),
                     gnss_noise,
+                    gnss_geo,
                 )?;
             }
             SensorType::Collision => {
@@ -439,8 +444,10 @@ fn register_gnss(
     frame_id: &str,
     clock: crate::clock::SimClock,
     gnss_noise: &crate::gnss_noise::GnssNoiseSettings,
+    gnss_geo: &crate::map_projector::GnssGeo,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
+    let geo = gnss_geo.clone();
     let topic = key_list[0].clone();
 
     let publisher = Arc::new(node.create_publisher::<sensor_msgs::msg::NavSatFix>(topic.as_str())?);
@@ -466,8 +473,11 @@ fn register_gnss(
         };
         // the sensor's own world rotation at the measurement (gnss_link's, CARLA's frame)
         let rotation = data.sensor_transform().rotation;
+        // and its world position: the fix is made from it, through the map's projector
+        let location = data.sensor_transform().location;
+        let location = [location.x as f64, location.y as f64, location.z as f64];
 
-        if let Ok(measure) = data.try_into() {
+        if let Ok(_measure) = TryInto::<GnssMeasurement>::try_into(data) {
             let mut n = noise.lock().unwrap();
             let offset = n.offset();
             let covariance = n.covariance();
@@ -507,7 +517,8 @@ fn register_gnss(
                 );
             }
             drop(h);
-            if let Err(e) = publish_gnss(&publisher, header, measure, offset, covariance) {
+            let fix = geo.fix(location, offset);
+            if let Err(e) = publish_gnss(&publisher, header, fix, covariance) {
                 tracing::error!("Failed to publish GNSS data: {e:?}");
             }
         } else {
@@ -735,20 +746,11 @@ fn publish_imu(
 fn publish_gnss(
     publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::NavSatFix>>,
     header: std_msgs::msg::Header,
-    measure: GnssMeasurement,
-    offset: [f64; 3],
+    // map_projector::GnssGeo::fix: the sensor's map point, the receiver's error added, through
+    // the map's own projector (not CARLA's spherical geolocation: scensim issue 195)
+    (latitude, longitude, altitude): (f64, f64, f64),
     (position_covariance, position_covariance_type): ([f64; 9], u8),
 ) -> Result<()> {
-    // Negate latitude: CARLA maps CARLA_y (right=south) to Northing without sign flip,
-    // but the TUMFTM maps use y = -CARLA_y convention (y = ROS left = map north).
-    // Negating latitude makes gnss_poser output match the map frame (y = -CARLA_y).
-    // The receiver's error goes on after, in the map's east, north and up.
-    let (latitude, longitude, altitude) = crate::gnss_noise::apply(
-        -measure.latitude(),
-        measure.longitude(),
-        measure.altitude(),
-        offset,
-    );
     let gnss_msg = sensor_msgs::msg::NavSatFix {
         header,
         status: sensor_msgs::msg::NavSatStatus {

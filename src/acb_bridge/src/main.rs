@@ -11,10 +11,10 @@ mod control_trace;
 mod coordinate_conversion;
 mod error;
 mod gnss_noise;
-mod map_projector;
 mod ground_truth_objects;
 mod log_writer;
 mod longitudinal_map;
+mod map_projector;
 mod pedal_lag;
 mod sensor_config;
 mod sensor_release;
@@ -87,6 +87,7 @@ fn create_sensor_bridges(
     clock: SimClock,
     vehicle_config: &sensor_config::VehicleConfig,
     gnss_noise: &gnss_noise::GnssNoiseSettings,
+    gnss_geo: &map_projector::GnssGeo,
 ) -> Result<Vec<SensorBridge>> {
     let sensor_types = carla_vehicle.get_sensor_types();
     let sensors = carla_vehicle.get_sensors();
@@ -121,7 +122,7 @@ fn create_sensor_bridges(
             autoware,
             clock.clone(),
             vehicle_config.sensors.get(link_name),
-            gnss_noise,
+            (gnss_noise, gnss_geo),
         ) {
             Ok(bridge) => {
                 tracing::info!(
@@ -212,6 +213,9 @@ struct BridgeParams {
     /// Map-frame position of CARLA's world origin, from `map_origin_path` (the map dir's
     /// `carla/map_origin.yaml`; empty or absent = zero, as for the TUM towns).
     pub map_origin: coordinate_conversion::MapOrigin,
+    /// The map's projector (`map_projector_path`, the map dir's `map_projector_info.yaml`) and
+    /// the map origin: the GNSS fix is the sensor's map point through its inverse (issue 195).
+    pub gnss_geo: map_projector::GnssGeo,
     pub honor_emergency_cmd: bool,
     /// Accept MANUAL on `/control/control_mode_request` and drive the car with a scripted
     /// lane-keeping driver while it is MANUAL (`vehicle_control::ControlMode`). Off by
@@ -483,6 +487,14 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
+        // The map's projector: the GNSS fix is made through its exact inverse (scensim issue
+        // 195), so gnss_poser, which projects with the same file, returns the sensor's position.
+        let map_projector_path = node
+            .declare_parameter("map_projector_path")
+            .default(Arc::from(""))
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+
         // Measured pedal response, in the shape Autoware's raw_vehicle_cmd_converter uses.
         // Empty means fall back to the single-constant conversion this replaced.
         let accel_map_path = node
@@ -553,6 +565,21 @@ impl BridgeParams {
                 map_origin_path_val
             );
         }
+        let map_projector_path_val: Arc<str> = map_projector_path.get();
+        let gnss_geo = map_projector::GnssGeo::load(&map_projector_path_val, map_origin)
+            .map_err(BridgeError::ConfigError)?;
+        if map_projector_path_val.is_empty() || &*map_projector_path_val == "none" {
+            tracing::warn!(
+                "GNSS: no map_projector_path; fixes through CARLA's convention, {:?}",
+                gnss_geo.projector
+            );
+        } else {
+            tracing::info!(
+                "GNSS: fixes through {:?} ({})",
+                gnss_geo.projector,
+                map_projector_path_val
+            );
+        }
         let honor_emergency_cmd_val: bool = honor_emergency_cmd.get();
         let control_trace_path_val: Arc<str> = control_trace_path.get();
         let apply_trace_path_val: Arc<str> = apply_trace_path.get();
@@ -590,6 +617,7 @@ impl BridgeParams {
             traffic_light_map_path: traffic_light_map_path_val.to_string(),
             traffic_light_state_path: traffic_light_state_path_val.to_string(),
             map_origin,
+            gnss_geo,
             honor_emergency_cmd: honor_emergency_cmd_val,
             allow_manual: allow_manual.get(),
             control_cmd_timeout_s: control_cmd_timeout_s.get(),
@@ -1464,6 +1492,7 @@ fn main() -> Result<()> {
             sim_clock.clone(),
             &vehicle_config,
             &params.gnss_noise,
+            &params.gnss_geo,
         )?;
         tracing::info!("Created {} sensor bridges", _sensor_bridges.len());
 

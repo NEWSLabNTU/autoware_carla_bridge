@@ -19,8 +19,18 @@
 /// The map's declared projector.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MapProjector {
-    TransverseMercator { lat0: f64, lon0: f64, alt0: f64, k0: f64 },
-    Mgrs { zone: u32, north: bool, e0: f64, n0: f64 },
+    TransverseMercator {
+        lat0: f64,
+        lon0: f64,
+        alt0: f64,
+        k0: f64,
+    },
+    Mgrs {
+        zone: u32,
+        north: bool,
+        e0: f64,
+        n0: f64,
+    },
 }
 
 /// Autoware 1.5.0's map_projection_loader: a TransverseMercator without `scale_factor`.
@@ -40,15 +50,21 @@ impl MapProjector {
                     "map_projector_info: a TransverseMercator projector without map_origin",
                 )?;
                 let k0 = scale_factor.unwrap_or(DEFAULT_SCALE);
-                if !(k0 > 0.0) || !lat0.is_finite() || !lon0.is_finite() {
+                if k0.is_nan() || k0 <= 0.0 || !lat0.is_finite() || !lon0.is_finite() {
                     return Err(format!(
                         "map_projector_info: TransverseMercator at ({lat0}, {lon0}), scale {k0}"
                     ));
                 }
-                Ok(Self::TransverseMercator { lat0, lon0, alt0, k0 })
+                Ok(Self::TransverseMercator {
+                    lat0,
+                    lon0,
+                    alt0,
+                    k0,
+                })
             }
             "MGRS" => {
-                let grid = mgrs_grid.ok_or("map_projector_info: an MGRS projector without mgrs_grid")?;
+                let grid =
+                    mgrs_grid.ok_or("map_projector_info: an MGRS projector without mgrs_grid")?;
                 mgrs_square(grid)
             }
             other => Err(format!(
@@ -69,7 +85,9 @@ impl MapProjector {
                 continue;
             }
             let indented = line.starts_with(' ') || line.starts_with('\t');
-            let Some((k, v)) = line.trim().split_once(':') else { continue };
+            let Some((k, v)) = line.trim().split_once(':') else {
+                continue;
+            };
             let (k, v) = (k.trim(), v.trim().trim_matches('"').trim_matches('\''));
             if !indented {
                 in_origin = k == "map_origin";
@@ -80,9 +98,14 @@ impl MapProjector {
                 origin.insert(k.to_string(), v.to_string());
             }
         }
-        let num = |m: &std::collections::HashMap<String, String>, k: &str| -> Result<Option<f64>, String> {
+        let num = |m: &std::collections::HashMap<String, String>,
+                   k: &str|
+         -> Result<Option<f64>, String> {
             m.get(k)
-                .map(|v| v.parse::<f64>().map_err(|e| format!("map_projector_info: {k}: {v}: {e}")))
+                .map(|v| {
+                    v.parse::<f64>()
+                        .map_err(|e| format!("map_projector_info: {k}: {v}: {e}"))
+                })
                 .transpose()
         };
         let projector_type = top
@@ -108,7 +131,12 @@ impl MapProjector {
                 let (_, n0) = tm_forward(lat0, 0.0, k0);
                 tm_inverse(x, y + n0, lon0, k0)
             }
-            Self::Mgrs { zone, north, e0, n0 } => {
+            Self::Mgrs {
+                zone,
+                north,
+                e0,
+                n0,
+            } => {
                 let lon0 = zone as f64 * 6.0 - 183.0;
                 let northing = n0 + y - if north { 0.0 } else { 10_000_000.0 };
                 tm_inverse(e0 + x - 500_000.0, northing, lon0, 0.9996)
@@ -135,8 +163,12 @@ pub struct GnssGeo {
 
 /// CARLA's own convention, for a bridge run with no map (`map_projector_path` empty): a
 /// transverse Mercator at (0, 0), scale 1.0, as every CARLA town's map declares.
-pub const CARLA_DEFAULT: MapProjector =
-    MapProjector::TransverseMercator { lat0: 0.0, lon0: 0.0, alt0: 0.0, k0: 1.0 };
+pub const CARLA_DEFAULT: MapProjector = MapProjector::TransverseMercator {
+    lat0: 0.0,
+    lon0: 0.0,
+    alt0: 0.0,
+    k0: 1.0,
+};
 
 impl GnssGeo {
     /// From `map_projector_path` (the map dir's `map_projector_info.yaml`) and the map origin.
@@ -146,16 +178,32 @@ impl GnssGeo {
         path: &str,
         map_origin: crate::coordinate_conversion::MapOrigin,
     ) -> Result<Self, String> {
-        let _ = (path, &map_origin);
-        Err("not implemented".into())
+        if path.is_empty() || path == "none" {
+            return Ok(Self {
+                projector: CARLA_DEFAULT,
+                map_origin,
+            });
+        }
+        let text =
+            std::fs::read_to_string(path).map_err(|e| format!("map_projector_path {path}: {e}"))?;
+        let projector = MapProjector::from_yaml(&text).map_err(|e| format!("{path}: {e}"))?;
+        Ok(Self {
+            projector,
+            map_origin,
+        })
     }
 
     /// The fix (latitude, longitude in degrees, altitude in metres) for a GNSS sensor at
     /// `carla_location` (CARLA's frame) with the receiver's error `offset_enu` (east, north, up,
     /// in metres, in the map's frame) added.
     pub fn fix(&self, carla_location: [f64; 3], offset_enu: [f64; 3]) -> (f64, f64, f64) {
-        let _ = (carla_location, offset_enu);
-        (f64::NAN, f64::NAN, f64::NAN)
+        let [x, y, z] = carla_location;
+        let m = self
+            .map_origin
+            .carla_to_map(&nalgebra::Vector3::new(x, y, z));
+        let [e, n, u] = offset_enu;
+        let (lat, lon) = self.projector.lat_lon(m.x + e, m.y + n);
+        (lat, lon, self.projector.altitude(m.z + u))
     }
 }
 
@@ -184,7 +232,8 @@ fn series() -> Series {
                 + 7891.0 * n6 / 37800.0,
             13.0 * n2 / 48.0 - 3.0 * n3 / 5.0 + 557.0 * n4 / 1440.0 + 281.0 * n5 / 630.0
                 - 1983433.0 * n6 / 1935360.0,
-            61.0 * n3 / 240.0 - 103.0 * n4 / 140.0 + 15061.0 * n5 / 26880.0
+            61.0 * n3 / 240.0 - 103.0 * n4 / 140.0
+                + 15061.0 * n5 / 26880.0
                 + 167603.0 * n6 / 181440.0,
             49561.0 * n4 / 161280.0 - 179.0 * n5 / 168.0 + 6601661.0 * n6 / 7257600.0,
             34729.0 * n5 / 80640.0 - 3418889.0 * n6 / 1995840.0,
@@ -203,7 +252,8 @@ fn series() -> Series {
         delta: [
             2.0 * n - 2.0 * n2 / 3.0 - 2.0 * n3 + 116.0 * n4 / 45.0 + 26.0 * n5 / 45.0
                 - 2854.0 * n6 / 675.0,
-            7.0 * n2 / 3.0 - 8.0 * n3 / 5.0 - 227.0 * n4 / 45.0 + 2704.0 * n5 / 315.0
+            7.0 * n2 / 3.0 - 8.0 * n3 / 5.0 - 227.0 * n4 / 45.0
+                + 2704.0 * n5 / 315.0
                 + 2323.0 * n6 / 945.0,
             56.0 * n3 / 15.0 - 136.0 * n4 / 35.0 - 1262.0 * n5 / 105.0 + 73814.0 * n6 / 2835.0,
             4279.0 * n4 / 630.0 - 332.0 * n5 / 35.0 - 399572.0 * n6 / 14175.0,
@@ -265,12 +315,14 @@ fn mgrs_square(grid: &str) -> Result<MapProjector, String> {
     let north = letters[0] >= 'N';
     // columns: sets of 8 letters (A-H, J-R, S-Z), by zone mod 3
     const COLS: [&str; 3] = ["ABCDEFGH", "JKLMNPQR", "STUVWXYZ"];
-    let col = COLS[((zone - 1) % 3) as usize].find(letters[1]).ok_or_else(bad)?;
+    let col = COLS[((zone - 1) % 3) as usize]
+        .find(letters[1])
+        .ok_or_else(bad)?;
     let e0 = (col as f64 + 1.0) * 100_000.0;
     // rows: 20 letters A-V without I and O, cycling every 2000 km, even zones offset by 5
     const ROWS: &str = "ABCDEFGHJKLMNPQRSTUV";
     let row = ROWS.find(letters[2]).ok_or_else(bad)?;
-    let row = (row + 20 - if zone % 2 == 0 { 5 } else { 0 }) % 20;
+    let row = (row + 20 - if zone.is_multiple_of(2) { 5 } else { 0 }) % 20;
     let n_mod = row as f64 * 100_000.0;
     // the band's lowest northing settles which 2000 km cycle: its south edge, at this zone's
     // central meridian (a band spans 8 degrees, about 885 km, under a cycle)
@@ -281,7 +333,12 @@ fn mgrs_square(grid: &str) -> Result<MapProjector, String> {
     while n0 + 100_000.0 <= band_n - 100_000.0 {
         n0 += 2_000_000.0;
     }
-    Ok(MapProjector::Mgrs { zone, north, e0, n0 })
+    Ok(MapProjector::Mgrs {
+        zone,
+        north,
+        e0,
+        n0,
+    })
 }
 
 #[cfg(test)]
@@ -342,12 +399,21 @@ mod tests {
         let text = "projector_type: TransverseMercator\nvertical_datum: WGS84\nmap_origin:\n  \
                     latitude: 0.0\n  longitude: 0.0\n  altitude: 0.0\nscale_factor: 1.0\n";
         let p = MapProjector::from_yaml(text).unwrap();
-        assert_eq!(p, MapProjector::TransverseMercator { lat0: 0.0, lon0: 0.0, alt0: 0.0, k0: 1.0 });
+        assert_eq!(
+            p,
+            MapProjector::TransverseMercator {
+                lat0: 0.0,
+                lon0: 0.0,
+                alt0: 0.0,
+                k0: 1.0
+            }
+        );
     }
 
     #[test]
     fn a_file_without_scale_factor_takes_the_loaders_default() {
-        let text = "# a course fixture\nprojector_type: TransverseMercator\nvertical_datum: WGS84\n\
+        let text =
+            "# a course fixture\nprojector_type: TransverseMercator\nvertical_datum: WGS84\n\
                     map_origin:\n  latitude: 36.0\n  longitude: 140.0\n  altitude: 0.0\n";
         match MapProjector::from_yaml(text).unwrap() {
             MapProjector::TransverseMercator { k0, lat0, lon0, .. } => {
@@ -359,9 +425,19 @@ mod tests {
 
     #[test]
     fn an_mgrs_file_reads_its_square() {
-        let p = MapProjector::from_yaml("projector_type: MGRS\nvertical_datum: WGS84\nmgrs_grid: 51RUH\n")
-            .unwrap();
-        assert_eq!(p, MapProjector::Mgrs { zone: 51, north: true, e0: 300_000.0, n0: 2_700_000.0 });
+        let p = MapProjector::from_yaml(
+            "projector_type: MGRS\nvertical_datum: WGS84\nmgrs_grid: 51RUH\n",
+        )
+        .unwrap();
+        assert_eq!(
+            p,
+            MapProjector::Mgrs {
+                zone: 51,
+                north: true,
+                e0: 300_000.0,
+                n0: 2_700_000.0
+            }
+        );
     }
 
     #[test]
@@ -378,16 +454,27 @@ mod tests {
     /// at (190.876, -129.281). The vector file covers the general case; this names the one seen.
     #[test]
     fn town01s_measured_point_is_not_the_spherical_fix() {
-        let p = MapProjector::TransverseMercator { lat0: 0.0, lon0: 0.0, alt0: 0.0, k0: 1.0 };
+        let p = MapProjector::TransverseMercator {
+            lat0: 0.0,
+            lon0: 0.0,
+            alt0: 0.0,
+            k0: 1.0,
+        };
         let (lat, lon) = p.lat_lon(190.8, -130.1);
         // pyproj 3.3.0: +proj=tmerc +lat_0=0 +lon_0=0 +k=1 +ellps=WGS84, inverse of (190.8, -130.1)
-        assert!(metres((lat, lon), (-0.0011765846891, 0.0017139855622)) < 0.01, "{lat} {lon}");
+        assert!(
+            metres((lat, lon), (-0.0011765846891, 0.0017139855622)) < 0.01,
+            "{lat} {lon}"
+        );
         // CARLA's own lat/lon for the same place is 0.82 m from it
         assert!(metres((lat, lon), (-0.001169175909, 0.001714671458)) > 0.8);
     }
 
     fn town01() -> GnssGeo {
-        GnssGeo { projector: CARLA_DEFAULT, map_origin: Default::default() }
+        GnssGeo {
+            projector: CARLA_DEFAULT,
+            map_origin: Default::default(),
+        }
     }
 
     /// A fix is the map point of the sensor's CARLA location (y mirrored), through the projector
@@ -395,7 +482,10 @@ mod tests {
     fn a_fix_is_the_sensors_map_point_through_the_projector() {
         let g = town01();
         let (lat, lon, alt) = g.fix([190.8, 130.1, 2.1], [0.0, 0.0, 0.0]);
-        assert!(metres((lat, lon), (-0.0011765846891, 0.0017139855622)) < 0.001, "{lat} {lon}");
+        assert!(
+            metres((lat, lon), (-0.0011765846891, 0.0017139855622)) < 0.001,
+            "{lat} {lon}"
+        );
         assert!((alt - 2.1).abs() < 1e-9);
     }
 
@@ -412,7 +502,11 @@ mod tests {
     fn the_map_origin_offsets_the_fix() {
         let g = GnssGeo {
             projector: CARLA_DEFAULT,
-            map_origin: crate::coordinate_conversion::MapOrigin { x: 10.0, y: -5.0, z: 1.0 },
+            map_origin: crate::coordinate_conversion::MapOrigin {
+                x: 10.0,
+                y: -5.0,
+                z: 1.0,
+            },
         };
         let (lat, lon, alt) = g.fix([190.8, 130.1, 2.1], [0.0, 0.0, 0.0]);
         assert!(metres((lat, lon), CARLA_DEFAULT.lat_lon(200.8, -135.1)) < 0.001);
@@ -421,10 +515,16 @@ mod tests {
 
     #[test]
     fn an_empty_path_is_carlas_convention_and_a_missing_file_an_error() {
-        assert_eq!(GnssGeo::load("", Default::default()).unwrap().projector, CARLA_DEFAULT);
-        assert_eq!(GnssGeo::load("none", Default::default()).unwrap().projector, CARLA_DEFAULT);
-        let e = GnssGeo::load("/nonexistent/map_projector_info.yaml", Default::default())
-            .unwrap_err();
+        assert_eq!(
+            GnssGeo::load("", Default::default()).unwrap().projector,
+            CARLA_DEFAULT
+        );
+        assert_eq!(
+            GnssGeo::load("none", Default::default()).unwrap().projector,
+            CARLA_DEFAULT
+        );
+        let e =
+            GnssGeo::load("/nonexistent/map_projector_info.yaml", Default::default()).unwrap_err();
         assert!(e.contains("/nonexistent/map_projector_info.yaml"), "{e}");
     }
 }
