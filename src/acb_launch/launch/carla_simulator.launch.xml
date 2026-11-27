@@ -33,7 +33,12 @@
   <arg name="carla_host" default="localhost"/>
   <arg name="carla_port" default="2000"/>
   <arg name="publish_clock" default="true" description="acb publishes /clock from CARLA in this domain"/>
-  <arg name="seed_localization_on_attach" default="true"/>
+  <!-- The GNSS receiver's error, as acb_bridge.launch.xml takes it -->
+  <arg name="gnss_noise_enabled" default="true"/>
+  <arg name="gnss_noise_horizontal_stddev_m" default="0.02"/>
+  <arg name="gnss_noise_vertical_stddev_m" default="0.04"/>
+  <arg name="gnss_noise_bias_stddev_m" default="0.0"/>
+  <arg name="gnss_noise_seed" default="-1"/>
   <arg name="traffic_light_map_path" default="$(var map_path)/carla/traffic_lights.yaml"
        description="the map dir's CARLA signal table (scensim_carla_world --generate-signal-table); empty disables V2X signals"/>
   <arg name="traffic_light_state_path" default=""
@@ -91,7 +96,11 @@
       <arg name="steering_multiplier" value="$(var steering_multiplier)"/>
       <arg name="steer_rate_limit_deg_s" value="$(var steer_rate_limit_deg_s)"/>
       <arg name="steer_time_constant_s" value="$(var steer_time_constant_s)"/>
-      <arg name="seed_localization_on_attach" value="$(var seed_localization_on_attach)"/>
+      <arg name="gnss_noise_enabled" value="$(var gnss_noise_enabled)"/>
+      <arg name="gnss_noise_horizontal_stddev_m" value="$(var gnss_noise_horizontal_stddev_m)"/>
+      <arg name="gnss_noise_vertical_stddev_m" value="$(var gnss_noise_vertical_stddev_m)"/>
+      <arg name="gnss_noise_bias_stddev_m" value="$(var gnss_noise_bias_stddev_m)"/>
+      <arg name="gnss_noise_seed" value="$(var gnss_noise_seed)"/>
       <arg name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)"/>
       <arg name="ground_truth_range_m" value="$(var ground_truth_range_m)"/>
       <arg name="traffic_light_map_path" value="$(var traffic_light_map_path)"/>

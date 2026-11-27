@@ -41,10 +41,17 @@
   <!-- Report CARLA's actors as perception output instead of deriving them from the LiDAR.
        Only correct with Autoware's own perception disabled (perception:=false), or two
        publishers interleave on /perception/object_recognition/objects. -->
-  <arg name="seed_localization_on_attach" default="true"
-       description="Re-seed Autoware's pose estimator when attaching, if its estimate is
-                    somewhere other than this vehicle. Only acts on an estimate that
-                    already exists, so a cold start is left to Autoware's own initializer." />
+  <!-- The GNSS receiver's error (scensim issue 195 A9; src/acb_bridge/src/gnss_noise.rs):
+       east, north and up in the map, a bias drawn once per run plus white noise per fix.
+       The defaults are an RTK fix's and the node's own; aib's ego config `gnss` has the same
+       model and names. -->
+  <arg name="gnss_noise_enabled" default="true"
+       description="false: publish the antenna's true position, no covariance"/>
+  <arg name="gnss_noise_horizontal_stddev_m" default="0.02" description="white noise east and north, m"/>
+  <arg name="gnss_noise_vertical_stddev_m" default="0.04" description="white noise up, m"/>
+  <arg name="gnss_noise_bias_stddev_m" default="0.0" description="the per-run bias's spread, m"/>
+  <arg name="gnss_noise_seed" default="-1"
+       description="an integer >= 0 replays the fixes; -1 draws a seed, logged"/>
   <arg name="publish_ground_truth_objects" default="false"
        description="Publish CARLA actors as PredictedObjects, bypassing perception"/>
   <arg name="ground_truth_range_m" default="100.0"
@@ -134,7 +141,11 @@
            <param name="compensate_steering_curve" value="false"/>
          Read from physics_control at spawn, so it follows the blueprint. -->
     <param name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)"/>
-    <param name="seed_localization_on_attach" value="$(var seed_localization_on_attach)"/>
+    <param name="gnss_noise_enabled" value="$(var gnss_noise_enabled)"/>
+    <param name="gnss_noise_horizontal_stddev_m" value="$(var gnss_noise_horizontal_stddev_m)"/>
+    <param name="gnss_noise_vertical_stddev_m" value="$(var gnss_noise_vertical_stddev_m)"/>
+    <param name="gnss_noise_bias_stddev_m" value="$(var gnss_noise_bias_stddev_m)"/>
+    <param name="gnss_noise_seed" value="$(var gnss_noise_seed)"/>
     <param name="ground_truth_range_m" value="$(var ground_truth_range_m)"/>
     <param name="traffic_light_map_path" value="$(var traffic_light_map_path)"/>
     <param name="traffic_light_state_path" value="$(var traffic_light_state_path)"/>

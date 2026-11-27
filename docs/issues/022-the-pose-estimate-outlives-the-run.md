@@ -4,7 +4,12 @@
 **Component**: `src/acb_bridge/src/autoware.rs` (`request_localization_seed`,
 `service_localization_seed`), `src/acb_bridge/src/main.rs`
 **Status**: Fixed by seeding `/initialpose` on attach, on by default
-(`seed_localization_on_attach`)
+(`seed_localization_on_attach`). **Retired 2026-11-27** (scensim issue 195 A6): the seed put
+the true pose into Autoware, which no real car has. Autoware now localizes like a real car:
+its GNSS initializer (with the receiver's error, A9) and NDT. A new run is re-initialized
+without a pose by scensim's vehicle agent (Autoware's ADAPI initialize), and the bridge still
+reports when the estimate reaches the vehicle (`watch_seating`, the `seated` release frame).
+Passing `seed_localization_on_attach` now stops the bridge, naming it.
 
 ## What is wrong
 

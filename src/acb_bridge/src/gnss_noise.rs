@@ -1,0 +1,415 @@
+//! The GNSS receiver's error (scensim issue 195 A9).
+//!
+//! CARLA's `sensor.other.gnss` reads the antenna's true position. A receiver does not: this
+//! adds an RTK fix's error, east, north and up in metres, before the fix is published. The
+//! model and its names are aib's (`aib.sensing.GnssNoise`), so both simulators' GNSS mean the
+//! same thing: a bias drawn once per receiver from N(0, `bias_stddev_m`) on each axis, plus
+//! white noise per fix from N(0, `horizontal_stddev_m`) east and north and
+//! N(0, `vertical_stddev_m`) up. Not CARLA's own `noise_*` attributes: those are in degrees
+//! and draw from CARLA's generator, which neither matches aib nor replays from our seed.
+//!
+//! The defaults (0.02, 0.04, 0 m) live here, not in the vehicle spec: a receiver default is
+//! not worth moving every spec_hash. The parameters `gnss_noise_*` override them.
+
+/// The radius the offset is turned into degrees with (WGS84's equatorial, CARLA's own). The
+/// offsets are centimetres; the sphere's error on them is far below a millimetre.
+pub const EARTH_RADIUS_M: f64 = 6_378_137.0;
+
+/// sensor_msgs/NavSatFix position_covariance_type values.
+pub const COVARIANCE_TYPE_UNKNOWN: u8 = 0;
+pub const COVARIANCE_TYPE_DIAGONAL_KNOWN: u8 = 2;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GnssNoiseSettings {
+    /// false: the antenna's true position and no covariance, as before A9.
+    pub enabled: bool,
+    pub horizontal_stddev_m: f64,
+    pub vertical_stddev_m: f64,
+    pub bias_stddev_m: f64,
+    /// Some: the fixes replay; None: a fresh seed, drawn once and logged.
+    pub seed: Option<u64>,
+}
+
+impl Default for GnssNoiseSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            horizontal_stddev_m: 0.02,
+            vertical_stddev_m: 0.04,
+            bias_stddev_m: 0.0,
+            seed: None,
+        }
+    }
+}
+
+impl GnssNoiseSettings {
+    /// Refuse a negative or non-finite spread, naming its parameter.
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, v) in [
+            ("gnss_noise_horizontal_stddev_m", self.horizontal_stddev_m),
+            ("gnss_noise_vertical_stddev_m", self.vertical_stddev_m),
+            ("gnss_noise_bias_stddev_m", self.bias_stddev_m),
+        ] {
+            if !(v.is_finite() && v >= 0.0) {
+                return Err(format!("{name} must be a finite number >= 0 (m), is {v}"));
+            }
+        }
+        Ok(())
+    }
+
+    /// `gnss_noise_seed`: an integer >= 0, or -1 for a fresh one.
+    pub fn seed_from_param(v: i64) -> Result<Option<u64>, String> {
+        match v {
+            -1 => Ok(None),
+            v if v >= 0 => Ok(Some(v as u64)),
+            v => Err(format!(
+                "gnss_noise_seed must be >= 0, or -1 for a fresh seed, is {v}"
+            )),
+        }
+    }
+
+    /// These settings with the seed fixed: a fresh one drawn now when there is none, so
+    /// every receiver this process makes (a respawned hero's too) draws the same stream.
+    pub fn with_seed(&self) -> Self {
+        let mut s = self.clone();
+        if s.seed.is_none() {
+            s.seed = Some(fresh_seed());
+        }
+        s
+    }
+}
+
+/// A seed from the clock and the process, hashed: different per call and per process.
+fn fresh_seed() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CALLS: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let mut state = nanos
+        ^ (u64::from(std::process::id()) << 32)
+        ^ CALLS
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    // within i64, so the log's number can be passed back as gnss_noise_seed
+    splitmix64(&mut state) >> 1
+}
+
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// One receiver's error. A small generator of its own (SplitMix64, Box-Muller), so the
+/// stream is fixed by the seed alone, whatever crate versions the build resolves.
+pub struct GnssNoise {
+    enabled: bool,
+    seed: u64,
+    state: u64,
+    sigma: [f64; 3],
+    bias_stddev: f64,
+    bias: [f64; 3],
+    spare: Option<f64>,
+}
+
+impl GnssNoise {
+    pub fn new(settings: &GnssNoiseSettings) -> Self {
+        let seed = settings.seed.unwrap_or_else(fresh_seed);
+        let h = settings.horizontal_stddev_m;
+        let mut n = Self {
+            enabled: settings.enabled,
+            seed,
+            state: seed,
+            sigma: [h, h, settings.vertical_stddev_m],
+            bias_stddev: settings.bias_stddev_m,
+            bias: [0.0; 3],
+            spare: None,
+        };
+        if n.enabled {
+            let b = settings.bias_stddev_m;
+            n.bias = [b * n.normal(), b * n.normal(), b * n.normal()];
+        }
+        n
+    }
+
+    pub fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    pub fn bias(&self) -> [f64; 3] {
+        self.bias
+    }
+
+    /// A standard normal draw.
+    fn normal(&mut self) -> f64 {
+        if let Some(z) = self.spare.take() {
+            return z;
+        }
+        // u1 in (0, 1]: the top 53 bits, never 0, so ln is finite
+        let u1 = ((splitmix64(&mut self.state) >> 11) + 1) as f64 / (1u64 << 53) as f64;
+        let u2 = (splitmix64(&mut self.state) >> 11) as f64 / (1u64 << 53) as f64;
+        let r = (-2.0 * u1.ln()).sqrt();
+        let t = std::f64::consts::TAU * u2;
+        self.spare = Some(r * t.sin());
+        r * t.cos()
+    }
+
+    /// The next fix's error, east, north, up (m).
+    pub fn offset(&mut self) -> [f64; 3] {
+        if !self.enabled {
+            return [0.0; 3];
+        }
+        let mut o = self.bias;
+        for (axis, v) in o.iter_mut().enumerate() {
+            *v += self.sigma[axis] * self.normal();
+        }
+        o
+    }
+
+    /// (NavSatFix position_covariance, its type): the white noise's and the bias's variance
+    /// on the diagonal, known; disabled, zeros of unknown type.
+    pub fn covariance(&self) -> ([f64; 9], u8) {
+        if !self.enabled {
+            return ([0.0; 9], COVARIANCE_TYPE_UNKNOWN);
+        }
+        let b2 = self.bias_stddev * self.bias_stddev;
+        let mut c = [0.0; 9];
+        c[0] = self.sigma[0] * self.sigma[0] + b2;
+        c[4] = self.sigma[1] * self.sigma[1] + b2;
+        c[8] = self.sigma[2] * self.sigma[2] + b2;
+        (c, COVARIANCE_TYPE_DIAGONAL_KNOWN)
+    }
+
+    /// A one-line description for the log: enough to replay the run (its seed) and to see
+    /// this run's bias.
+    pub fn describe(&self) -> String {
+        if self.enabled {
+            let [e, n, u] = self.bias();
+            format!(
+                "error east/north {} m, up {} m, bias {} m (this run's: {e:.4}, {n:.4}, \
+                 {u:.4}), seed {}",
+                self.sigma[0],
+                self.sigma[2],
+                self.bias_stddev,
+                self.seed()
+            )
+        } else {
+            "no error (gnss_noise_enabled false): the antenna's true position".to_string()
+        }
+    }
+}
+
+/// A fix (degrees, m) moved by `offset` (east, north, up in m), on a sphere of
+/// EARTH_RADIUS_M. `lat` is the published latitude, north positive.
+pub fn apply(lat: f64, lon: f64, alt: f64, offset: [f64; 3]) -> (f64, f64, f64) {
+    let [e, n, u] = offset;
+    let lat_out = if n == 0.0 {
+        lat
+    } else {
+        lat + (n / EARTH_RADIUS_M).to_degrees()
+    };
+    let lon_out = if e == 0.0 {
+        lon
+    } else {
+        lon + (e / (EARTH_RADIUS_M * lat.to_radians().cos())).to_degrees()
+    };
+    (lat_out, lon_out, alt + u)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings() -> GnssNoiseSettings {
+        GnssNoiseSettings::default()
+    }
+
+    fn draws(s: GnssNoiseSettings, n: usize) -> Vec<[f64; 3]> {
+        let mut noise = GnssNoise::new(&s);
+        (0..n).map(|_| noise.offset()).collect()
+    }
+
+    fn mean_sd(v: &[[f64; 3]], axis: usize) -> (f64, f64) {
+        let n = v.len() as f64;
+        let m = v.iter().map(|d| d[axis]).sum::<f64>() / n;
+        let var = v.iter().map(|d| (d[axis] - m).powi(2)).sum::<f64>() / n;
+        (m, var.sqrt())
+    }
+
+    #[test]
+    fn the_defaults_are_rtk_like() {
+        let s = settings();
+        assert!(s.enabled);
+        assert_eq!(
+            (
+                s.horizontal_stddev_m,
+                s.vertical_stddev_m,
+                s.bias_stddev_m,
+                s.seed
+            ),
+            (0.02, 0.04, 0.0, None)
+        );
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn bad_values_are_refused_by_name() {
+        for (name, s) in [
+            (
+                "gnss_noise_horizontal_stddev_m",
+                GnssNoiseSettings {
+                    horizontal_stddev_m: -0.1,
+                    ..settings()
+                },
+            ),
+            (
+                "gnss_noise_vertical_stddev_m",
+                GnssNoiseSettings {
+                    vertical_stddev_m: f64::NAN,
+                    ..settings()
+                },
+            ),
+            (
+                "gnss_noise_bias_stddev_m",
+                GnssNoiseSettings {
+                    bias_stddev_m: -1.0,
+                    ..settings()
+                },
+            ),
+        ] {
+            let e = s.validate().unwrap_err();
+            assert!(e.contains(name), "{e}");
+        }
+        assert_eq!(GnssNoiseSettings::seed_from_param(-1).unwrap(), None);
+        assert_eq!(GnssNoiseSettings::seed_from_param(7).unwrap(), Some(7));
+        assert!(GnssNoiseSettings::seed_from_param(-2)
+            .unwrap_err()
+            .contains("gnss_noise_seed"));
+    }
+
+    #[test]
+    fn white_noise_has_the_configured_spread_and_no_mean() {
+        let d = draws(
+            GnssNoiseSettings {
+                seed: Some(7),
+                ..settings()
+            },
+            20000,
+        );
+        let se = |s: f64| s / (20000f64).sqrt();
+        for (axis, sigma) in [(0, 0.02), (1, 0.02), (2, 0.04)] {
+            let (m, sd) = mean_sd(&d, axis);
+            assert!((sd - sigma).abs() < 0.02 * sigma, "axis {axis}: sd {sd}");
+            assert!(m.abs() < 4.0 * se(sigma), "axis {axis}: mean {m}");
+        }
+        // independent axes
+        let (m0, s0) = mean_sd(&d, 0);
+        let (m1, s1) = mean_sd(&d, 1);
+        let c = d.iter().map(|v| (v[0] - m0) * (v[1] - m1)).sum::<f64>() / 20000.0 / (s0 * s1);
+        assert!(c.abs() < 0.05, "corr {c}");
+    }
+
+    #[test]
+    fn a_bias_is_drawn_once_per_receiver() {
+        let s = GnssNoiseSettings {
+            seed: Some(3),
+            horizontal_stddev_m: 0.0,
+            vertical_stddev_m: 0.0,
+            bias_stddev_m: 0.5,
+            ..settings()
+        };
+        let d = draws(s.clone(), 100);
+        assert!(d.iter().all(|v| *v == d[0]));
+        assert!(d[0].iter().any(|x| *x != 0.0));
+        assert_eq!(d[0], GnssNoise::new(&s).bias());
+        let biases: Vec<[f64; 3]> = (0..2000)
+            .map(|k| {
+                GnssNoise::new(&GnssNoiseSettings {
+                    seed: Some(k),
+                    bias_stddev_m: 0.5,
+                    ..settings()
+                })
+                .bias()
+            })
+            .collect();
+        for axis in 0..3 {
+            let (_, sd) = mean_sd(&biases, axis);
+            assert!((sd - 0.5).abs() < 0.05, "axis {axis}: {sd}");
+        }
+    }
+
+    #[test]
+    fn the_same_seed_gives_the_same_fixes() {
+        let s = |k| GnssNoiseSettings {
+            seed: Some(k),
+            bias_stddev_m: 0.1,
+            ..settings()
+        };
+        assert_eq!(draws(s(42), 50), draws(s(42), 50));
+        assert_ne!(draws(s(42), 50), draws(s(43), 50));
+    }
+
+    #[test]
+    fn no_seed_draws_a_fresh_one_and_names_it() {
+        let a = GnssNoise::new(&settings());
+        let b = GnssNoise::new(&settings());
+        assert_ne!(a.seed(), b.seed());
+        let replay = GnssNoiseSettings {
+            seed: Some(a.seed()),
+            ..settings()
+        };
+        assert_eq!(draws(replay.clone(), 5), draws(replay, 5));
+    }
+
+    #[test]
+    fn disabled_is_the_truth() {
+        let s = GnssNoiseSettings {
+            enabled: false,
+            seed: Some(1),
+            bias_stddev_m: 1.0,
+            ..settings()
+        };
+        assert!(draws(s.clone(), 10).iter().all(|v| *v == [0.0; 3]));
+        assert_eq!(GnssNoise::new(&s).covariance(), ([0.0; 9], 0));
+    }
+
+    #[test]
+    fn the_covariance_is_diagonal_and_known() {
+        let (c, kind) = GnssNoise::new(&GnssNoiseSettings {
+            seed: Some(0),
+            bias_stddev_m: 0.01,
+            ..settings()
+        })
+        .covariance();
+        assert_eq!(kind, 2); // NavSatFix COVARIANCE_TYPE_DIAGONAL_KNOWN
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-15;
+        assert!(close(c[0], 0.02f64.powi(2) + 0.01f64.powi(2)));
+        assert!(close(c[4], 0.02f64.powi(2) + 0.01f64.powi(2)));
+        assert!(close(c[8], 0.04f64.powi(2) + 0.01f64.powi(2)));
+        for i in [1, 2, 3, 5, 6, 7] {
+            assert_eq!(c[i], 0.0);
+        }
+    }
+
+    #[test]
+    fn the_offset_moves_the_fix_east_north_up() {
+        let (lat, lon, alt) = (48.0, 11.0, 500.0);
+        let (la, lo, al) = apply(lat, lon, alt, [0.0; 3]);
+        assert_eq!((la, lo, al), (lat, lon, alt));
+        // one metre north: 1/R rad of latitude
+        let (la, lo, _) = apply(lat, lon, alt, [0.0, 1.0, 0.0]);
+        assert!((la - lat - (1.0 / EARTH_RADIUS_M).to_degrees()).abs() < 1e-12);
+        assert_eq!(lo, lon);
+        // one metre east: 1/(R cos lat) rad of longitude
+        let (la, lo, _) = apply(lat, lon, alt, [1.0, 0.0, 0.0]);
+        let want = (1.0 / (EARTH_RADIUS_M * lat.to_radians().cos())).to_degrees();
+        assert!((lo - lon - want).abs() < 1e-12);
+        assert_eq!(la, lat);
+        let (_, _, al) = apply(lat, lon, alt, [0.0, 0.0, 0.5]);
+        assert_eq!(al, 500.5);
+    }
+}

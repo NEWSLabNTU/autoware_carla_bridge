@@ -261,7 +261,7 @@ def observe(domain: int, duration: float, settle: float = 90.0) -> dict:
     # Distance from the estimate to the GNSS fix beyond which the estimate is not this
     # vehicle's yet. On a stack that has already run a scenario the pose estimator starts
     # each new run holding the *previous* run's final pose, about 95 m away, until it is
-    # re-seeded and NDT re-converges a few seconds later -- see acb issue 022. Every
+    # re-initialized and NDT re-converges a few seconds later -- see acb issue 022. Every
     # position-derived measurement below has to ignore that window or it measures the
     # correction rather than the run.
     ESTIMATE_SEATED_M = 5.0

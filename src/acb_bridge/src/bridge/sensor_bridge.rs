@@ -133,6 +133,7 @@ impl SensorBridge {
         autoware: &Autoware,
         clock: crate::clock::SimClock,
         definition: Option<&crate::sensor_config::SensorDefinition>,
+        gnss_noise: &crate::gnss_noise::GnssNoiseSettings,
     ) -> Result<SensorBridge> {
         let (sensor_type, sensor_name) = match bridge_type {
             BridgeType::Sensor(t, s) => (t, s),
@@ -182,7 +183,14 @@ impl SensorBridge {
                 register_imu(node.clone(), &actor, key_list, &sensor_name, clock.clone())?;
             }
             SensorType::Gnss => {
-                register_gnss(node.clone(), &actor, key_list, &sensor_name, clock.clone())?;
+                register_gnss(
+                    node.clone(),
+                    &actor,
+                    key_list,
+                    &sensor_name,
+                    clock.clone(),
+                    gnss_noise,
+                )?;
             }
             SensorType::Collision => {
                 tracing::warn!("Collision sensor is not supported yet");
@@ -427,11 +435,15 @@ fn register_gnss(
     key_list: Option<Vec<String>>,
     frame_id: &str,
     clock: crate::clock::SimClock,
+    gnss_noise: &crate::gnss_noise::GnssNoiseSettings,
 ) -> Result<()> {
     let key_list = key_list.ok_or(BridgeError::CarlaIssue("No sensor exists"))?;
     let topic = key_list[0].clone();
 
     let publisher = Arc::new(node.create_publisher::<sensor_msgs::msg::NavSatFix>(topic.as_str())?);
+    let noise = crate::gnss_noise::GnssNoise::new(gnss_noise);
+    tracing::info!("GNSS {frame_id}: {}", noise.describe());
+    let noise = std::sync::Mutex::new(noise);
 
     // Clone frame_id for closure
     let frame_id = frame_id.to_string();
@@ -445,7 +457,9 @@ fn register_gnss(
         };
 
         if let Ok(measure) = data.try_into() {
-            if let Err(e) = publish_gnss(&publisher, header, measure) {
+            let offset = noise.lock().unwrap().offset();
+            let covariance = noise.lock().unwrap().covariance();
+            if let Err(e) = publish_gnss(&publisher, header, measure, offset, covariance) {
                 tracing::error!("Failed to publish GNSS data: {e:?}");
             }
         } else {
@@ -674,21 +688,30 @@ fn publish_gnss(
     publisher: &Arc<rclrs::Publisher<sensor_msgs::msg::NavSatFix>>,
     header: std_msgs::msg::Header,
     measure: GnssMeasurement,
+    offset: [f64; 3],
+    (position_covariance, position_covariance_type): ([f64; 9], u8),
 ) -> Result<()> {
+    // Negate latitude: CARLA maps CARLA_y (right=south) to Northing without sign flip,
+    // but the TUMFTM maps use y = -CARLA_y convention (y = ROS left = map north).
+    // Negating latitude makes gnss_poser output match the map frame (y = -CARLA_y).
+    // The receiver's error goes on after, in the map's east, north and up.
+    let (latitude, longitude, altitude) = crate::gnss_noise::apply(
+        -measure.latitude(),
+        measure.longitude(),
+        measure.altitude(),
+        offset,
+    );
     let gnss_msg = sensor_msgs::msg::NavSatFix {
         header,
         status: sensor_msgs::msg::NavSatStatus {
             status: GnssStatus::GbasFix as i8,
             service: GnssService::Gps as u16,
         },
-        // Negate latitude: CARLA maps CARLA_y (right=south) to Northing without sign flip,
-        // but the TUMFTM maps use y = -CARLA_y convention (y = ROS left = map north).
-        // Negating latitude makes gnss_poser output match the map frame (y = -CARLA_y).
-        latitude: -measure.latitude(),
-        longitude: measure.longitude(),
-        altitude: measure.altitude(),
-        position_covariance: [0.0; 9],
-        position_covariance_type: 0,
+        latitude,
+        longitude,
+        altitude,
+        position_covariance,
+        position_covariance_type,
     };
 
     publisher.publish(&gnss_msg)?;

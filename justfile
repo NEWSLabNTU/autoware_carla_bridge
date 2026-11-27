@@ -328,7 +328,7 @@ vehicle-check *args:
         carla_physics:="$physics" carla_physics_mode:=apply \
         autoware_spec_hash_file:="$desc/spec_hash.yaml" \
         accel_map_path:="$desc/accel_map.csv" brake_map_path:="$desc/brake_map.csv" \
-        seed_localization_on_attach:=false > "$out/acb.log" 2>&1 < /dev/null &
+        > "$out/acb.log" 2>&1 < /dev/null &
     groups+=($!)
     play_launch launch --disable-web-ui --log-dir "$out/check_log" \
         autoware_sim_check vehicle_check.launch.xml simulator:=carla vehicle_model:="$model" \
