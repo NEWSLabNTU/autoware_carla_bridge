@@ -125,6 +125,40 @@ impl MapProjector {
     }
 }
 
+/// What the GNSS fix is made with: the map's projector and where CARLA's world origin sits in
+/// the map frame (`map_origin_path`).
+#[derive(Debug, Clone)]
+pub struct GnssGeo {
+    pub projector: MapProjector,
+    pub map_origin: crate::coordinate_conversion::MapOrigin,
+}
+
+/// CARLA's own convention, for a bridge run with no map (`map_projector_path` empty): a
+/// transverse Mercator at (0, 0), scale 1.0, as every CARLA town's map declares.
+pub const CARLA_DEFAULT: MapProjector =
+    MapProjector::TransverseMercator { lat0: 0.0, lon0: 0.0, alt0: 0.0, k0: 1.0 };
+
+impl GnssGeo {
+    /// From `map_projector_path` (the map dir's `map_projector_info.yaml`) and the map origin.
+    /// Empty or `none`: [`CARLA_DEFAULT`]; a path that does not exist or does not parse is an
+    /// error, since a wrong projector puts every fix metres off on a run that looks fine.
+    pub fn load(
+        path: &str,
+        map_origin: crate::coordinate_conversion::MapOrigin,
+    ) -> Result<Self, String> {
+        let _ = (path, &map_origin);
+        Err("not implemented".into())
+    }
+
+    /// The fix (latitude, longitude in degrees, altitude in metres) for a GNSS sensor at
+    /// `carla_location` (CARLA's frame) with the receiver's error `offset_enu` (east, north, up,
+    /// in metres, in the map's frame) added.
+    pub fn fix(&self, carla_location: [f64; 3], offset_enu: [f64; 3]) -> (f64, f64, f64) {
+        let _ = (carla_location, offset_enu);
+        (f64::NAN, f64::NAN, f64::NAN)
+    }
+}
+
 // --- WGS84 transverse Mercator, Krueger's series to n^6 (Karney 2011, "Transverse Mercator with
 // an accuracy of a few nanometers"): exact to well under a millimetre within 1000 km of the
 // central meridian, which is what GeographicLib's TransverseMercator (Autoware's) computes too.
@@ -352,4 +386,45 @@ mod tests {
         assert!(metres((lat, lon), (-0.001169175909, 0.001714671458)) > 0.8);
     }
 
+    fn town01() -> GnssGeo {
+        GnssGeo { projector: CARLA_DEFAULT, map_origin: Default::default() }
+    }
+
+    /// A fix is the map point of the sensor's CARLA location (y mirrored), through the projector
+    #[test]
+    fn a_fix_is_the_sensors_map_point_through_the_projector() {
+        let g = town01();
+        let (lat, lon, alt) = g.fix([190.8, 130.1, 2.1], [0.0, 0.0, 0.0]);
+        assert!(metres((lat, lon), (-0.0011765846891, 0.0017139855622)) < 0.001, "{lat} {lon}");
+        assert!((alt - 2.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_receivers_error_moves_the_fix_in_the_maps_metres() {
+        let g = town01();
+        let (lat, lon, alt) = g.fix([190.8, 130.1, 2.1], [1.0, -2.0, 0.5]);
+        let want = CARLA_DEFAULT.lat_lon(191.8, -132.1);
+        assert!(metres((lat, lon), want) < 0.001, "{lat} {lon} {want:?}");
+        assert!((alt - 2.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_map_origin_offsets_the_fix() {
+        let g = GnssGeo {
+            projector: CARLA_DEFAULT,
+            map_origin: crate::coordinate_conversion::MapOrigin { x: 10.0, y: -5.0, z: 1.0 },
+        };
+        let (lat, lon, alt) = g.fix([190.8, 130.1, 2.1], [0.0, 0.0, 0.0]);
+        assert!(metres((lat, lon), CARLA_DEFAULT.lat_lon(200.8, -135.1)) < 0.001);
+        assert!((alt - 3.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_empty_path_is_carlas_convention_and_a_missing_file_an_error() {
+        assert_eq!(GnssGeo::load("", Default::default()).unwrap().projector, CARLA_DEFAULT);
+        assert_eq!(GnssGeo::load("none", Default::default()).unwrap().projector, CARLA_DEFAULT);
+        let e = GnssGeo::load("/nonexistent/map_projector_info.yaml", Default::default())
+            .unwrap_err();
+        assert!(e.contains("/nonexistent/map_projector_info.yaml"), "{e}");
+    }
 }
