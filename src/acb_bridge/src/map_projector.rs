@@ -440,13 +440,30 @@ mod tests {
         );
     }
 
+    /// aib's behaviour, in its words (scensim 118, 2026-11-27): a Local map loads, a GNSS on it
+    /// is refused when the bridge starts; an unknown projector_type is refused when read; a file
+    /// without projector_type reads as no file.
     #[test]
-    fn projectors_without_a_geographic_inverse_are_refused_by_name() {
-        for t in ["Local", "LocalCartesianUTM", "Mercator"] {
-            let e = MapProjector::from_yaml(&format!("projector_type: {t}\n")).unwrap_err();
-            assert!(e.contains(t), "{e}");
+    fn local_maps_load_but_refuse_a_gnss_and_unknown_types_are_refused() {
+        for t in ["Local", "local", "LocalCartesian", "LocalCartesianUTM"] {
+            let p = MapProjector::from_yaml(&format!("projector_type: {t}\n")).unwrap();
+            assert_eq!(p, MapProjector::NoInverse(t.to_string()));
+            let g = GnssGeo { projector: p, map_origin: Default::default() };
+            let e = g.check("/maps/basement", "gnss_link").unwrap_err();
+            assert_eq!(
+                e,
+                format!(
+                    "/maps/basement: the map's projector_type is {t}, which a GNSS fix has no \
+                     inverse through; disable the GNSS (gnss_link) for this map (indoor or Local \
+                     maps: no pose-free start yet)"
+                )
+            );
         }
-        assert!(MapProjector::from_yaml("vertical_datum: WGS84\n").is_err());
+        let e = MapProjector::from_yaml("projector_type: Mercator\n").unwrap_err();
+        assert!(e.contains("Mercator"), "{e}");
+        assert_eq!(MapProjector::from_yaml("vertical_datum: WGS84\n").unwrap(), CARLA_DEFAULT);
+        let g = GnssGeo { projector: CARLA_DEFAULT, map_origin: Default::default() };
+        assert!(g.check("/maps/Town01", "gnss_link").is_ok());
     }
 
     /// Issue 195's measurement: on Town01 (TM at 0, 0, scale 1.0) the point (190.8, -130.1)
