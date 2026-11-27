@@ -155,9 +155,9 @@ struct BridgeParams {
     /// light camera when signals come from CARLA (carla-scenario-bridge roadmap 015) --
     /// without a second copy of the config. Unknown names are warned about and ignored.
     pub disabled_sensors: String,
-    /// Publish pose directly to /localization/kinematic_state (bypasses Autoware localization)
-    /// Set to true for testing without Autoware localization pipeline
-    pub publish_direct_localization: bool,
+    /// Publish the true pose as the pose estimator's output (scensim issue 195): a debug
+    /// option, for an autopilot run without its own estimator
+    pub truth_pose_estimate: bool,
     /// Publish `/clock` (CARLA `elapsed_seconds` plus BASE_NS, see `clock`).
     ///
     /// An emergency off, not a mode switch: this bridge owns `/clock` in every domain
@@ -273,11 +273,27 @@ impl BridgeParams {
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
 
-        let publish_direct_localization = node
-            .declare_parameter("publish_direct_localization")
+        // scensim issue 195: the true pose as the pose estimator's output, a debug option
+        // (scensim's `direct_localization`, whose runs never count as an evaluation)
+        let truth_pose_estimate = node
+            .declare_parameter("truth_pose_estimate")
             .default(false)
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
+        // Retired (scensim issue 195): the true pose straight to /localization/kinematic_state
+        // and /tf, the EKF bypassed. Declared only to refuse it by name (no shims).
+        let retired_publish_direct_localization = node
+            .declare_parameter::<bool>("publish_direct_localization")
+            .optional()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+        if retired_publish_direct_localization.get().is_some() {
+            return Err(BridgeError::ConfigError(
+                "publish_direct_localization is retired (scensim issue 195): the true pose goes \
+                 out as the pose estimator's output instead, truth_pose_estimate:=true (scensim's \
+                 direct_localization, a debug option). Remove the parameter"
+                    .into(),
+            ));
+        }
 
         let publish_clock = node
             .declare_parameter("publish_clock")
@@ -498,7 +514,7 @@ impl BridgeParams {
         let carla_port_val: i64 = carla_port.get();
         let vehicle_name_val: Arc<str> = vehicle_name.get();
         let vehicle_config_val: Arc<str> = vehicle_config.get();
-        let publish_direct_localization_val: bool = publish_direct_localization.get();
+        let truth_pose_estimate_val: bool = truth_pose_estimate.get();
         let publish_clock_val: bool = publish_clock.get();
         let release_notify_val: Arc<str> = release_notify_endpoint.get();
         let release_ack_val: Arc<str> = release_ack_endpoint.get();
@@ -545,7 +561,7 @@ impl BridgeParams {
                 let v: Arc<str> = disabled_sensors.get();
                 v.to_string()
             },
-            publish_direct_localization: publish_direct_localization_val,
+            truth_pose_estimate: truth_pose_estimate_val,
             publish_clock: publish_clock_val,
             release_notify_endpoint: release_notify_val.to_string(),
             release_ack_endpoint: release_ack_val.to_string(),
@@ -1032,18 +1048,16 @@ fn main() -> Result<()> {
             ),
         }
     }
-    if params.publish_direct_localization {
-        // Publishing ground truth to /localization/kinematic_state and /tf puts this bridge
-        // in direct competition with Autoware's EKF, which owns both. Useful for bringing a
-        // stack up without localization; wrong for anything measuring localization.
+    if params.truth_pose_estimate {
+        // scensim issue 195: a debug option; the autopilot must run without its own pose
+        // estimator (Autoware: the profile's ndt:=none), and scensim marks the run.
         tracing::warn!(
-            "publish_direct_localization is ENABLED: this bridge will publish \
-             /localization/kinematic_state and /tf from CARLA ground truth, competing with \
-             Autoware's own localization. Use it only when Autoware's localization is \
-             disabled, and never when measuring localization accuracy."
+            "truth_pose_estimate is ENABLED: this bridge publishes CARLA's true pose on {} as \
+             the pose estimator's output. A debug run, never an evaluation of localization.",
+            autoware::POSE_ESTIMATE_TOPIC
         );
     } else {
-        tracing::info!("publish_direct_localization: false (Autoware owns localization)");
+        tracing::info!("truth_pose_estimate: false (the autopilot localizes from its sensors)");
     }
     if params.publish_clock {
         tracing::info!("publish_clock: true (this bridge owns /clock in its ROS domain)");
@@ -1089,11 +1103,8 @@ fn main() -> Result<()> {
 
     // === Step 3: Create Autoware coordinator and wait for Autoware ===
     tracing::info!("Creating Autoware coordinator...");
-    let mut autoware = autoware::Autoware::new(
-        node.clone(),
-        params.publish_direct_localization,
-        params.map_origin,
-    )?;
+    let mut autoware =
+        autoware::Autoware::new(node.clone(), params.truth_pose_estimate, params.map_origin)?;
 
     tracing::info!("Waiting for Autoware to start...");
     tracing::info!("(Start Autoware planning simulator with sample_sensor_kit)");

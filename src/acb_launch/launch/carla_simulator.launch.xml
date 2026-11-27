@@ -34,6 +34,7 @@
   <arg name="carla_port" default="2000"/>
   <arg name="publish_clock" default="true" description="acb publishes /clock from CARLA in this domain"/>
   <!-- The GNSS receiver's error, as acb_bridge.launch.xml takes it -->
+  <arg name="truth_pose_estimate" default="false" description="debug only: the true pose as the pose estimator's output (scensim issue 195)"/>
   <arg name="gnss_noise_enabled" default="true"/>
   <arg name="gnss_noise_horizontal_stddev_m" default="0.02"/>
   <arg name="gnss_noise_vertical_stddev_m" default="0.04"/>
@@ -96,6 +97,7 @@
       <arg name="steering_multiplier" value="$(var steering_multiplier)"/>
       <arg name="steer_rate_limit_deg_s" value="$(var steer_rate_limit_deg_s)"/>
       <arg name="steer_time_constant_s" value="$(var steer_time_constant_s)"/>
+      <arg name="truth_pose_estimate" value="$(var truth_pose_estimate)"/>
       <arg name="gnss_noise_enabled" value="$(var gnss_noise_enabled)"/>
       <arg name="gnss_noise_horizontal_stddev_m" value="$(var gnss_noise_horizontal_stddev_m)"/>
       <arg name="gnss_noise_vertical_stddev_m" value="$(var gnss_noise_vertical_stddev_m)"/>

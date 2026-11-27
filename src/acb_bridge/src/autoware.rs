@@ -13,6 +13,39 @@ use crate::{
 };
 use std::sync::Mutex;
 
+/// The pose estimator's output topic, which Autoware's EKF fuses (NDT's, under the profile's
+/// `ndt:=none` empty): where `truth_pose_estimate` puts the true pose (scensim issue 195; aib's
+/// `ground_truth.pose_estimate` publishes on the same topic).
+pub const POSE_ESTIMATE_TOPIC: &str = "/localization/pose_estimator/pose_with_covariance";
+
+/// The covariance the true pose is published with: position m^2 and angle rad^2 on the
+/// diagonal, aib's `ground_truth.covariance` defaults, so both simulators weigh it alike.
+pub const TRUTH_POSE_COVARIANCE: [f64; 2] = [0.01, 0.0003];
+
+/// The true base_link pose in the map as the pose estimator's message (scensim issue 195):
+/// `orientation` is (w, x, y, z), as the ground truth's.
+pub fn truth_pose_estimate_msg(
+    timestamp: &builtin_interfaces::msg::Time,
+    position: &[f64; 3],
+    orientation: &[f64; 4],
+) -> geometry_msgs::msg::PoseWithCovarianceStamped {
+    let mut msg = geometry_msgs::msg::PoseWithCovarianceStamped::default();
+    msg.header.stamp = timestamp.clone();
+    msg.header.frame_id = "map".to_string();
+    let p = &mut msg.pose.pose;
+    p.position.x = position[0];
+    p.position.y = position[1];
+    p.position.z = position[2];
+    p.orientation.w = orientation[0];
+    p.orientation.x = orientation[1];
+    p.orientation.y = orientation[2];
+    p.orientation.z = orientation[3];
+    for i in 0..6 {
+        msg.pose.covariance[i * 7] = TRUTH_POSE_COVARIANCE[usize::from(i >= 3)];
+    }
+    msg
+}
+
 /// Whether Autoware's estimate has been seen on the vehicle this bridge drives.
 ///
 /// The scenario runner holds a run at the spawn until it hears this (docs/issues/022). The
@@ -58,9 +91,10 @@ pub struct Autoware {
     tf_buffer: TFBuffer,
 
     // === Pose Publishing Configuration ===
-    /// Whether to publish pose directly to /localization/kinematic_state
-    /// Ground truth is always published to /carla/ground_truth/* for debug/evaluation
-    publish_direct_localization: bool,
+    /// Whether to publish the true pose as the pose estimator's output (scensim issue 195's
+    /// `direct_localization`, a debug option). Ground truth is always published to
+    /// /carla/ground_truth/* for debug/evaluation.
+    truth_pose_estimate: bool,
 
     /// CARLA vehicle reference for getting ground truth pose
     vehicle: Option<Arc<Mutex<CarlaVehicle>>>,
@@ -74,15 +108,12 @@ pub struct Autoware {
     /// Publisher for ground truth TF transforms (always published for debug/evaluation)
     pub_ground_truth_tf: Arc<rclrs::Publisher<tf2_msgs::msg::TFMessage>>,
 
-    // === Direct Localization Publishers (Optional) ===
-    /// Publisher for localization pose (bypasses Autoware localization when enabled)
-    pub_localization: Option<Arc<rclrs::Publisher<nav_msgs::msg::Odometry>>>,
+    // === The true pose as the pose estimate (optional; scensim issue 195) ===
+    /// Publisher of the true pose on POSE_ESTIMATE_TOPIC, when `truth_pose_estimate`
+    pub_pose_estimate: Option<Arc<rclrs::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>>>,
 
     /// Whether the estimate has been seen on this vehicle (`take_seated`).
     seating: Mutex<Seating>,
-
-    /// Publisher for TF transforms (bypasses Autoware TF when enabled)
-    pub_tf: Option<Arc<rclrs::Publisher<tf2_msgs::msg::TFMessage>>>,
 
     // Vehicle status is published by `vehicle_control.rs`, not here.
     //
@@ -155,20 +186,21 @@ impl Autoware {
     ///
     /// # Arguments
     /// * `node` - ROS node handle for subscriptions and publishers
-    /// * `publish_direct_localization` - Whether to publish directly to /localization/kinematic_state
+    /// * `truth_pose_estimate` - Whether to publish the true pose on the pose estimator's
+    ///   topic (POSE_ESTIMATE_TOPIC), for an autopilot run without its own estimator.
     ///   Ground truth is always published to /carla/ground_truth/*
     ///
     /// # Returns
     /// Result containing Autoware instance or error
     pub fn new(
         node: rclrs::Node,
-        publish_direct_localization: bool,
+        truth_pose_estimate: bool,
         map_origin: crate::coordinate_conversion::MapOrigin,
     ) -> Result<Self> {
         tracing::info!("Initializing Autoware coordinator...");
         tracing::info!(
-            "Direct localization publishing: {}",
-            if publish_direct_localization {
+            "The true pose as the pose estimate: {}",
+            if truth_pose_estimate {
                 "enabled"
             } else {
                 "disabled"
@@ -204,21 +236,19 @@ impl Autoware {
         tracing::info!("  - /carla/ground_truth/odom (Odometry)");
         tracing::info!("  - /carla/ground_truth/tf (TF)");
 
-        // Create direct localization publishers if enabled
-        let (pub_localization, pub_tf) = if publish_direct_localization {
-            tracing::info!(
-                "Creating direct localization publishers (bypasses Autoware localization):"
+        // The true pose as the pose estimator's output, if enabled (scensim issue 195): the
+        // autopilot's EKF fuses it in place of NDT's, which the autopilot must not run.
+        let pub_pose_estimate = if truth_pose_estimate {
+            let p = Arc::new(
+                node.create_publisher::<geometry_msgs::msg::PoseWithCovarianceStamped>(
+                    POSE_ESTIMATE_TOPIC.reliable(),
+                )?,
             );
-            let loc = Arc::new(node.create_publisher::<nav_msgs::msg::Odometry>(
-                "/localization/kinematic_state".reliable(),
-            )?);
-            let tf = Arc::new(node.create_publisher::<tf2_msgs::msg::TFMessage>("/tf".reliable())?);
-            tracing::info!("  - /localization/kinematic_state (Odometry)");
-            tracing::info!("  - /tf (TF)");
-            (Some(loc), Some(tf))
+            tracing::info!("  - {POSE_ESTIMATE_TOPIC} (the true pose, PoseWithCovarianceStamped)");
+            Some(p)
         } else {
             tracing::info!("Autoware localization will compute pose from sensor data");
-            (None, None)
+            None
         };
 
         // Create initial pose state (set via modern Autoware localization API)
@@ -291,20 +321,19 @@ impl Autoware {
             tf_buffer,
 
             // === Pose Publishing Configuration ===
-            publish_direct_localization,
+            truth_pose_estimate,
             vehicle: None,
 
             // === Ground Truth Publishers (Always Active) ===
             pub_ground_truth,
             pub_ground_truth_tf,
 
-            // === Direct Localization Publishers (Optional) ===
-            pub_localization,
+            // === The true pose as the pose estimate (optional) ===
+            pub_pose_estimate,
             seating: Mutex::new(Seating {
                 seated: false,
                 reported: false,
             }),
-            pub_tf,
 
             // === Initial Pose ===
             initial_pose,
@@ -778,13 +807,10 @@ impl Autoware {
         self.pub_ground_truth.publish(&odom)?;
         self.pub_ground_truth_tf.publish(&tf_msg)?;
 
-        // Also publish to direct localization topics if enabled
-        if self.publish_direct_localization {
-            if let Some(pub_loc) = &self.pub_localization {
-                pub_loc.publish(&odom)?;
-            }
-            if let Some(pub_tf) = &self.pub_tf {
-                pub_tf.publish(&tf_msg)?;
+        // The true pose as the pose estimate, if enabled (scensim issue 195)
+        if self.truth_pose_estimate {
+            if let Some(pub_pose) = &self.pub_pose_estimate {
+                pub_pose.publish(truth_pose_estimate_msg(timestamp, position, orientation))?;
             }
         }
 
@@ -852,5 +878,53 @@ impl Autoware {
     #[allow(dead_code)]
     pub fn is_localization_initialized(&self) -> bool {
         *self.localization_init_state.lock().unwrap() == 3
+    }
+}
+
+#[cfg(test)]
+mod truth_pose_estimate_tests {
+    use super::*;
+
+    /// scensim issue 195: the true pose goes out as the pose estimator's message, in the map
+    /// frame, at the frame's stamp, with aib's covariance (position 0.01 m^2, angle 0.0003
+    /// rad^2) on the diagonal and nothing off it.
+    #[test]
+    fn the_true_pose_is_the_pose_estimators_message() {
+        let stamp = builtin_interfaces::msg::Time {
+            sec: 1000,
+            nanosec: 50,
+        };
+        let msg = truth_pose_estimate_msg(&stamp, &[1.0, -2.0, 0.3], &[0.9, 0.1, 0.2, 0.3]);
+        assert_eq!(msg.header.frame_id, "map");
+        assert_eq!((msg.header.stamp.sec, msg.header.stamp.nanosec), (1000, 50));
+        let p = &msg.pose.pose;
+        assert_eq!((p.position.x, p.position.y, p.position.z), (1.0, -2.0, 0.3));
+        assert_eq!(
+            (
+                p.orientation.w,
+                p.orientation.x,
+                p.orientation.y,
+                p.orientation.z
+            ),
+            (0.9, 0.1, 0.2, 0.3)
+        );
+        for r in 0..6 {
+            for c in 0..6 {
+                let want = match (r == c, r) {
+                    (true, 0..=2) => 0.01,
+                    (true, _) => 0.0003,
+                    _ => 0.0,
+                };
+                assert_eq!(msg.pose.covariance[r * 6 + c], want, "covariance[{r}][{c}]");
+            }
+        }
+    }
+
+    #[test]
+    fn it_goes_where_aibs_does() {
+        assert_eq!(
+            POSE_ESTIMATE_TOPIC,
+            "/localization/pose_estimator/pose_with_covariance"
+        );
     }
 }

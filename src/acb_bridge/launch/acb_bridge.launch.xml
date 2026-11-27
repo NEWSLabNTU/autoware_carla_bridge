@@ -52,6 +52,11 @@
   <arg name="gnss_noise_bias_stddev_m" default="0.0" description="the per-run bias's spread, m"/>
   <arg name="gnss_noise_seed" default="-1"
        description="an integer >= 0 replays the fixes; -1 draws a seed, logged"/>
+  <!-- scensim issue 195: a debug option, never an evaluation of localization (scensim's
+       direct_localization marks the run): CARLA's true pose on the pose estimator's topic.
+       The autopilot must run without its own estimator (Autoware: the profile's ndt:=none). -->
+  <arg name="truth_pose_estimate" default="false"
+       description="debug only: the true pose as the pose estimator's output"/>
   <arg name="publish_ground_truth_objects" default="false"
        description="Publish CARLA actors as PredictedObjects, bypassing perception"/>
   <arg name="ground_truth_range_m" default="100.0"
@@ -141,6 +146,7 @@
            <param name="compensate_steering_curve" value="false"/>
          Read from physics_control at spawn, so it follows the blueprint. -->
     <param name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)"/>
+    <param name="truth_pose_estimate" value="$(var truth_pose_estimate)"/>
     <param name="gnss_noise_enabled" value="$(var gnss_noise_enabled)"/>
     <param name="gnss_noise_horizontal_stddev_m" value="$(var gnss_noise_horizontal_stddev_m)"/>
     <param name="gnss_noise_vertical_stddev_m" value="$(var gnss_noise_vertical_stddev_m)"/>
