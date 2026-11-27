@@ -11,6 +11,7 @@ dependencies = [
  "autoware_adapi_v1_msgs",
  "autoware_control_msgs",
  "autoware_perception_msgs",
+ "autoware_sensing_msgs",
  "autoware_vehicle_msgs",
  "builtin_interfaces",
  "bytemuck",
@@ -540,6 +541,15 @@ dependencies = [
  "rosidl_runtime_rs",
  "std_msgs",
  "unique_identifier_msgs",
+]
+
+[[package]]
+name = "autoware_sensing_msgs"
+version = "0.0.0"
+dependencies = [
+ "geometry_msgs",
+ "rosidl_runtime_rs",
+ "std_msgs",
 ]
 
 [[package]]

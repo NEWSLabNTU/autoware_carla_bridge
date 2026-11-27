@@ -429,6 +429,9 @@ fn register_imu(
     Ok(())
 }
 
+/// The receiver's orientation (GnssInsOrientationStamped), where the kit's gnss_poser reads it.
+pub const INS_TOPIC: &str = "/autoware_orientation";
+
 fn register_gnss(
     node: Arc<rclrs::Node>,
     actor: &Sensor,
@@ -441,6 +444,11 @@ fn register_gnss(
     let topic = key_list[0].clone();
 
     let publisher = Arc::new(node.create_publisher::<sensor_msgs::msg::NavSatFix>(topic.as_str())?);
+    // The receiver's orientation beside each fix (scensim issue 195 L1b), where the kit's
+    // gnss_poser reads its yaw (use_gnss_ins_orientation true)
+    let ins_publisher = Arc::new(
+        node.create_publisher::<autoware_sensing_msgs::msg::GnssInsOrientationStamped>(INS_TOPIC)?,
+    );
     let noise = crate::gnss_noise::GnssNoise::new(gnss_noise);
     tracing::info!("GNSS {frame_id}: {}", noise.describe());
     let noise = std::sync::Mutex::new(noise);
@@ -455,12 +463,36 @@ fn register_gnss(
             stamp: clock.stamp(data.timestamp()),
             frame_id: frame_id.clone(),
         };
+        // the sensor's own world rotation at the measurement (gnss_link's, CARLA's frame)
+        let rotation = data.sensor_transform().rotation;
 
         if let Ok(measure) = data.try_into() {
-            let offset = noise.lock().unwrap().offset();
-            let covariance = noise.lock().unwrap().covariance();
-            if let Err(e) = publish_gnss(&publisher, header, measure, offset, covariance) {
+            let mut n = noise.lock().unwrap();
+            let offset = n.offset();
+            let covariance = n.covariance();
+            let error = n.orientation_error();
+            let rmse = n.rmse_rotation();
+            drop(n);
+            if let Err(e) = publish_gnss(&publisher, header.clone(), measure, offset, covariance) {
                 tracing::error!("Failed to publish GNSS data: {e:?}");
+            }
+            let [w, x, y, z] = crate::gnss_noise::ins_quaternion(
+                rotation.roll as f64,
+                rotation.pitch as f64,
+                rotation.yaw as f64,
+                error,
+            );
+            let ins = autoware_sensing_msgs::msg::GnssInsOrientationStamped {
+                header,
+                orientation: autoware_sensing_msgs::msg::GnssInsOrientation {
+                    orientation: geometry_msgs::msg::Quaternion { x, y, z, w },
+                    rmse_rotation_x: rmse[0] as f32,
+                    rmse_rotation_y: rmse[1] as f32,
+                    rmse_rotation_z: rmse[2] as f32,
+                },
+            };
+            if let Err(e) = ins_publisher.publish(&ins) {
+                tracing::error!("Failed to publish the GNSS orientation: {e:?}");
             }
         } else {
             tracing::error!("Failed to transform GNSS data");

@@ -28,6 +28,10 @@ pub struct GnssNoiseSettings {
     pub bias_stddev_m: f64,
     /// Some: the fixes replay; None: a fresh seed, drawn once and logged.
     pub seed: Option<u64>,
+    /// The receiver's heading error, yaw, per fix (deg; scensim issue 195 L1b).
+    pub heading_stddev_deg: f64,
+    /// Its roll and pitch error, per fix (deg).
+    pub attitude_stddev_deg: f64,
 }
 
 impl Default for GnssNoiseSettings {
@@ -38,6 +42,8 @@ impl Default for GnssNoiseSettings {
             vertical_stddev_m: 0.04,
             bias_stddev_m: 0.0,
             seed: None,
+            heading_stddev_deg: 0.2,
+            attitude_stddev_deg: 0.05,
         }
     }
 }
@@ -49,9 +55,14 @@ impl GnssNoiseSettings {
             ("gnss_noise_horizontal_stddev_m", self.horizontal_stddev_m),
             ("gnss_noise_vertical_stddev_m", self.vertical_stddev_m),
             ("gnss_noise_bias_stddev_m", self.bias_stddev_m),
+            ("gnss_noise_heading_stddev_deg", self.heading_stddev_deg),
+            ("gnss_noise_attitude_stddev_deg", self.attitude_stddev_deg),
         ] {
             if !(v.is_finite() && v >= 0.0) {
-                return Err(format!("{name} must be a finite number >= 0 (m), is {v}"));
+                let unit = if name.ends_with("_deg") { "deg" } else { "m" };
+                return Err(format!(
+                    "{name} must be a finite number >= 0 ({unit}), is {v}"
+                ));
             }
         }
         Ok(())
@@ -104,6 +115,24 @@ fn splitmix64(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// The salt that seeds the orientation's generator from the receiver's seed: a second stream,
+/// so the orientation draws leave a seed's position errors as they were before L1b.
+const INS_SALT: u64 = 0x195A_11B5_0000_0001;
+
+/// A standard normal draw from a SplitMix64 state (Box-Muller, the spare kept).
+fn gauss(state: &mut u64, spare: &mut Option<f64>) -> f64 {
+    if let Some(z) = spare.take() {
+        return z;
+    }
+    // u1 in (0, 1]: the top 53 bits, never 0, so ln is finite
+    let u1 = ((splitmix64(state) >> 11) + 1) as f64 / (1u64 << 53) as f64;
+    let u2 = (splitmix64(state) >> 11) as f64 / (1u64 << 53) as f64;
+    let r = (-2.0 * u1.ln()).sqrt();
+    let t = std::f64::consts::TAU * u2;
+    *spare = Some(r * t.sin());
+    r * t.cos()
+}
+
 /// One receiver's error. A small generator of its own (SplitMix64, Box-Muller), so the
 /// stream is fixed by the seed alone, whatever crate versions the build resolves.
 pub struct GnssNoise {
@@ -114,6 +143,11 @@ pub struct GnssNoise {
     bias_stddev: f64,
     bias: [f64; 3],
     spare: Option<f64>,
+    /// The orientation's own generator (L1b), seeded from `seed` with INS_SALT
+    ins_state: u64,
+    ins_spare: Option<f64>,
+    /// roll, pitch, yaw stddevs (rad)
+    rot_sigma: [f64; 3],
 }
 
 impl GnssNoise {
@@ -128,6 +162,13 @@ impl GnssNoise {
             bias_stddev: settings.bias_stddev_m,
             bias: [0.0; 3],
             spare: None,
+            ins_state: seed ^ INS_SALT,
+            ins_spare: None,
+            rot_sigma: [
+                settings.attitude_stddev_deg.to_radians(),
+                settings.attitude_stddev_deg.to_radians(),
+                settings.heading_stddev_deg.to_radians(),
+            ],
         };
         if n.enabled {
             let b = settings.bias_stddev_m;
@@ -144,18 +185,9 @@ impl GnssNoise {
         self.bias
     }
 
-    /// A standard normal draw.
+    /// A standard normal draw from the position's stream.
     fn normal(&mut self) -> f64 {
-        if let Some(z) = self.spare.take() {
-            return z;
-        }
-        // u1 in (0, 1]: the top 53 bits, never 0, so ln is finite
-        let u1 = ((splitmix64(&mut self.state) >> 11) + 1) as f64 / (1u64 << 53) as f64;
-        let u2 = (splitmix64(&mut self.state) >> 11) as f64 / (1u64 << 53) as f64;
-        let r = (-2.0 * u1.ln()).sqrt();
-        let t = std::f64::consts::TAU * u2;
-        self.spare = Some(r * t.sin());
-        r * t.cos()
+        gauss(&mut self.state, &mut self.spare)
     }
 
     /// The next fix's error, east, north, up (m).
@@ -168,6 +200,27 @@ impl GnssNoise {
             *v += self.sigma[axis] * self.normal();
         }
         o
+    }
+
+    /// The next fix's orientation error: (roll, pitch, yaw) in rad, the sensor's own frame.
+    pub fn orientation_error(&mut self) -> [f64; 3] {
+        if !self.enabled {
+            return [0.0; 3];
+        }
+        let mut e = [0.0; 3];
+        for (axis, v) in e.iter_mut().enumerate() {
+            *v = self.rot_sigma[axis] * gauss(&mut self.ins_state, &mut self.ins_spare);
+        }
+        e
+    }
+
+    /// GnssInsOrientation's rmse_rotation_x, _y, _z (rad): the stddevs; disabled, zeros.
+    pub fn rmse_rotation(&self) -> [f64; 3] {
+        if self.enabled {
+            self.rot_sigma
+        } else {
+            [0.0; 3]
+        }
     }
 
     /// (NavSatFix position_covariance, its type): the white noise's and the bias's variance
@@ -191,16 +244,29 @@ impl GnssNoise {
             let [e, n, u] = self.bias();
             format!(
                 "error east/north {} m, up {} m, bias {} m (this run's: {e:.4}, {n:.4}, \
-                 {u:.4}), seed {}",
+                 {u:.4}), heading {} deg, attitude {} deg, seed {}",
                 self.sigma[0],
                 self.sigma[2],
                 self.bias_stddev,
+                self.rot_sigma[2].to_degrees(),
+                self.rot_sigma[0].to_degrees(),
                 self.seed()
             )
         } else {
             "no error (gnss_noise_enabled false): the antenna's true position".to_string()
         }
     }
+}
+
+/// The receiver's orientation in the map (w, x, y, z): the GNSS sensor's CARLA rotation (deg,
+/// its world transform at the measurement) in ROS's frame, turned by `error` (roll, pitch, yaw
+/// in rad, the sensor's own frame). CARLA's world is the map but for a translation.
+pub fn ins_quaternion(roll_deg: f64, pitch_deg: f64, yaw_deg: f64, error: [f64; 3]) -> [f64; 4] {
+    let q =
+        crate::coordinate_conversion::carla_euler_to_ros_quaternion(roll_deg, pitch_deg, yaw_deg);
+    let q = nalgebra::UnitQuaternion::from_quaternion(q)
+        * nalgebra::UnitQuaternion::from_euler_angles(error[0], error[1], error[2]);
+    [q.w, q.i, q.j, q.k]
 }
 
 /// A fix (degrees, m) moved by `offset` (east, north, up in m), on a sphere of
@@ -411,5 +477,137 @@ mod tests {
         assert_eq!(la, lat);
         let (_, _, al) = apply(lat, lon, alt, [0.0, 0.0, 0.5]);
         assert_eq!(al, 500.5);
+    }
+
+    // --- L1b (scensim issue 195): the receiver's heading and attitude ---
+
+    const DEG: f64 = std::f64::consts::PI / 180.0;
+
+    fn ins_draws(s: GnssNoiseSettings, n: usize) -> Vec<[f64; 3]> {
+        let mut noise = GnssNoise::new(&s);
+        (0..n)
+            .map(|_| {
+                noise.offset();
+                noise.orientation_error()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_ins_defaults_are_a_dual_antenna_receivers() {
+        let s = settings();
+        assert_eq!((s.heading_stddev_deg, s.attitude_stddev_deg), (0.2, 0.05));
+    }
+
+    #[test]
+    fn bad_ins_values_are_refused_by_name() {
+        for (name, s) in [
+            (
+                "gnss_noise_heading_stddev_deg",
+                GnssNoiseSettings {
+                    heading_stddev_deg: -0.1,
+                    ..settings()
+                },
+            ),
+            (
+                "gnss_noise_attitude_stddev_deg",
+                GnssNoiseSettings {
+                    attitude_stddev_deg: f64::INFINITY,
+                    ..settings()
+                },
+            ),
+        ] {
+            let e = s.validate().unwrap_err();
+            assert!(e.contains(name), "{e}");
+        }
+    }
+
+    #[test]
+    fn a_still_cars_orientation_errors_have_the_configured_spread() {
+        let d = ins_draws(
+            GnssNoiseSettings {
+                seed: Some(11),
+                ..settings()
+            },
+            20000,
+        );
+        for (axis, sigma) in [(0, 0.05 * DEG), (1, 0.05 * DEG), (2, 0.2 * DEG)] {
+            let (m, sd) = mean_sd(&d, axis);
+            assert!((sd - sigma).abs() < 0.02 * sigma, "axis {axis}: sd {sd}");
+            assert!(
+                m.abs() < 4.0 * sigma / (20000f64).sqrt(),
+                "axis {axis}: mean {m}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_same_seed_gives_the_same_headings() {
+        let s = |k| GnssNoiseSettings {
+            seed: Some(k),
+            ..settings()
+        };
+        assert_eq!(ins_draws(s(5), 30), ins_draws(s(5), 30));
+        assert_ne!(ins_draws(s(5), 30), ins_draws(s(6), 30));
+    }
+
+    #[test]
+    fn the_heading_leaves_a_seeds_position_errors_as_they_were() {
+        let s = GnssNoiseSettings {
+            seed: Some(0),
+            bias_stddev_m: 0.1,
+            ..settings()
+        };
+        let plain = draws(s.clone(), 20);
+        let mut noise = GnssNoise::new(&s);
+        let with_ins: Vec<[f64; 3]> = (0..20)
+            .map(|_| {
+                let o = noise.offset();
+                noise.orientation_error();
+                o
+            })
+            .collect();
+        assert_eq!(plain, with_ins);
+    }
+
+    #[test]
+    fn disabled_is_the_exact_orientation() {
+        let s = GnssNoiseSettings {
+            enabled: false,
+            seed: Some(1),
+            ..settings()
+        };
+        assert!(ins_draws(s.clone(), 10).iter().all(|v| *v == [0.0; 3]));
+        assert_eq!(GnssNoise::new(&s).rmse_rotation(), [0.0; 3]);
+    }
+
+    #[test]
+    fn the_rmse_fields_carry_the_stddevs_in_rad() {
+        let r = GnssNoise::new(&GnssNoiseSettings {
+            seed: Some(0),
+            ..settings()
+        })
+        .rmse_rotation();
+        for (got, want) in r.iter().zip([0.05 * DEG, 0.05 * DEG, 0.2 * DEG]) {
+            assert!((got - want).abs() < 1e-15, "{got} {want}");
+        }
+    }
+
+    #[test]
+    fn the_orientation_is_the_sensors_in_the_map_turned_by_the_error() {
+        // CARLA yaw +30 deg (clockwise from above, left-handed) is ROS yaw -30 deg
+        let exact = ins_quaternion(0.0, 0.0, 30.0, [0.0; 3]);
+        let want = nalgebra::UnitQuaternion::from_euler_angles(0.0, 0.0, -30.0 * DEG);
+        let got = nalgebra::UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+            exact[0], exact[1], exact[2], exact[3],
+        ));
+        assert!(got.angle_to(&want) < 1e-6, "{exact:?}");
+        // a yaw error of 0.01 rad turns it about its own z
+        let turned = ins_quaternion(0.0, 0.0, 30.0, [0.0, 0.0, 0.01]);
+        let t = nalgebra::UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+            turned[0], turned[1], turned[2], turned[3],
+        ));
+        let (_, _, yaw) = t.euler_angles();
+        assert!((yaw - (-30.0 * DEG + 0.01)).abs() < 1e-6, "{yaw}");
     }
 }

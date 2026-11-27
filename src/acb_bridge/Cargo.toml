@@ -48,6 +48,7 @@ tf2_msgs = "*"
 autoware_adapi_v1_msgs = "*"
 autoware_control_msgs = "*"
 autoware_vehicle_msgs = "*"
+autoware_sensing_msgs = "*"
 tier4_vehicle_msgs = "*"
 tier4_control_msgs = "*"
 

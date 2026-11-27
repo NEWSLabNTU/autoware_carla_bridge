@@ -50,6 +50,9 @@
   <arg name="gnss_noise_horizontal_stddev_m" default="0.02" description="white noise east and north, m"/>
   <arg name="gnss_noise_vertical_stddev_m" default="0.04" description="white noise up, m"/>
   <arg name="gnss_noise_bias_stddev_m" default="0.0" description="the per-run bias's spread, m"/>
+  <arg name="gnss_noise_heading_stddev_deg" default="0.2"
+       description="the receiver's heading error (yaw), deg; /autoware_orientation (L1b)"/>
+  <arg name="gnss_noise_attitude_stddev_deg" default="0.05" description="its roll and pitch error, deg"/>
   <arg name="gnss_noise_seed" default="-1"
        description="an integer >= 0 replays the fixes; -1 draws a seed, logged"/>
   <!-- scensim issue 195: a debug option, never an evaluation of localization (scensim's
@@ -151,6 +154,8 @@
     <param name="gnss_noise_horizontal_stddev_m" value="$(var gnss_noise_horizontal_stddev_m)"/>
     <param name="gnss_noise_vertical_stddev_m" value="$(var gnss_noise_vertical_stddev_m)"/>
     <param name="gnss_noise_bias_stddev_m" value="$(var gnss_noise_bias_stddev_m)"/>
+    <param name="gnss_noise_heading_stddev_deg" value="$(var gnss_noise_heading_stddev_deg)"/>
+    <param name="gnss_noise_attitude_stddev_deg" value="$(var gnss_noise_attitude_stddev_deg)"/>
     <param name="gnss_noise_seed" value="$(var gnss_noise_seed)"/>
     <param name="ground_truth_range_m" value="$(var ground_truth_range_m)"/>
     <param name="traffic_light_map_path" value="$(var traffic_light_map_path)"/>

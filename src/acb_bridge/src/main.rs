@@ -387,6 +387,17 @@ impl BridgeParams {
             .default(defaults.bias_stddev_m)
             .mandatory()
             .map_err(|e| BridgeError::Rclrs(e.into()))?;
+        // the receiver's heading and attitude (L1b; /autoware_orientation)
+        let gnss_noise_heading_stddev_deg = node
+            .declare_parameter("gnss_noise_heading_stddev_deg")
+            .default(defaults.heading_stddev_deg)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
+        let gnss_noise_attitude_stddev_deg = node
+            .declare_parameter("gnss_noise_attitude_stddev_deg")
+            .default(defaults.attitude_stddev_deg)
+            .mandatory()
+            .map_err(|e| BridgeError::Rclrs(e.into()))?;
         // -1: a fresh seed, drawn here and logged
         let gnss_noise_seed = node
             .declare_parameter("gnss_noise_seed")
@@ -400,6 +411,8 @@ impl BridgeParams {
             bias_stddev_m: gnss_noise_bias_stddev_m.get(),
             seed: gnss_noise::GnssNoiseSettings::seed_from_param(gnss_noise_seed.get())
                 .map_err(BridgeError::ConfigError)?,
+            heading_stddev_deg: gnss_noise_heading_stddev_deg.get(),
+            attitude_stddev_deg: gnss_noise_attitude_stddev_deg.get(),
         };
         gnss_noise.validate().map_err(BridgeError::ConfigError)?;
         let gnss_noise = gnss_noise.with_seed();
