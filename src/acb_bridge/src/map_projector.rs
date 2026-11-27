@@ -34,26 +34,220 @@ impl MapProjector {
         scale_factor: Option<f64>,
         mgrs_grid: Option<&str>,
     ) -> Result<Self, String> {
-        let _ = (projector_type, origin, scale_factor, mgrs_grid);
-        Err("not implemented".into())
+        match projector_type {
+            "TransverseMercator" => {
+                let (lat0, lon0, alt0) = origin.ok_or(
+                    "map_projector_info: a TransverseMercator projector without map_origin",
+                )?;
+                let k0 = scale_factor.unwrap_or(DEFAULT_SCALE);
+                if !(k0 > 0.0) || !lat0.is_finite() || !lon0.is_finite() {
+                    return Err(format!(
+                        "map_projector_info: TransverseMercator at ({lat0}, {lon0}), scale {k0}"
+                    ));
+                }
+                Ok(Self::TransverseMercator { lat0, lon0, alt0, k0 })
+            }
+            "MGRS" => {
+                let grid = mgrs_grid.ok_or("map_projector_info: an MGRS projector without mgrs_grid")?;
+                mgrs_square(grid)
+            }
+            other => Err(format!(
+                "map_projector_info: projector_type {other}: the bridge makes a GNSS fix only for \
+                 TransverseMercator and MGRS maps (no geographic inverse for {other})"
+            )),
+        }
     }
 
-    /// From the text of `map_projector_info.yaml`.
+    /// From the text of `map_projector_info.yaml` (its flat keys and `map_origin`'s).
     pub fn from_yaml(text: &str) -> Result<Self, String> {
-        let _ = text;
-        Err("not implemented".into())
+        let mut top = std::collections::HashMap::new();
+        let mut origin = std::collections::HashMap::new();
+        let mut in_origin = false;
+        for raw in text.lines() {
+            let line = raw.split('#').next().unwrap_or("").trim_end();
+            if line.trim().is_empty() {
+                continue;
+            }
+            let indented = line.starts_with(' ') || line.starts_with('\t');
+            let Some((k, v)) = line.trim().split_once(':') else { continue };
+            let (k, v) = (k.trim(), v.trim().trim_matches('"').trim_matches('\''));
+            if !indented {
+                in_origin = k == "map_origin";
+                if !in_origin {
+                    top.insert(k.to_string(), v.to_string());
+                }
+            } else if in_origin {
+                origin.insert(k.to_string(), v.to_string());
+            }
+        }
+        let num = |m: &std::collections::HashMap<String, String>, k: &str| -> Result<Option<f64>, String> {
+            m.get(k)
+                .map(|v| v.parse::<f64>().map_err(|e| format!("map_projector_info: {k}: {v}: {e}")))
+                .transpose()
+        };
+        let projector_type = top
+            .get("projector_type")
+            .ok_or("map_projector_info: no projector_type")?
+            .clone();
+        let origin = match (num(&origin, "latitude")?, num(&origin, "longitude")?) {
+            (Some(lat), Some(lon)) => Some((lat, lon, num(&origin, "altitude")?.unwrap_or(0.0))),
+            _ => None,
+        };
+        Self::from_fields(
+            &projector_type,
+            origin,
+            num(&top, "scale_factor")?,
+            top.get("mgrs_grid").map(String::as_str),
+        )
     }
 
     /// The latitude and longitude (degrees) the projector maps to map (x, y).
     pub fn lat_lon(&self, x: f64, y: f64) -> (f64, f64) {
-        let _ = (x, y);
-        (f64::NAN, f64::NAN)
+        match *self {
+            Self::TransverseMercator { lat0, lon0, k0, .. } => {
+                let (_, n0) = tm_forward(lat0, 0.0, k0);
+                tm_inverse(x, y + n0, lon0, k0)
+            }
+            Self::Mgrs { zone, north, e0, n0 } => {
+                let lon0 = zone as f64 * 6.0 - 183.0;
+                let northing = n0 + y - if north { 0.0 } else { 10_000_000.0 };
+                tm_inverse(e0 + x - 500_000.0, northing, lon0, 0.9996)
+            }
+        }
     }
 
     /// The altitude of a point at map z: the origin's altitude plus z.
     pub fn altitude(&self, z: f64) -> f64 {
-        z
+        match *self {
+            Self::TransverseMercator { alt0, .. } => alt0 + z,
+            Self::Mgrs { .. } => z,
+        }
     }
+}
+
+// --- WGS84 transverse Mercator, Krueger's series to n^6 (Karney 2011, "Transverse Mercator with
+// an accuracy of a few nanometers"): exact to well under a millimetre within 1000 km of the
+// central meridian, which is what GeographicLib's TransverseMercator (Autoware's) computes too.
+
+const A: f64 = 6_378_137.0;
+const F: f64 = 1.0 / 298.257_223_563;
+
+struct Series {
+    a: f64,
+    alpha: [f64; 6],
+    beta: [f64; 6],
+    delta: [f64; 6],
+    e: f64,
+}
+
+fn series() -> Series {
+    let n = F / (2.0 - F);
+    let (n2, n3, n4, n5, n6) = (n * n, n.powi(3), n.powi(4), n.powi(5), n.powi(6));
+    Series {
+        a: A / (1.0 + n) * (1.0 + n2 / 4.0 + n4 / 64.0 + n6 / 256.0),
+        alpha: [
+            n / 2.0 - 2.0 * n2 / 3.0 + 5.0 * n3 / 16.0 + 41.0 * n4 / 180.0 - 127.0 * n5 / 288.0
+                + 7891.0 * n6 / 37800.0,
+            13.0 * n2 / 48.0 - 3.0 * n3 / 5.0 + 557.0 * n4 / 1440.0 + 281.0 * n5 / 630.0
+                - 1983433.0 * n6 / 1935360.0,
+            61.0 * n3 / 240.0 - 103.0 * n4 / 140.0 + 15061.0 * n5 / 26880.0
+                + 167603.0 * n6 / 181440.0,
+            49561.0 * n4 / 161280.0 - 179.0 * n5 / 168.0 + 6601661.0 * n6 / 7257600.0,
+            34729.0 * n5 / 80640.0 - 3418889.0 * n6 / 1995840.0,
+            212378941.0 * n6 / 319334400.0,
+        ],
+        beta: [
+            n / 2.0 - 2.0 * n2 / 3.0 + 37.0 * n3 / 96.0 - n4 / 360.0 - 81.0 * n5 / 512.0
+                + 96199.0 * n6 / 604800.0,
+            n2 / 48.0 + n3 / 15.0 - 437.0 * n4 / 1440.0 + 46.0 * n5 / 105.0
+                - 1118711.0 * n6 / 3870720.0,
+            17.0 * n3 / 480.0 - 37.0 * n4 / 840.0 - 209.0 * n5 / 4480.0 + 5569.0 * n6 / 90720.0,
+            4397.0 * n4 / 161280.0 - 11.0 * n5 / 504.0 - 830251.0 * n6 / 7257600.0,
+            4583.0 * n5 / 161280.0 - 108847.0 * n6 / 3991680.0,
+            20648693.0 * n6 / 638668800.0,
+        ],
+        delta: [
+            2.0 * n - 2.0 * n2 / 3.0 - 2.0 * n3 + 116.0 * n4 / 45.0 + 26.0 * n5 / 45.0
+                - 2854.0 * n6 / 675.0,
+            7.0 * n2 / 3.0 - 8.0 * n3 / 5.0 - 227.0 * n4 / 45.0 + 2704.0 * n5 / 315.0
+                + 2323.0 * n6 / 945.0,
+            56.0 * n3 / 15.0 - 136.0 * n4 / 35.0 - 1262.0 * n5 / 105.0 + 73814.0 * n6 / 2835.0,
+            4279.0 * n4 / 630.0 - 332.0 * n5 / 35.0 - 399572.0 * n6 / 14175.0,
+            4174.0 * n5 / 315.0 - 144838.0 * n6 / 6237.0,
+            601676.0 * n6 / 22275.0,
+        ],
+        e: (F * (2.0 - F)).sqrt(),
+    }
+}
+
+/// (easting, northing) of (lat, lon - lon0) in degrees, scale k0, no false origin.
+fn tm_forward(lat: f64, dlon: f64, k0: f64) -> (f64, f64) {
+    let s = series();
+    let (phi, lam) = (lat.to_radians(), dlon.to_radians());
+    let t = (phi.sin().atanh() - s.e * (s.e * phi.sin()).atanh()).sinh();
+    let xi1 = t.atan2(lam.cos());
+    let eta1 = (lam.sin() / (1.0 + t * t).sqrt()).atanh();
+    let (mut xi, mut eta) = (xi1, eta1);
+    for (j, a) in s.alpha.iter().enumerate() {
+        let k = 2.0 * (j as f64 + 1.0);
+        xi += a * (k * xi1).sin() * (k * eta1).cosh();
+        eta += a * (k * xi1).cos() * (k * eta1).sinh();
+    }
+    (k0 * s.a * eta, k0 * s.a * xi)
+}
+
+/// (lat, lon) in degrees of (easting, northing) about central meridian lon0, scale k0.
+fn tm_inverse(e: f64, n: f64, lon0: f64, k0: f64) -> (f64, f64) {
+    let s = series();
+    let (xi, eta) = (n / (k0 * s.a), e / (k0 * s.a));
+    let (mut xi1, mut eta1) = (xi, eta);
+    for (j, b) in s.beta.iter().enumerate() {
+        let k = 2.0 * (j as f64 + 1.0);
+        xi1 -= b * (k * xi).sin() * (k * eta).cosh();
+        eta1 -= b * (k * xi).cos() * (k * eta).sinh();
+    }
+    let chi = (xi1.sin() / eta1.cosh()).asin();
+    let mut phi = chi;
+    for (j, d) in s.delta.iter().enumerate() {
+        phi += d * (2.0 * (j as f64 + 1.0) * chi).sin();
+    }
+    let lam = eta1.sinh().atan2(xi1.cos());
+    (phi.to_degrees(), lon0 + lam.to_degrees())
+}
+
+/// An MGRS 100 km square (`<zone><band><column><row>`, e.g. `51RUH`): its UTM zone, hemisphere
+/// and south-west corner (UTM easting, northing with the southern hemisphere's 10 000 km).
+fn mgrs_square(grid: &str) -> Result<MapProjector, String> {
+    let bad = || format!("map_projector_info: mgrs_grid {grid}: not a 100 km square like 51RUH");
+    let g = grid.trim().to_ascii_uppercase();
+    let digits: String = g.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let zone: u32 = digits.parse().map_err(|_| bad())?;
+    let letters: Vec<char> = g[digits.len()..].chars().collect();
+    if !(1..=60).contains(&zone) || letters.len() != 3 {
+        return Err(bad());
+    }
+    const BANDS: &str = "CDEFGHJKLMNPQRSTUVWX";
+    let band = BANDS.find(letters[0]).ok_or_else(bad)?;
+    let north = letters[0] >= 'N';
+    // columns: sets of 8 letters (A-H, J-R, S-Z), by zone mod 3
+    const COLS: [&str; 3] = ["ABCDEFGH", "JKLMNPQR", "STUVWXYZ"];
+    let col = COLS[((zone - 1) % 3) as usize].find(letters[1]).ok_or_else(bad)?;
+    let e0 = (col as f64 + 1.0) * 100_000.0;
+    // rows: 20 letters A-V without I and O, cycling every 2000 km, even zones offset by 5
+    const ROWS: &str = "ABCDEFGHJKLMNPQRSTUV";
+    let row = ROWS.find(letters[2]).ok_or_else(bad)?;
+    let row = (row + 20 - if zone % 2 == 0 { 5 } else { 0 }) % 20;
+    let n_mod = row as f64 * 100_000.0;
+    // the band's lowest northing settles which 2000 km cycle: its south edge, at this zone's
+    // central meridian (a band spans 8 degrees, about 885 km, under a cycle)
+    let band_lat = -80.0 + 8.0 * band as f64;
+    let (_, band_n) = tm_forward(band_lat, 0.0, 0.9996);
+    let band_n = if north { band_n } else { band_n + 10_000_000.0 };
+    let mut n0 = n_mod;
+    while n0 + 100_000.0 <= band_n - 100_000.0 {
+        n0 += 2_000_000.0;
+    }
+    Ok(MapProjector::Mgrs { zone, north, e0, n0 })
 }
 
 #[cfg(test)]
@@ -157,4 +351,5 @@ mod tests {
         // CARLA's own lat/lon for the same place is 0.82 m from it
         assert!(metres((lat, lon), (-0.001169175909, 0.001714671458)) > 0.8);
     }
+
 }
