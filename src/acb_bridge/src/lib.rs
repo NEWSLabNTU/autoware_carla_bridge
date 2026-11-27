@@ -7,6 +7,7 @@ pub mod conn_probe;
 pub mod coordinate_conversion;
 pub mod error;
 pub mod gnss_noise;
+pub mod map_projector;
 pub mod sensor_config;
 pub mod tf_bridge;
 pub mod types;

@@ -11,6 +11,7 @@ mod control_trace;
 mod coordinate_conversion;
 mod error;
 mod gnss_noise;
+mod map_projector;
 mod ground_truth_objects;
 mod log_writer;
 mod longitudinal_map;
