@@ -452,6 +452,7 @@ fn register_gnss(
     let noise = crate::gnss_noise::GnssNoise::new(gnss_noise);
     tracing::info!("GNSS {frame_id}: {}", noise.describe());
     let noise = std::sync::Mutex::new(noise);
+    let hold = std::sync::Mutex::new(crate::gnss_noise::FixHold::default());
 
     // Clone frame_id for closure
     let frame_id = frame_id.to_string();
@@ -473,9 +474,8 @@ fn register_gnss(
             let error = n.orientation_error();
             let rmse = n.rmse_rotation();
             drop(n);
-            if let Err(e) = publish_gnss(&publisher, header.clone(), measure, offset, covariance) {
-                tracing::error!("Failed to publish GNSS data: {e:?}");
-            }
+            // L1c: the orientation first, then the fix, held until the orientation has gone out
+            // for INS_HOLD_PERIODS GNSS periods (gnss_noise::FixHold)
             let [w, x, y, z] = crate::gnss_noise::ins_quaternion(
                 rotation.roll as f64,
                 rotation.pitch as f64,
@@ -483,7 +483,7 @@ fn register_gnss(
                 error,
             );
             let ins = autoware_sensing_msgs::msg::GnssInsOrientationStamped {
-                header,
+                header: header.clone(),
                 orientation: autoware_sensing_msgs::msg::GnssInsOrientation {
                     orientation: geometry_msgs::msg::Quaternion { x, y, z, w },
                     rmse_rotation_x: rmse[0] as f32,
@@ -493,6 +493,22 @@ fn register_gnss(
             };
             if let Err(e) = ins_publisher.publish(&ins) {
                 tracing::error!("Failed to publish the GNSS orientation: {e:?}");
+                return;
+            }
+            let mut h = hold.lock().unwrap();
+            if !h.orientation_published() {
+                return;
+            }
+            if h.first_fix() {
+                tracing::info!(
+                    "GNSS {}: the first fix, {} GNSS periods after the first orientation",
+                    header.frame_id,
+                    crate::gnss_noise::INS_HOLD_PERIODS
+                );
+            }
+            drop(h);
+            if let Err(e) = publish_gnss(&publisher, header, measure, offset, covariance) {
+                tracing::error!("Failed to publish GNSS data: {e:?}");
             }
         } else {
             tracing::error!("Failed to transform GNSS data");

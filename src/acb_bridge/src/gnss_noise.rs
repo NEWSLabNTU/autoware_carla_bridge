@@ -258,6 +258,34 @@ impl GnssNoise {
     }
 }
 
+/// GNSS periods the orientation goes out before the first fix (scensim issue 195 L1c).
+pub const INS_HOLD_PERIODS: u32 = 2;
+
+/// The fix held until the orientation has gone out INS_HOLD_PERIODS times. gnss_poser
+/// (autoware_core 1.5.0) starts from a default GnssInsOrientationStamped, an identity quaternion,
+/// and publishes every fix with the last orientation it received, so a fix ahead of any
+/// orientation became a GNSS pose at yaw 0. Publish order alone is no delivery order across two
+/// DDS topics; the hold gives the orientation two periods' margin. Once per receiver: a teleport
+/// (a scenario's reset) does not hold it again, gnss_poser keeping its last orientation.
+#[derive(Debug, Default)]
+pub struct FixHold {
+    orientations: u32,
+    fix_reported: bool,
+}
+
+impl FixHold {
+    /// Count one published orientation; true when this period's fix may go out.
+    pub fn orientation_published(&mut self) -> bool {
+        self.orientations = self.orientations.saturating_add(1);
+        self.orientations > INS_HOLD_PERIODS
+    }
+
+    /// True the first time it is asked (for the log line), false after.
+    pub fn first_fix(&mut self) -> bool {
+        !std::mem::replace(&mut self.fix_reported, true)
+    }
+}
+
 /// The receiver's orientation in the map (w, x, y, z): the GNSS sensor's CARLA rotation (deg,
 /// its world transform at the measurement) in ROS's frame, turned by `error` (roll, pitch, yaw
 /// in rad, the sensor's own frame). CARLA's world is the map but for a translation.
@@ -609,5 +637,27 @@ mod tests {
         ));
         let (_, _, yaw) = t.euler_angles();
         assert!((yaw - (-30.0 * DEG + 0.01)).abs() < 1e-6, "{yaw}");
+    }
+
+    // --- L1c (scensim issue 195): the fix held until the orientation has gone out ---
+
+    #[test]
+    fn the_first_fix_goes_out_two_orientation_periods_after_the_first_orientation() {
+        let mut hold = FixHold::default();
+        let sent: Vec<bool> = (0..5).map(|_| hold.orientation_published()).collect();
+        assert_eq!(sent, [false, false, true, true, true]);
+        assert_eq!(INS_HOLD_PERIODS, 2);
+    }
+
+    #[test]
+    fn the_first_fix_is_reported_once() {
+        let mut hold = FixHold::default();
+        let firsts: Vec<bool> = (0..5)
+            .map(|_| {
+                let send = hold.orientation_published();
+                send && hold.first_fix()
+            })
+            .collect();
+        assert_eq!(firsts, [false, false, true, false, false]);
     }
 }
